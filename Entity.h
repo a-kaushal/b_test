@@ -1,0 +1,100 @@
+#pragma once
+#include <windows.h>
+#include <vector>
+#include <mutex>
+#include <memory>
+#include <string>
+#include <algorithm>
+
+#include "Vector.h"
+
+struct EntityInfo {
+    virtual ~EntityInfo() = default;
+};
+
+struct GameEntity {
+    std::shared_ptr<EntityInfo> info;
+    ULONG_PTR guidLow;
+    ULONG_PTR guidHigh;
+    long entityIndex;
+    DWORD_PTR entityPtr;
+    uint32_t lowCounter;
+    uint32_t type;
+    uint32_t instance;
+    uint32_t entry;
+    uint32_t mapId;
+    uint32_t id;
+    std::string objType;
+    int32_t rotation;
+    GameEntity() : info(nullptr), guidLow(0), guidHigh(0), entityIndex(0), entityPtr(0),
+        lowCounter(0), type(0), instance(0), entry(0), mapId(0), id(0), rotation(0) {
+    }
+};
+
+struct PlayerInfo : EntityInfo {
+    ULONG_PTR playerPtr;
+    Vector3 position;
+    uint32_t state;
+    uint32_t mountState;
+    bool isFlying;
+    bool inWater;
+	bool groundMounted;
+	bool flyingMounted;
+    float rotation;
+    int32_t health;
+    float distance;
+};
+
+struct EnemyInfo : EntityInfo {
+    ULONG_PTR enemyPtr;
+    Vector3 position;
+    float distance;
+    int32_t health;
+    uint32_t id;
+    std::string name;
+};
+
+struct ObjectInfo : EntityInfo {
+    ULONG_PTR objectPtr;
+    Vector3 position;
+    float distance;
+    uint32_t id;
+    std::string name;
+};
+
+ /* Sorts a vector of GameEntities by distance (Ascending).
+ * Handles dynamic casting to find the distance variable in different entity types.
+ */
+inline void SortEntitiesByDistance(std::vector<GameEntity>& entities) {
+    std::sort(entities.begin(), entities.end(), [](const GameEntity& a, const GameEntity& b) {
+        float distA = 999999.0f; // Default high value (pushes unknown items to the end)
+        float distB = 999999.0f;
+
+        // 1. Extract Distance for Entity A
+        if (a.info) {
+            // Check if it's an Enemy
+            if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(a.info)) {
+                distA = enemy->distance;
+            }
+            // Check if it's an Object
+            else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(a.info)) {
+                distA = object->distance;
+            }
+        }
+
+        // 2. Extract Distance for Entity B
+        if (b.info) {
+            // Check if it's an Enemy
+            if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(b.info)) {
+                distB = enemy->distance;
+            }
+            // Check if it's an Object
+            else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(b.info)) {
+                distB = object->distance;
+            }
+        }
+
+        // 3. Compare: Closest (lowest distance) goes first
+        return distA < distB;
+        });
+}

@@ -1,0 +1,127 @@
+#pragma once
+#include <cmath>
+#include <iostream>
+
+struct Vector3 {
+    float x, y, z;
+
+    // Constructors
+    Vector3() : x(0), y(0), z(0) {}
+    Vector3(float _x, float _y, float _z) : x(_x), y(_y), z(_z) {}
+
+    // 1. Vector Subtraction (eye - at)
+    Vector3 operator-(const Vector3& other) const {
+        return Vector3(x - other.x, y - other.y, z - other.z);
+    }
+
+    // 2. Vector Addition
+    Vector3 operator+(const Vector3& other) const {
+        return Vector3(x + other.x, y + other.y, z + other.z);
+    }
+
+    // 3. Scalar Multiplication
+    Vector3 operator*(float scalar) const {
+        return Vector3(x * scalar, y * scalar, z * scalar);
+    }
+
+    // 4. Scalar Division
+    Vector3 operator/(float scalar) const {
+        return Vector3(x / scalar, y / scalar, z / scalar);
+    }
+
+    // --- REQUIRED MATH FUNCTIONS ---
+
+    // 5. Length (Magnitude)
+    float Length() const {
+        return std::sqrt(x * x + y * y + z * z);
+    }
+
+    // 6. Normalize: Returns a unit vector (length 1.0)
+    // Usage: (eye - at).Normalize()
+    Vector3 Normalize() const {
+        float len = Length();
+        if (len > 0.0001f) {
+            float invLen = 1.0f / len;
+            return Vector3(x * invLen, y * invLen, z * invLen);
+        }
+        return *this; // Return zero vector if length is 0
+    }
+
+    // 7. Dot Product: Returns scalar projection
+    // Usage: xaxis.Dot(eye)
+    float Dot(const Vector3& other) const {
+        return x * other.x + y * other.y + z * other.z;
+    }
+
+    // 8. Cross Product: Returns perpendicular vector
+    // Usage: up.Cross(zaxis)
+    Vector3 Cross(const Vector3& other) const {
+        return Vector3(
+            y * other.z - z * other.y,
+            z * other.x - x * other.z,
+            x * other.y - y * other.x
+        );
+    }
+
+    // Distance Helper (for your Pathfinding)
+    float Dist3D(const Vector3& other) const {
+        float dx = x - other.x;
+        float dy = y - other.y;
+        float dz = z - other.z;
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
+    }
+};
+
+// --- MATRIX STRUCT (Keep this if you haven't added it yet) ---
+struct Matrix4x4 {
+    float m[4][4];
+
+    static Matrix4x4 Identity() {
+        Matrix4x4 res = { 0 };
+        res.m[0][0] = 1; res.m[1][1] = 1; res.m[2][2] = 1; res.m[3][3] = 1;
+        return res;
+    }
+
+    Matrix4x4 operator*(const Matrix4x4& other) const {
+        Matrix4x4 res = { 0 };
+        for (int r = 0; r < 4; ++r) {
+            for (int c = 0; c < 4; ++c) {
+                for (int k = 0; k < 4; ++k) {
+                    res.m[r][c] += m[r][k] * other.m[k][c];
+                }
+            }
+        }
+        return res;
+    }
+};
+
+// --- MATRIX HELPERS ---
+
+inline Matrix4x4 MatrixLookAtRH(Vector3 eye, Vector3 at, Vector3 up) {
+    Vector3 zaxis = (eye - at).Normalize();
+    Vector3 xaxis = up.Cross(zaxis).Normalize();
+    Vector3 yaxis = zaxis.Cross(xaxis);
+
+    Matrix4x4 res = Matrix4x4::Identity();
+    res.m[0][0] = xaxis.x; res.m[0][1] = yaxis.x; res.m[0][2] = zaxis.x; res.m[0][3] = 0;
+    res.m[1][0] = xaxis.y; res.m[1][1] = yaxis.y; res.m[1][2] = zaxis.y; res.m[1][3] = 0;
+    res.m[2][0] = xaxis.z; res.m[2][1] = yaxis.z; res.m[2][2] = zaxis.z; res.m[2][3] = 0;
+    res.m[3][0] = -xaxis.Dot(eye);
+    res.m[3][1] = -yaxis.Dot(eye);
+    res.m[3][2] = -zaxis.Dot(eye);
+    res.m[3][3] = 1;
+    return res;
+}
+
+inline Matrix4x4 MatrixPerspectiveFovRH(float fovY, float aspect, float zn, float zf) {
+    Matrix4x4 res = { 0 };
+    float yScale = 1.0f / std::tan(fovY / 2.0f);
+    float xScale = yScale / aspect;
+
+    res.m[0][0] = xScale;
+    res.m[1][1] = yScale;
+    res.m[2][2] = zf / (zn - zf);
+    res.m[2][3] = -1.0f;
+    res.m[3][2] = zn * zf / (zn - zf);
+    return res;
+}
