@@ -275,6 +275,8 @@ namespace MMAP
                     ttriangles.append(indices[2] + count);
                     ttriangles.append(indices[1] + count);
                     ttriangles.append(indices[0] + count);
+
+                    meshData.solidAreas.append(areaId);
                 }
             }
         }
