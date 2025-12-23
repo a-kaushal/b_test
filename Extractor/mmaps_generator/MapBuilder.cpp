@@ -572,11 +572,10 @@ namespace MMAP
                 // mark all walkable tiles, both liquids and solids
                 unsigned char* triFlags = new unsigned char[tTriCount];
                 if (meshData.solidAreas.size() == tTriCount) {
-                    memcpy(triFlags, meshData.solidAreas.getCArray(), tTriCount * sizeof(unsigned char));
-                }
-                else {
-                    memset(triFlags, NAV_GROUND, tTriCount * sizeof(unsigned char));
-                }
+        memcpy(triFlags, meshData.solidAreas.getCArray(), tTriCount * sizeof(unsigned char));
+    } else {
+        memset(triFlags, NAV_GROUND, tTriCount*sizeof(unsigned char));
+    }
                 rcClearUnwalkableTriangles(m_rcContext, tileCfg.walkableSlopeAngle, tVerts, tVertCount, tTris, tTriCount, triFlags);
                 rcRasterizeTriangles(m_rcContext, tVerts, tVertCount, tTris, triFlags, tTriCount, *tile.solid, config.walkableClimb);
                 delete[] triFlags;

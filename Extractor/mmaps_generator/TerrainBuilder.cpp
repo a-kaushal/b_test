@@ -515,8 +515,23 @@ namespace MMAP
                 }
 
                 if (useTerrain)
-                    for (int k = 0; k < 3*tTriCount/2; ++k)
+                {
+                    // 1. Calculate Area ID for this square
+                    int row = i / 128;
+                    int col = i % 128;
+                    // 2=Road, 1=Ground
+                    uint8 areaId = terrain_type[row][col] == 1 ? 2 : 1;
+
+                    // 2. Add the Triangles (Existing Code)
+                    // The loop limit (3*tTriCount/2) results in 6 indices, which is 2 triangles.
+                    for (int k = 0; k < 3 * tTriCount / 2; ++k)
                         meshData.solidTris.append(ttris[k]);
+
+                    // 3. Add the Area ID for those triangles (NEW CODE)
+                    // Since we added 2 triangles above, we append the ID twice.
+                    meshData.solidAreas.append(areaId);
+                    meshData.solidAreas.append(areaId);
+                }
 
                 // advance to next set of triangles
                 ltris += 3;
