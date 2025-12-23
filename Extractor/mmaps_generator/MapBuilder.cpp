@@ -486,6 +486,8 @@ namespace MMAP
         int lTriCount = meshData.liquidTris.size() / 3;
         uint8* lTriFlags = meshData.liquidType.getCArray();
 
+        unsigned char* triFlags = new unsigned char[tTriCount];
+
         // these are WORLD UNIT based metrics
         // this are basic unit dimentions
         // value have to divide GRID_SIZE(533.3333f) ( aka: 0.5333, 0.2666, 0.3333, 0.1333, etc )
@@ -569,7 +571,12 @@ namespace MMAP
 
                 // mark all walkable tiles, both liquids and solids
                 unsigned char* triFlags = new unsigned char[tTriCount];
-                memset(triFlags, NAV_GROUND, tTriCount*sizeof(unsigned char));
+                if (meshData.solidAreas.size() == tTriCount) {
+                    memcpy(triFlags, meshData.solidAreas.getCArray(), tTriCount * sizeof(unsigned char));
+                }
+                else {
+                    memset(triFlags, NAV_GROUND, tTriCount * sizeof(unsigned char));
+                }
                 rcClearUnwalkableTriangles(m_rcContext, tileCfg.walkableSlopeAngle, tVerts, tVertCount, tTris, tTriCount, triFlags);
                 rcRasterizeTriangles(m_rcContext, tVerts, tVertCount, tTris, triFlags, tTriCount, *tile.solid, config.walkableClimb);
                 delete[] triFlags;

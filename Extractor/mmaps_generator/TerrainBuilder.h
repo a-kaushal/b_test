@@ -49,6 +49,7 @@ namespace MMAP
     {
         G3D::Array<float> solidVerts;
         G3D::Array<int> solidTris;
+        G3D::Array<uint8> solidAreas;
 
         G3D::Array<float> liquidVerts;
         G3D::Array<int> liquidTris;

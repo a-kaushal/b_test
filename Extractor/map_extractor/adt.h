@@ -208,6 +208,14 @@ public:
     }
 };
 
+struct adt_MCLY
+{
+    uint32 textureId;
+    uint32 flags;
+    uint32 offsetInMCAL;
+    int32 effectId;
+};
+
 #pragma pack(pop)
 
 #endif

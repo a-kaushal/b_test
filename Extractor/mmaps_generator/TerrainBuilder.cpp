@@ -29,6 +29,8 @@ struct map_fileheader
     uint32 liquidMapSize;
     uint32 holesOffset;
     uint32 holesSize;
+    uint32 terrainMapOffset;
+    uint32 terrainMapSize;
 };
 
 #define MAP_HEIGHT_NO_HEIGHT  0x0001
@@ -149,6 +151,16 @@ namespace MMAP
             haveLiquid = fheader.liquidMapOffset && !m_skipLiquid;
         }
 
+        // Read Terrain Type Data
+        uint8 terrain_type[128][128]; // ADT_GRID_SIZE is 128
+        memset(terrain_type, 0, sizeof(terrain_type));
+
+        if (fheader.terrainMapOffset) // check if file has our new section
+        {
+            fseek(mapFile, fheader.terrainMapOffset, SEEK_SET);
+            fread(terrain_type, sizeof(terrain_type), 1, mapFile);
+        }
+
         // no data in this map file
         if (!haveTerrain && !haveLiquid)
         {
@@ -249,14 +261,22 @@ namespace MMAP
 
             int indices[3], loopStart = 0, loopEnd = 0, loopInc = 0;
             getLoopVars(portion, loopStart, loopEnd, loopInc);
-            for (int i = loopStart; i < loopEnd; i+=loopInc)
-                for (int j = TOP; j <= BOTTOM; j+=1)
+            for (int i = loopStart; i < loopEnd; i += loopInc) {
+
+                // Determine Area ID for this quad
+                // i iterates through the 128x128 grid squares
+                int row = i / 128; // V8_SIZE
+                int col = i % 128;
+                uint8 areaId = terrain_type[row][col] == 1 ? 2 : 1; // 2=Road, 1=Ground (Recast uses 0 for null)
+
+                for (int j = TOP; j <= BOTTOM; j += 1)
                 {
                     getHeightTriangle(i, Spot(j), indices);
                     ttriangles.append(indices[2] + count);
                     ttriangles.append(indices[1] + count);
                     ttriangles.append(indices[0] + count);
                 }
+            }
         }
 
         // liquid data
