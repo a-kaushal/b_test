@@ -81,7 +81,9 @@ u_map_fcc InterestingChunks[] = {
     { 'O', '2', 'H', 'M' },
     { 'K', 'N', 'C', 'M' },
     { 'T', 'V', 'C', 'M' },
-    { 'Q', 'L', 'C', 'M' }
+    { 'Q', 'L', 'C', 'M' },
+    { 'X', 'E', 'T', 'M' },
+    { 'K', 'N', 'C', 'M' }
 };
 
 bool IsInterestingChunk(u_map_fcc const& fcc)
@@ -95,18 +97,34 @@ bool IsInterestingChunk(u_map_fcc const& fcc)
 
 void ChunkedFile::parseChunks()
 {
-    uint8* ptr = GetData();
-    while (ptr < GetData() + GetDataSize())
+    uint8* ptr = GetData();// Prevent infinite loops or crashes on bad files
+    uint8* endPtr = GetData() + GetDataSize();
+    while (ptr < endPtr)
     {
+        // 1. Read Header
+        if (ptr + 8 > endPtr) break; // Safety check
         u_map_fcc header = *(u_map_fcc*)ptr;
-        uint32 size = 0;
+
+        // 2. Read Size
+        uint32 size = *(uint32*)(ptr + 4);
+
+        // --- DEBUG: Print Every Chunk Found ---
+        // Print as characters to see the name
+       /* printf("[DEBUG] SCANNER: Found Chunk '%c%c%c%c' (Hex: %08X, Size: %u)\n",
+            header.fcc_txt[0], header.fcc_txt[1], header.fcc_txt[2], header.fcc_txt[3],
+            header.fcc, size);*/
+        // --------------------------------------
+
         if (IsInterestingChunk(header))
         {
-            size = *(uint32*)(ptr + 4);
             if (size <= data_size)
             {
+                // Swap bytes for internal storage (if needed)
                 std::swap(header.fcc_txt[0], header.fcc_txt[3]);
                 std::swap(header.fcc_txt[1], header.fcc_txt[2]);
+
+                /*printf("[DEBUG] -> Capturing Interesting Chunk: %c%c%c%c\n",
+                    header.fcc_txt[0], header.fcc_txt[1], header.fcc_txt[2], header.fcc_txt[3]);*/
 
                 FileChunk* chunk = new FileChunk{ ptr, size };
                 chunk->parseSubChunks();

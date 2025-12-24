@@ -76,12 +76,12 @@ public:
 //
 class adt_MCNK
 {
+public:
     union{
         uint32 fcc;
         char   fcc_txt[4];
     };
     uint32 size;
-public:
     uint32 flags;
     uint32 ix;
     uint32 iy;

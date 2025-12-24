@@ -140,25 +140,46 @@ namespace MMAP
             return false;
         }
 
-        map_heightHeader hheader;
-        fseek(mapFile, fheader.heightMapOffset, SEEK_SET);
+        // --- DEBUG: Check Header Offsets ---
+        printf("[DEBUG] Map %u_%u: HeightOffset: %u, TerrainOffset: %u\n",
+            tileY, tileX, fheader.heightMapOffset, fheader.terrainMapOffset);
 
+        // --- 1. READ TERRAIN ---
+        uint8 terrain_type[128][128];
+        memset(terrain_type, 0, sizeof(terrain_type));
+
+        if (fheader.terrainMapOffset)
+        {
+            fseek(mapFile, fheader.terrainMapOffset, SEEK_SET);
+            printf("[DEBUG] Seek to Terrain: ftell says %ld\n", ftell(mapFile)); // Check cursor
+
+            size_t readCount = fread(terrain_type, sizeof(terrain_type), 1, mapFile);
+            printf("[DEBUG] Read Terrain: result %zu, ftell now %ld\n", readCount, ftell(mapFile));
+
+            // Sanity Check for Road Data
+            int roadCellCount = 0;
+            for (int r = 0; r < 128; ++r) for (int c = 0; c < 128; ++c) if (terrain_type[r][c] == 1) roadCellCount++;
+            if (roadCellCount > 0) printf("[DEBUG] Loaded %d road cells.\n", roadCellCount);
+        }
+
+        // --- 2. CLEAR ERRORS & SEEK TO HEIGHT ---
+        clearerr(mapFile); // FORCE clear EOF state
+        fseek(mapFile, fheader.heightMapOffset, SEEK_SET);
+        printf("[DEBUG] Seek to Height: ftell says %ld\n", ftell(mapFile)); // Verify cursor reset
+
+        map_heightHeader hheader;
         bool haveTerrain = false;
         bool haveLiquid = false;
+
         if (fread(&hheader, sizeof(map_heightHeader), 1, mapFile) == 1)
         {
             haveTerrain = !(hheader.flags & MAP_HEIGHT_NO_HEIGHT);
             haveLiquid = fheader.liquidMapOffset && !m_skipLiquid;
+            printf("[DEBUG] Read Height Header. Flags: %u, haveTerrain: %d\n", hheader.flags, haveTerrain);
         }
-
-        // Read Terrain Type Data
-        uint8 terrain_type[128][128]; // ADT_GRID_SIZE is 128
-        memset(terrain_type, 0, sizeof(terrain_type));
-
-        if (fheader.terrainMapOffset) // check if file has our new section
+        else
         {
-            fseek(mapFile, fheader.terrainMapOffset, SEEK_SET);
-            fread(terrain_type, sizeof(terrain_type), 1, mapFile);
+            printf("[DEBUG] FAILED to read Height Header! ferror: %d, feof: %d\n", ferror(mapFile), feof(mapFile));
         }
 
         // no data in this map file
@@ -276,7 +297,6 @@ namespace MMAP
                     ttriangles.append(indices[1] + count);
                     ttriangles.append(indices[0] + count);
 
-                    meshData.solidAreas.append(areaId);
                 }
             }
         }
@@ -516,19 +536,25 @@ namespace MMAP
 
                 if (useTerrain)
                 {
-                    // 1. Calculate Area ID for this square
+                    // 1. Calculate Area ID
                     int row = i / 128;
                     int col = i % 128;
-                    // 2=Road, 1=Ground
                     uint8 areaId = terrain_type[row][col] == 1 ? 2 : 1;
 
-                    // 2. Add the Triangles (Existing Code)
-                    // The loop limit (3*tTriCount/2) results in 6 indices, which is 2 triangles.
+                    // --- DEBUG 2: Notify on first road detected ---
+                    // This ensures we only print once per tile to avoid lag/spam
+                    static bool printedRoadFound = false;
+                    if (areaId == 2 && !printedRoadFound) {
+                        printf("[DEBUG] Map %u_%u: Applying ROAD area (ID 2) to mesh!\n", tileY, tileX);
+                        printedRoadFound = true;
+                    }
+                    // ---------------------------------------------
+
+                    // 2. Add the Triangles
                     for (int k = 0; k < 3 * tTriCount / 2; ++k)
                         meshData.solidTris.append(ttris[k]);
 
-                    // 3. Add the Area ID for those triangles (NEW CODE)
-                    // Since we added 2 triangles above, we append the ID twice.
+                    // 3. Add the Area ID
                     meshData.solidAreas.append(areaId);
                     meshData.solidAreas.append(areaId);
                 }
@@ -709,6 +735,36 @@ namespace MMAP
 
                     copyVertices(transformedVertices, meshData.solidVerts);
                     copyIndices(tempTriangles, meshData.solidTris, offset, isM2);
+
+                    // --- FIX: Detect Bridges and Paths in Models ---
+                    uint8 modelAreaId = 1; // Default to Ground (Green)
+
+                    // Convert model name to lowercase for checking
+                    std::string mName = instance.name;
+                    std::transform(mName.begin(), mName.end(), mName.begin(), ::tolower);
+
+                    // Check for keywords that indicate a walkable structure
+                    if (mName.find("bridge") != std::string::npos ||
+                        mName.find("dock") != std::string::npos ||
+                        mName.find("jetty") != std::string::npos ||
+                        mName.find("walk") != std::string::npos ||
+                        mName.find("ramp") != std::string::npos ||
+                        mName.find("stair") != std::string::npos ||
+                        mName.find("span") != std::string::npos ||  // e.g. "GreatSpan"
+                        mName.find("platform") != std::string::npos ||
+                        mName.find("plank") != std::string::npos ||
+                        mName.find("wood") != std::string::npos ||  // Wooden structures
+                        mName.find("floor") != std::string::npos)
+                    {
+                        modelAreaId = 2; // Road (Grey)
+                        // printf("[DEBUG] Structure detected as Road: %s\n", instance.name.c_str()); 
+                    }
+
+                    // Append the Area ID for every triangle in this model
+                    for (size_t k = 0; k < tempTriangles.size(); ++k) {
+                        meshData.solidAreas.append(modelAreaId);
+                    }
+                    // --------------------------------------------
 
                     // now handle liquid data
                     if (liquid)
