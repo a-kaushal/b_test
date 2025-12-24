@@ -463,49 +463,66 @@ float liquid_height[ADT_GRID_SIZE+1][ADT_GRID_SIZE+1];
 uint16 holes[ADT_CELLS_PER_GRID][ADT_CELLS_PER_GRID];
 
 // Debug helper to print string matches
-bool IsRoadTexture(const char* name)
+bool IsRoadTexture(const char* fullPath)
 {
-    std::string s(name);
+    std::string path(fullPath);
+
+    // 1. STRIP DIRECTORY (Only look at the filename)
+    // This prevents "Tileset\Grass.blp" from matching "Tile"
+    std::string filename = path;
+    size_t lastSlash = path.find_last_of("\\/");
+    if (lastSlash != std::string::npos) {
+        filename = path.substr(lastSlash + 1);
+    }
+
+    // Convert to lowercase for comparison
+    std::string s = filename;
     std::transform(s.begin(), s.end(), s.begin(), ::tolower);
 
+    // 2. EXCLUSIONS (Stuff that is NEVER a road)
     if (s.find("grass") != std::string::npos) return false;
-    if (s.find("bush") != std::string::npos) return false;
-    if (s.find("foliage") != std::string::npos) return false;
-    if (s.find("growth") != std::string::npos) return false;
-    if (s.find("flower") != std::string::npos) return false;
-    if (s.find("plant") != std::string::npos) return false;
-    if (s.find("crop") != std::string::npos) return false;
-    if (s.find("cliff") != std::string::npos) return false; // Rocks/Cliffs aren't walkable roads
+    if (s.find("cliff") != std::string::npos) return false;
     if (s.find("rock") != std::string::npos) return false;
+    if (s.find("bush") != std::string::npos) return false;
+    if (s.find("flower") != std::string::npos) return false;
+    if (s.find("dirt") != std::string::npos) return false; // Explicitly exclude Dirt
+    if (s.find("sand") != std::string::npos) return false;
+    if (s.find("mud") != std::string::npos) return false;
+    if (s.find("swamp") != std::string::npos) return false;
 
-    // 2. INCLUSIONS (Things that ARE roads)
-    // Hard Surfaces
+    // 3. INCLUSIONS (Strong Indicators)
     if (s.find("road") != std::string::npos) return true;
     if (s.find("path") != std::string::npos) return true;
     if (s.find("trail") != std::string::npos) return true;
-    if (s.find("track") != std::string::npos) return true;
     if (s.find("street") != std::string::npos) return true;
     if (s.find("highway") != std::string::npos) return true;
-    if (s.find("way") != std::string::npos) return true;
-
-    // Materials
     if (s.find("pave") != std::string::npos) return true;
     if (s.find("cobble") != std::string::npos) return true;
     if (s.find("brick") != std::string::npos) return true;
-    if (s.find("stone") != std::string::npos) return true;
-    if (s.find("tile") != std::string::npos) return true;
-    if (s.find("plank") != std::string::npos) return true; // Wood paths
-    if (s.find("wood") != std::string::npos) return true;
-    if (s.find("floor") != std::string::npos) return true;
+    if (s.find("plank") != std::string::npos) return true;
+    if (s.find("cart") != std::string::npos) return true; // Cart tracks
 
-    // Soft Paths (Dirt/Sand)
-    // Note: We already checked for "Grass" above, so "Dirt" here is safe(r).
-    if (s.find("dirt") != std::string::npos) return true;
-    if (s.find("mud") != std::string::npos) return true;
-    if (s.find("sand") != std::string::npos) return true;
-    if (s.find("gravel") != std::string::npos) return true;
-    if (s.find("cracked") != std::string::npos) return true; // Cracked earth
-    if (s.find("cart") != std::string::npos) return true;
+    // 4. WEAK INDICATORS (Context sensitive)
+
+    // "Stone" is often cliffs. Only count if it implies a floor/structure.
+    if (s.find("stone") != std::string::npos) {
+        if (s.find("floor") != std::string::npos) return true;
+        if (s.find("walk") != std::string::npos) return true;
+        if (s.find("way") != std::string::npos) return true;
+    }
+
+    // "Tile" matches "Tileset" (which we stripped, but just in case)
+    if (s.find("tile") != std::string::npos) {
+        if (s.find("tileset") != std::string::npos) return false;
+        return true; // Matches "FloorTile", "CityTile"
+    }
+
+    // "Wood" matches "Felwood". Only count if it implies planks/floor.
+    if (s.find("wood") != std::string::npos) {
+        if (s.find("floor") != std::string::npos) return true;
+        if (s.find("plank") != std::string::npos) return true;
+        if (s.find("bridge") != std::string::npos) return true;
+    }
 
     return false;
 }
@@ -687,17 +704,44 @@ bool ConvertADT(char* filename, char* filename2, int cell_y, int cell_x, uint32 
     auto itrRange = adt.chunks.equal_range("MCNK");
     if (itrRange.first == itrRange.second) itrRange = adt.chunks.equal_range("KNCM");
 
+    // DEBUG: Confirm we are entering the loop for this file
+    // (Only print for the specific tile you are debugging, e.g. 21_30, to avoid spam)
+    if (cell_y == 30 && cell_x == 20) {
+        printf("[DEBUG] Processing MCNK Loop for Tile %d_%d...\n", cell_y, cell_x);
+        fflush(stdout);
+    }
+
+    // --- DEBUG: DUMP PALETTE (Only for target tile) ---
+    // This tells us what textures are AVAILABLE in this file, 
+    // even if the chunks are failing to load them.
+    for (int x = 18; x < 22; ++x) {
+        for (int y = 28; y < 32; ++y) {
+            if (cell_y == y && cell_x == x) {
+                printf("\n[DEBUG PALETTE] Textures available in Map %d_%d:\n", cell_y, cell_x);
+                for (size_t i = 0; i < textureNames.size(); ++i) {
+                    bool isRoad = textureIsRoad[i];
+                    printf("  [%zu] %s %s\n", i, textureNames[i].c_str(), isRoad ? "[ROAD]" : "");
+                }
+                printf("------------------------------------------------\n");
+                fflush(stdout);
+            }
+        }
+    }
+
     for (auto itr = itrRange.first; itr != itrRange.second; ++itr)
     {
         adt_MCNK* mcnk = itr->second->As<adt_MCNK>();
 
+        // Safety Check: bounds
+        if (mcnk->ix >= 16 || mcnk->iy >= 16) continue;
+
         // --- 1. SET TARGET CHUNK HERE (From your SVG) ---
-        int targetY = 13; // REPLACE with the Row (Y) from SVG
-        int targetX = 9; // REPLACE with the Col (X) from SVG
+        int targetY = 13; // Row
+        int targetX = 9;  // Col
         // ------------------------------------------------
 
         adt_MCNK* texMcnk = mcnk;
-        if (hasTexFile && mcnk->iy < 16 && mcnk->ix < 16) {
+        if (hasTexFile) {
             if (texChunkGrid[mcnk->iy][mcnk->ix]) {
                 texMcnk = texChunkGrid[mcnk->iy][mcnk->ix];
             }
@@ -706,122 +750,153 @@ bool ConvertADT(char* filename, char* filename2, int cell_y, int cell_x, uint32 
         // --- 2. DEBUG PRINT FOR TARGET ---
         if (mcnk->iy == targetY && mcnk->ix == targetX)
         {
-            printf("\n[DEBUG] INSPECTING CHUNK [%d, %d]\n", targetY, targetX);
+            printf("\n[DEBUG] INSPECTING CHUNK [%d, %d] in Map %u_%u\n", targetY, targetX, cell_y, cell_x);
             printf("  Has TexFile: %d\n", hasTexFile);
-            printf("  MCNK Flags: 0x%X\n", mcnk->flags);
-            printf("  Is Hole (0x10000): %s\n", (mcnk->flags & 0x10000) ? "YES" : "NO");
-
-            if (texMcnk == mcnk) printf("  Using: MAIN file MCNK\n");
-            else printf("  Using: TEX file MCNK\n");
-
-            printf("  offsMCLY: %u\n", texMcnk->offsMCLY);
-            printf("  offsMCRF: %u\n", texMcnk->offsMCRF);
-            printf("  offsMCAL: %u\n", texMcnk->offsMCAL);
-            printf("  Size: %u\n", texMcnk->size);
-
-            if (texMcnk->offsMCLY) {
-                uint32 endOffset = texMcnk->offsMCRF ? texMcnk->offsMCRF : texMcnk->offsMCAL;
-                if (!endOffset) endOffset = texMcnk->size;
-                int nLayers = (endOffset - texMcnk->offsMCLY) / sizeof(adt_MCLY);
-                printf("  Calculated Layers: %d\n", nLayers);
-            }
-            else {
-                printf("  ERROR: offsMCLY is 0! No textures defined.\n");
-            }
+            printf("  Using Offset: %u (Size: %u)\n", texMcnk->offsMCLY, texMcnk->size);
+            fflush(stdout); // FORCE PRINT
         }
 
-        // 2. Read Layers (MCLY)
+        // --- 3. READ LAYERS (Robust + Offset 64 Fix) ---
         bool chunkHasRoad = false;
-        uint32 dominantTexId = 0;
+        int maxLayers = 4;
 
-        // --- FIX: Use nLayers from Header instead of calculating offsets ---
-        // The texture MCNK header contains the accurate layer count.
-        int nLayers = texMcnk->nLayers;
+        // Variables to track where we find the data
+        adt_MCNK* sourceMcnk = texMcnk;
+        uint32 readOffset = texMcnk->offsMCLY;
+        bool usingMain = (texMcnk == mcnk);
+        bool dataFound = false;
 
-        // Safety clamp (WoW supports max 4 texture layers per chunk)
-        if (nLayers > 4) nLayers = 4;
-        // ------------------------------------------------------------------
+        // --- STEP 1: VALIDATE STANDARD OFFSET ---
+        // Check if the standard offset (usually 256) points to garbage
+        bool standardOffsetBad = false;
+        if (hasTexFile && readOffset > 0 && readOffset < texMcnk->size) {
+            adt_MCLY* t = (adt_MCLY*)((uint8*)texMcnk + readOffset);
+            // If ID is -1 (0xFF..) or unreasonably large, it's garbage
+            if (t->textureId == 0xFFFFFFFF || (textureNames.size() > 0 && t->textureId > textureNames.size() + 50)) {
+                standardOffsetBad = true;
+            }
+        }
+        else {
+            standardOffsetBad = true; // Offset 0 or out of bounds
+        }
 
-        if (texMcnk->offsMCLY && nLayers > 0)
-        {
-            uint8* chunkStart = (uint8*)texMcnk;
+        // --- STEP 2: TRY OFFSET 64 (The "Hunter" Fix) ---
+        // If standard failed, check if valid data hides at Offset 64 in the Tex file
+        if (standardOffsetBad && hasTexFile) {
+            uint32 altOffset = 64; // The magic offset found by the scan
+            if (altOffset < texMcnk->size) {
+                adt_MCLY* t = (adt_MCLY*)((uint8*)texMcnk + altOffset);
 
-            // Ensure offset is within the chunk data
-            if (texMcnk->offsMCLY < texMcnk->size)
-            {
-                adt_MCLY* mcly = (adt_MCLY*)(chunkStart + texMcnk->offsMCLY);
-
-                if (nLayers > 0) dominantTexId = mcly[0].textureId;
-
-                for (int l = 0; l < nLayers; ++l)
-                {
-                    uint32 texID = mcly[l].textureId;
-
-                    // SAVE FOR SVG
-                    debugTextureLayers[mcnk->iy][mcnk->ix].push_back(texID);
-
-                    // CHECK ROAD
-                    // Ensure ID is valid before checking vector
-                    if (texID < textureIsRoad.size() && textureIsRoad[texID])
-                    {
-                        chunkHasRoad = true;
-                    }
+                // valid check: ID must be small (valid texture index)
+                if (t->textureId < textureNames.size()) {
+                    readOffset = altOffset; // SUCCESS! Use this offset.
+                    standardOffsetBad = false; // We found good data
+                    if (mcnk->iy == targetY && mcnk->ix == targetX)
+                        printf("    [FIX] Standard offset garbage. Using Hidden Offset 64.\n");
                 }
             }
         }
 
-        // Apply Road Data to Map (Chunk based granularity)
+        // --- STEP 3: FALLBACK TO MAIN FILE ---
+        // If both Standard and Offset 64 failed in _tex0, look at the Main File
+        if (standardOffsetBad && mcnk->offsMCLY > 0) {
+            sourceMcnk = mcnk;
+            readOffset = mcnk->offsMCLY;
+            usingMain = true;
+            if (mcnk->iy == targetY && mcnk->ix == targetX)
+                printf("    [FIX] _tex0 failed. Switching to MAIN file.\n");
+        }
+
+        // --- STEP 4: READ THE LAYERS ---
+        if (readOffset > 0 && readOffset < sourceMcnk->size)
+        {
+            adt_MCLY* mcly = (adt_MCLY*)((uint8*)sourceMcnk + readOffset);
+
+            for (int l = 0; l < maxLayers; ++l)
+            {
+                // Safety boundary check
+                if (readOffset + (l + 1) * sizeof(adt_MCLY) > sourceMcnk->size) break;
+
+                uint32 texID = mcly[l].textureId;
+
+                // Final Sanity Check
+                if (texID >= textureNames.size()) break;
+
+                // SAVE DATA
+                debugTextureLayers[mcnk->iy][mcnk->ix].push_back(texID);
+
+                // CHECK ROAD
+                if (textureIsRoad[texID]) {
+                    chunkHasRoad = true;
+                }
+
+                dataFound = true;
+
+                // Debug print (Target Only)
+                if (mcnk->iy == targetY && mcnk->ix == targetX) {
+                    printf("    [SUCCESS] Layer %d: %s (%u)\n", l, textureNames[texID].c_str(), texID);
+                }
+            }
+        }
+
+        // --- STEP 5: ULTIMATE FALLBACK ---
+        // If we still found nothing, default to Texture 0 to avoid empty holes
+        if (!dataFound && !(mcnk->flags & 0x10000))
+        {
+            if (!textureNames.empty()) {
+                uint32 defaultTexID = 0;
+                debugTextureLayers[mcnk->iy][mcnk->ix].push_back(defaultTexID);
+                if (textureIsRoad[defaultTexID]) chunkHasRoad = true;
+
+                if (mcnk->iy == targetY && mcnk->ix == targetX)
+                    printf("    [FALLBACK] No data found. Defaulting to Texture 0.\n");
+            }
+        }
+        
+        // ... (Rest of the standard MCNK processing: Road Data / Height / Holes) ...
+        // Apply Road Data
         if (chunkHasRoad)
         {
             for (int y = 0; y < ADT_CELL_SIZE; ++y)
                 for (int x = 0; x < ADT_CELL_SIZE; ++x)
-                    terrain_type[mcnk->iy * ADT_CELL_SIZE + y][mcnk->ix * ADT_CELL_SIZE + x] = 2; // Road
+                    terrain_type[mcnk->iy * ADT_CELL_SIZE + y][mcnk->ix * ADT_CELL_SIZE + x] = 2; 
         }
 
-        // ... (Standard MCNK Data Processing - Height/Area/Holes) ...
-        // ... (COPY PASTE THE STANDARD PROCESSING BLOCKS FROM YOUR PREVIOUS FILE HERE) ...
+        // ... Copy the rest of your original logic here (Area, Height, Liquid, Holes) ...
+        // (Use the logic from your provided System.cpp for the rest of the loop)
+        
         // -- Area Data --
         if (mcnk->areaid <= maxAreaId && areas[mcnk->areaid] != 0xFFFF)
             area_flags[mcnk->iy][mcnk->ix] = areas[mcnk->areaid];
 
         // -- Height Data --
-        for (int y = 0; y <= ADT_CELL_SIZE; y++)
-        {
+        for (int y = 0; y <= ADT_CELL_SIZE; y++) {
             int cy = mcnk->iy * ADT_CELL_SIZE + y;
-            for (int x = 0; x <= ADT_CELL_SIZE; x++)
-            {
+            for (int x = 0; x <= ADT_CELL_SIZE; x++) {
                 int cx = mcnk->ix * ADT_CELL_SIZE + x;
                 V9[cy][cx] = mcnk->ypos;
             }
         }
-
-        for (int y = 0; y < ADT_CELL_SIZE; y++)
-        {
+        for (int y = 0; y < ADT_CELL_SIZE; y++) {
             int cy = mcnk->iy * ADT_CELL_SIZE + y;
-            for (int x = 0; x < ADT_CELL_SIZE; x++)
-            {
+            for (int x = 0; x < ADT_CELL_SIZE; x++) {
                 int cx = mcnk->ix * ADT_CELL_SIZE + x;
                 V8[cy][cx] = mcnk->ypos;
             }
         }
 
-        if (FileChunk* chunk = itr->second->GetSubChunk("MCVT"))
-        {
+        if (FileChunk* chunk = itr->second->GetSubChunk("MCVT")) {
             adt_MCVT* mcvt = chunk->As<adt_MCVT>();
-            for (int y = 0; y <= ADT_CELL_SIZE; y++)
-            {
+            for (int y = 0; y <= ADT_CELL_SIZE; y++) {
                 int cy = mcnk->iy * ADT_CELL_SIZE + y;
-                for (int x = 0; x <= ADT_CELL_SIZE; x++)
-                {
+                for (int x = 0; x <= ADT_CELL_SIZE; x++) {
                     int cx = mcnk->ix * ADT_CELL_SIZE + x;
                     V9[cy][cx] += mcvt->height_map[y * (ADT_CELL_SIZE * 2 + 1) + x];
                 }
             }
-            for (int y = 0; y < ADT_CELL_SIZE; y++)
-            {
+            for (int y = 0; y < ADT_CELL_SIZE; y++) {
                 int cy = mcnk->iy * ADT_CELL_SIZE + y;
-                for (int x = 0; x < ADT_CELL_SIZE; x++)
-                {
+                for (int x = 0; x < ADT_CELL_SIZE; x++) {
                     int cx = mcnk->ix * ADT_CELL_SIZE + x;
                     V8[cy][cx] += mcvt->height_map[y * (ADT_CELL_SIZE * 2 + 1) + ADT_CELL_SIZE + 1 + x];
                 }
@@ -829,50 +904,36 @@ bool ConvertADT(char* filename, char* filename2, int cell_y, int cell_x, uint32 
         }
 
         // -- Liquid Data --
-        if (mcnk->sizeMCLQ > 8)
-        {
-            if (FileChunk* chunk = itr->second->GetSubChunk("MCLQ"))
-            {
+        if (mcnk->sizeMCLQ > 8) {
+            if (FileChunk* chunk = itr->second->GetSubChunk("MCLQ")) {
                 adt_MCLQ* liquid = chunk->As<adt_MCLQ>();
-                int count = 0;
-                for (int y = 0; y < ADT_CELL_SIZE; ++y)
-                {
+                for (int y = 0; y < ADT_CELL_SIZE; ++y) {
                     int cy = mcnk->iy * ADT_CELL_SIZE + y;
-                    for (int x = 0; x < ADT_CELL_SIZE; ++x)
-                    {
+                    for (int x = 0; x < ADT_CELL_SIZE; ++x) {
                         int cx = mcnk->ix * ADT_CELL_SIZE + x;
-                        if (liquid->flags[y][x] != 0x0F)
-                        {
+                        if (liquid->flags[y][x] != 0x0F) {
                             liquid_show[cy][cx] = true;
                             if (liquid->flags[y][x] & (1 << 7))
                                 liquid_flags[mcnk->iy][mcnk->ix] |= MAP_LIQUID_TYPE_DARK_WATER;
-                            ++count;
                         }
                     }
                 }
-
                 uint32 c_flag = mcnk->flags;
-                if (c_flag & (1 << 2))
-                {
+                if (c_flag & (1 << 2)) {
                     liquid_entry[mcnk->iy][mcnk->ix] = 1;
                     liquid_flags[mcnk->iy][mcnk->ix] |= MAP_LIQUID_TYPE_WATER;
                 }
-                if (c_flag & (1 << 3))
-                {
+                if (c_flag & (1 << 3)) {
                     liquid_entry[mcnk->iy][mcnk->ix] = 2;
                     liquid_flags[mcnk->iy][mcnk->ix] |= MAP_LIQUID_TYPE_OCEAN;
                 }
-                if (c_flag & (1 << 4))
-                {
+                if (c_flag & (1 << 4)) {
                     liquid_entry[mcnk->iy][mcnk->ix] = 3;
                     liquid_flags[mcnk->iy][mcnk->ix] |= MAP_LIQUID_TYPE_MAGMA;
                 }
-
-                for (int y = 0; y <= ADT_CELL_SIZE; ++y)
-                {
+                for (int y = 0; y <= ADT_CELL_SIZE; ++y) {
                     int cy = mcnk->iy * ADT_CELL_SIZE + y;
-                    for (int x = 0; x <= ADT_CELL_SIZE; ++x)
-                    {
+                    for (int x = 0; x <= ADT_CELL_SIZE; ++x) {
                         int cx = mcnk->ix * ADT_CELL_SIZE + x;
                         liquid_height[cy][cx] = liquid->liquid[y][x].height;
                     }
@@ -881,15 +942,12 @@ bool ConvertADT(char* filename, char* filename2, int cell_y, int cell_x, uint32 
         }
 
         // -- Hole Data --
-        if (!(mcnk->flags & 0x10000))
-        {
-            if (uint16 hole = mcnk->holes)
-            {
+        if (!(mcnk->flags & 0x10000)) {
+            if (uint16 hole = mcnk->holes) {
                 holes[mcnk->iy][mcnk->ix] = mcnk->holes;
                 hasHoles = true;
             }
         }
-        // ... (End of Copy Paste Block) ...
     }
 
     // --- WRITE DEBUG SVG ---
