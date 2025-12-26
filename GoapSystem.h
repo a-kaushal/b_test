@@ -1,7 +1,7 @@
 #pragma once
 #include "Vector.h"
 #include "MovementController.h"
-#include "Pathfinding.h"
+#include "Pathfinding2.h"
 #include <vector>
 #include <iostream>
 

@@ -15,7 +15,7 @@
 
 #include "SimpleKeyboardClient.h"
 #include "GameGui.h"
-#include "PathFinding.h"
+#include "PathFinding2.h"
 #include "Movement.h"
 #include "Vector.h"
 #include "Database.h"
@@ -470,19 +470,28 @@ void MainThread(HMODULE hModule) {
                     bool isPaused = false;
                     bool lastF3State = false;
 
+                    std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player);
                     std::vector<Vector3> path = { Vector3{7.07241, 7449.82, 17.3746}, Vector3{7.07241, 7459.82, 17.3746} };
+                    path = CalculatePath(agent.state.player.position, Vector3(7.07241, 7449.82, 17.3746), false, 530);
                     //pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[0], false);
                     logFile << "Player Pos: (" << agent.state.player.position.x << ", " << agent.state.player.position.y << ", " << agent.state.player.position.z << ")" << "  Player Rotation: " << agent.state.player.rotation << std::endl;
                     logFile << "Steering towards: (" << path[0].x << ", " << path[0].y << ", " << path[0].z << ")" << std::endl;
 
-                    agent.state.currentPath = path;
-                    agent.state.pathIndex = 0;
-                    agent.state.hasPath = true;
+                    //agent.state.currentPath = path;
+                    //agent.state.pathIndex = 0;
+                    //agent.state.hasPath = true;
 
                     while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
                         if (GetAsyncKeyState(VK_END) & 1) {
                             g_IsRunning = false;
                             break;
+                        }
+                        for (size_t i = 0; i < path.size() - 1; ++i) {
+                            int screenPosx, screenPosy;
+                            if (cam.WorldToScreen(path[i], screenPosx, screenPosy, &mouse)) {
+                                // Draw a line using your overlay's draw list
+                                overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0));
+                            }
                         }
                         // 1. Extract Data
                         std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player);
