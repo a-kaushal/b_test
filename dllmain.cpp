@@ -390,6 +390,8 @@ void MainThread(HMODULE hModule) {
         WORD nextKey = 0;
         int keyDuration = 0;
 
+        std::vector<Vector3> path = {};
+
         SimpleKeyboardClient kbd;
         if (!kbd.Connect()) {
             logFile << "[ERROR] Failed to connect to driver!" << std::endl;
@@ -464,27 +466,185 @@ void MainThread(HMODULE hModule) {
                         return;
                     }
 
-                    mouse.PressButton(MOUSE_LEFT);
-                    Sleep(5);
-                    mouse.Move(0, 20); // Relative move
-                    Sleep(1000);
-                    mouse.Move(0, 20); // Relative move
-                    Sleep(1000);
-                    mouse.Move(0, 20); // Relative move
-                    Sleep(1000);
-                    mouse.Move(0, -60); // Relative move
-                    Sleep(1000);
-                    mouse.Move(0, -20); // Relative move
-                    Sleep(1000);
-                    mouse.Move(0, -20); // Relative move
-                    Sleep(1000);
-                    mouse.Move(0, -20); // Relative move
-                    mouse.ReleaseButton(MOUSE_LEFT);
-                    Sleep(5000);
-
                     // --- HOTKEY STATE VARIABLES ---
                     bool isPaused = false;
                     bool lastF3State = false;
+
+                    std::vector<Vector3> path = { Vector3{7.07241, 7449.82, 17.3746}, Vector3{7.07241, 7459.82, 17.3746} };
+                    //pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[0], false);
+                    logFile << "Player Pos: (" << agent.state.player.position.x << ", " << agent.state.player.position.y << ", " << agent.state.player.position.z << ")" << "  Player Rotation: " << agent.state.player.rotation << std::endl;
+                    logFile << "Steering towards: (" << path[0].x << ", " << path[0].y << ", " << path[0].z << ")" << std::endl;
+
+                    agent.state.currentPath = path;
+                    agent.state.pathIndex = 0;
+                    agent.state.hasPath = true;
+
+                    while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
+                        if (GetAsyncKeyState(VK_END) & 1) {
+                            g_IsRunning = false;
+                            break;
+                        }
+                        // 1. Extract Data
+                        std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player);
+                        //logFile << playerInfo.rotation << std::endl;
+
+                        //while (playerInfo.position.Dist3D(tempPos) > 5) {
+                        //    std::cout << std::fixed << std::setprecision(2) << "Player Pos: (" << playerInfo.position.x << ", " << playerInfo.position.y << ", " << playerInfo.position.z << ")" << "  Player Rotation: " << playerInfo.rotation << std::endl;
+                        //    if (playerInfo.position.Dist3D(tempPos) > 20) {
+                        //        keyDuration = Char_Rotate_To(playerInfo.rotation, CalculateAngle(playerInfo.position, tempPos), nextKey);
+                        //        if (keyDuration > 0) {
+                        //            kbd.HoldKey(nextKey, keyDuration);
+                        //            Sleep(5000);
+                        //        }
+                        //    }
+                        //    //kbd.HoldKey('W', 500);
+                        //    std::cout << std::fixed << std::setprecision(2) << "Player Pos: (" << playerInfo.position.x << ", " << playerInfo.position.y << ", " << playerInfo.position.z << ")" << "  Player Rotation: " << playerInfo.rotation << std::endl;
+                        //    std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, playerInfo);
+                        //}
+                        //Sleep(10000000);
+
+                        // 2. Update GUI
+                        UpdateGuiData(currentEntities);
+
+                        // 3. Logic (Rotation/Console Print)
+                        //logFile << nextKey << std::endl;
+
+                        Sleep(10); // Prevent high CPU usage
+                        agent.Tick();
+                    }
+
+                    while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
+                        // Sync Overlay Position
+                        overlay.UpdatePosition();
+
+                        // HANDLE F3 (PAUSE TOGGLE)
+                        bool currentF3State = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
+
+                        if (currentF3State && !lastF3State) {
+                            isPaused = !isPaused;
+                            if (isPaused) {
+                                std::cout << ">>> PAUSED <<<" << std::endl;
+                                pilot.Stop();
+                            }
+                            else {
+                                std::cout << ">>> RESUMED <<<" << std::endl;
+                            }
+                        }
+                        lastF3State = currentF3State;
+
+                        if (isPaused) {
+                            overlay.DrawFrame(100, 100, RGB(255, 255, 0));
+                            Sleep(100);
+                            continue;
+                        }
+
+                        // 1. Get Window Metrics
+                        RECT clientRect;
+                        GetClientRect(hGameWindow, &clientRect);
+                        int width = clientRect.right - clientRect.left;
+                        int height = clientRect.bottom - clientRect.top;
+
+                        // 2. Update Camera with ACTUAL window size
+                        cam.UpdateScreenSize(width, height);
+
+                        // 3. Extract Entities
+                        std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player);
+                        SortEntitiesByDistance(currentEntities);
+
+                        // Loot Logic (Default behavior)
+                        float min_distance = 99999.0f;
+                        Vector3 closest_enemy_pos = {};
+
+                        // Only auto-target loot if we are NOT currently running a manual path test
+                        if (!agent.state.hasPath) {
+                            for (auto& entity : currentEntities) {
+                                if (auto object = std::dynamic_pointer_cast<ObjectInfo>(entity.info)) {
+                                    if (min_distance > object->distance) {
+                                        if (object->name == "Felweed") {
+                                            min_distance = object->distance;
+                                            closest_enemy_pos = object->position;
+                                            agent.state.lootGuidLow = entity.guidLow;
+                                            agent.state.lootGuidHigh = entity.guidHigh;
+                                            agent.state.hasLootTarget = true;
+                                            agent.state.lootPos = object->position;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 4. Calculate Screen Position for Overlay
+                        int sx, sy;
+                        if (closest_enemy_pos.x != 0 && cam.WorldToScreen(closest_enemy_pos, sx, sy, &mouse)) {
+                            overlay.DrawFrame(sx, sy, RGB(255, 0, 0));
+                        }
+                        else {
+                            overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
+                        }
+
+                        // --- NEW: FLIGHT TEST (F6) ---
+                        // Only trigger if F6 pressed and not holding down (Edge detect optional, but safe here)
+                            logFile << "[TEST] Starting Flight Test..." << std::endl;
+							logFile << "Player Pos: (" << agent.state.player.position.x << ", " << agent.state.player.position.y << ", " << agent.state.player.position.z << ")" << std::endl;
+
+                            // 1. Define Target: 50 yards away on X+Y
+                            Vector3 start = agent.state.player.position;
+                            Vector3 target = start;
+                            target.x -= 80.0f;
+                            target.y += 10.0f;
+                            // Note: Z is handled by CalculatePath, but we can hint it
+
+                            // 2. Generate Path
+                             //true = Enable Flying Logic (Ascend -> Cruise -> Descend)
+                            //if (agent.state.hasPath == false) {
+                            //    path = CalculatePath(start, target, false, 530);
+                            //    agent.state.currentPath = path;
+                            //    agent.state.pathIndex = 0;
+                            //    agent.state.hasPath = true;
+                            //    agent.state.hasLootTarget = false; // Override loot to force movement
+                            //}
+							logFile << "player position: (" << start.x << ", " << start.y << ", " << start.z << ")" << std::endl;
+                            std::vector<Vector3> path = { Vector3{7.07241, 7449.82, 17.3746}, Vector3{7.07241, 7459.82, 17.3746} };
+                            agent.state.currentPath = path;
+                            agent.state.pathIndex = 0;
+                            agent.state.hasPath = true;
+							pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[0], false);
+
+                            if (!path.empty()) {
+
+                                logFile << "[TEST] Flight path generated with " << path.size() << " waypoints." << std::endl;
+                                for (const auto& p : path) {
+                                    logFile << "WP: " << p.x << ", " << p.y << ", " << p.z << std::endl;
+                                }
+                            }
+                            else {
+                                logFile << "[TEST] Failed to generate flight path. Check NavMesh load." << std::endl;
+                            }
+
+                        // Fast update to reduce flickering
+                        Sleep(10);
+                        //agent.Tick();
+                    }
+                    g_IsRunning = false;
+                    RaiseException(0xDEADBEEF, 0, 0, nullptr); // Forcibly exit all threads (including GUI)
+
+                    //mouse.PressButton(MOUSE_LEFT);
+                    //Sleep(5);
+                    //mouse.Move(0, 20); // Relative move
+                    //Sleep(1000);
+                    //mouse.Move(0, 20); // Relative move
+                    //Sleep(1000);
+                    //mouse.Move(0, 20); // Relative move
+                    //Sleep(1000);
+                    //mouse.Move(0, -60); // Relative move
+                    //Sleep(1000);
+                    //mouse.Move(0, -20); // Relative move
+                    //Sleep(1000);
+                    //mouse.Move(0, -20); // Relative move
+                    //Sleep(1000);
+                    //mouse.Move(0, -20); // Relative move
+                    //mouse.ReleaseButton(MOUSE_LEFT);
+                    //Sleep(5000);
 
                     while(!(GetAsyncKeyState(VK_F4) & 0x8000)) {
                         // Sync Overlay Position
@@ -632,41 +792,7 @@ void MainThread(HMODULE hModule) {
      //                       currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player);
      //                       //logFile << std::fixed << std::setprecision(2) << "Player Pos: (" << playerInfo.position.x << ", " << playerInfo.position.y << ", " << playerInfo.position.z << ")" << "  Player Rotation: " << playerInfo.rotation << std::endl;
      //                   }
-					//}
-
-                    while (g_IsRunning) {
-                        if (GetAsyncKeyState(VK_END) & 1) {
-							g_IsRunning = false;
-                            break;
-                        }
-                        // 1. Extract Data
-                        std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player);
-                        //logFile << playerInfo.rotation << std::endl;
-
-                        //while (playerInfo.position.Dist3D(tempPos) > 5) {
-                        //    std::cout << std::fixed << std::setprecision(2) << "Player Pos: (" << playerInfo.position.x << ", " << playerInfo.position.y << ", " << playerInfo.position.z << ")" << "  Player Rotation: " << playerInfo.rotation << std::endl;
-                        //    if (playerInfo.position.Dist3D(tempPos) > 20) {
-                        //        keyDuration = Char_Rotate_To(playerInfo.rotation, CalculateAngle(playerInfo.position, tempPos), nextKey);
-                        //        if (keyDuration > 0) {
-                        //            kbd.HoldKey(nextKey, keyDuration);
-                        //            Sleep(5000);
-                        //        }
-                        //    }
-                        //    //kbd.HoldKey('W', 500);
-                        //    std::cout << std::fixed << std::setprecision(2) << "Player Pos: (" << playerInfo.position.x << ", " << playerInfo.position.y << ", " << playerInfo.position.z << ")" << "  Player Rotation: " << playerInfo.rotation << std::endl;
-                        //    std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, playerInfo);
-                        //}
-                        //Sleep(10000000);
-
-                        // 2. Update GUI
-                        UpdateGuiData(currentEntities);
-
-                        // 3. Logic (Rotation/Console Print)
-                        keyDuration = Char_Rotate_To(agent.state.player.rotation, 0.6f, nextKey);
-                        //logFile << nextKey << std::endl;
-
-                        Sleep(20); // Prevent high CPU usage
-                    }
+					//}                    
                 }
             }
         }

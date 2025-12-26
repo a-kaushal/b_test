@@ -19,11 +19,12 @@ struct WorldState {
     bool hasPath = false;
     std::vector<Vector3> currentPath;
     int pathIndex = 0;
+    bool flyingPath = false;
 
     // Danger / Interrupts
     bool isInDanger = false; // e.g., standing in fire
     Vector3 dangerPos;       // Where the fire is
-    
+
     // Looting
     Vector3 lootPos;
     bool hasLootTarget = false;
@@ -70,7 +71,8 @@ public:
 
         Vector3 safeSpot = ws.player.position + (dir * 10.0f);
 
-        pilot.SteerTowards(ws.player.position, ws.player.rotation, safeSpot);
+        // FIX: Added ws.player.isFlying
+        pilot.SteerTowards(ws.player.position, ws.player.rotation, safeSpot, false);
 
         // If we are far enough away, we consider this action "Complete" (for this tick)
         // But for continuous evasion, return false so we keep running until state changes.
@@ -116,7 +118,8 @@ private:
 
 public:
     ActionLoot(SimpleMouseClient& m, SimpleKeyboardClient& k, Camera& c, MemoryAnalyzer& memRef, DWORD pid, ULONG_PTR base, HWND hGameWindow)
-        : mouse(m), keyboard(k), camera(c), analyzer(memRef), procId(pid), baseAddress(base), hGameWindow(hGameWindow) {}
+        : mouse(m), keyboard(k), camera(c), analyzer(memRef), procId(pid), baseAddress(base), hGameWindow(hGameWindow) {
+    }
 
     bool CanExecute(const WorldState& ws) override {
         return ws.hasLootTarget;
@@ -124,7 +127,7 @@ public:
 
     int GetPriority() override { return 80; }
     std::string GetName() override { return "Loot Corpse"; }
-    
+
     // Reset state if we are switching to this action fresh
     void ResetState() override {
         currentState = STATE_APPROACH;
@@ -142,190 +145,192 @@ public:
 
         switch (currentState) {
 
-            // 1. APPROACHING
-            case STATE_APPROACH: {
-                float dist = ws.player.position.Dist3D(ws.lootPos);
-                if (dist > INTERACT_RANGE) {
-                    pilot.SteerTowards(ws.player.position, ws.player.rotation, ws.lootPos);
-                    return false; // Continue next tick
+        // 1. APPROACHING
+        case STATE_APPROACH: {
+            float dist = ws.player.position.Dist3D(ws.lootPos);
+            if (dist > INTERACT_RANGE) {
+                // FIX: Added ws.player.isFlying
+                pilot.SteerTowards(ws.player.position, ws.player.rotation, ws.lootPos, ws.flyingPath);
+                return false; // Continue next tick
+            }
+            pilot.Stop();
+            logFile << "[LOOT] Initializing Scan for Loot Position" << std::endl;
+            currentState = STATE_INIT_SCAN;
+            return false;
+        }
+
+        // 2. INITIALIZE SCAN
+        case STATE_INIT_SCAN: {
+            if (camera.WorldToScreen(ws.lootPos, screenX, screenY, &mouse)) {
+                // OPTIONAL: Check if centered.
+                // If the item is on the very edge of the screen, we might want to center it anyway
+                // to make the spiral search more effective.
+                int centerX = camera.GetScreenWidth() / 2;
+                int centerY = camera.GetScreenHeight() / 2;
+                int distFromCenter = (int)std::sqrt(std::pow(screenX - centerX, 2) + std::pow(screenY - centerY, 2));
+
+                if (distFromCenter > 300) { // If > 300 pixels from center
+                    logFile << "[LOOT] Target on edge. Centering..." << std::endl;
+                    currentState = STATE_ALIGN_CAMERA;
+                    return false;
                 }
-                pilot.Stop();
-                logFile << "[LOOT] Initializing Scan for Loot Position" << std::endl;
+
+                currentOffsetIndex = 0;
+                for (int i = 0; i < 4; ++i) {
+                    keyboard.TypeKey(VK_HOME);
+                    Sleep(5);
+                }
+                currentState = STATE_MOVE_MOUSE;
+                return false;
+            }
+            else {
+                logFile << "[LOOT] Target off-screen. Rotating..." << std::endl;
+                currentState = STATE_ALIGN_CAMERA; // Retry approach/rotate
+                return false;
+            }
+        }
+
+        // ROTATE CAMERA WITH MOUSE
+        case STATE_ALIGN_CAMERA: {
+            Vector3 camPos = camera.GetPosition();
+            Vector3 camFwd = camera.GetForward();
+
+            logFile << "[LOOT] Rotate Camera With Mouse" << std::endl;
+
+            // 1. Calculate Yaw Angles (Top-Down view)
+            // atan2(y, x) gives angle from X-axis in radians
+            float camYaw = std::atan2(camFwd.y, camFwd.x);
+
+            Vector3 toLoot = ws.lootPos - camPos;
+            float lootYaw = std::atan2(toLoot.y, toLoot.x);
+
+            // 2. Calculate Difference
+            float diff = lootYaw - camYaw;
+
+            // Normalize to shortest turn (-PI to +PI)
+            const float PI = 3.14159265f;
+            while (diff <= -PI) diff += 2 * PI;
+            while (diff > PI) diff -= 2 * PI;
+
+            // 3. Convert Radian Delta to Mouse Pixels
+            // Heuristic: ~800 pixels per radian (Adjust this based on mouse sensitivity)
+            // Negative sign because dragging Mouse Left (Negative X) usually turns Camera Left (Positive Yaw)
+            int pixels = (int)(diff * -800.0f);
+
+            // 4. Clamp speed (don't snap instantly, looks robotic)
+            if (pixels > 100) pixels = 100;
+            if (pixels < -100) pixels = -100;
+
+            // 5. If we are close enough, stop rotating
+            if (std::abs(pixels) < 5) {
                 currentState = STATE_INIT_SCAN;
                 return false;
             }
 
-            // 2. INITIALIZE SCAN
-            case STATE_INIT_SCAN: {
-                if (camera.WorldToScreen(ws.lootPos, screenX, screenY, &mouse)) {
-                    // OPTIONAL: Check if centered.
-                    // If the item is on the very edge of the screen, we might want to center it anyway
-                    // to make the spiral search more effective.
-                    int centerX = camera.GetScreenWidth() / 2;
-                    int centerY = camera.GetScreenHeight() / 2;
-                    int distFromCenter = (int)std::sqrt(std::pow(screenX - centerX, 2) + std::pow(screenY - centerY, 2));
+            // --- FIX: RESET CURSOR TO CENTER BEFORE DRAGGING ---
+            // If we don't do this, repeated small turns will eventually push the mouse off-screen.
 
-                    if (distFromCenter > 300) { // If > 300 pixels from center
-                        logFile << "[LOOT] Target on edge. Centering..." << std::endl;
-                        currentState = STATE_ALIGN_CAMERA;
-                        return false;
-                    }
+            // 1. Calculate Center of Game Window
+            RECT rect;
+            GetClientRect(hGameWindow, &rect);
+            POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+            ClientToScreen(hGameWindow, &center);
 
-                    currentOffsetIndex = 0;
-                    for (int i = 0; i < 4; ++i) {
-                        keyboard.TypeKey(VK_HOME);
-                        Sleep(5);
-                    }
-                    currentState = STATE_MOVE_MOUSE;
-                    return false;
-                }
-                else {
-                    logFile << "[LOOT] Target off-screen. Rotating..." << std::endl;
-                    currentState = STATE_ALIGN_CAMERA; // Retry approach/rotate
-                    return false;
-                }
-            }
+            // 2. Teleport Mouse to Center
+            mouse.MoveAbsolute(center.x, center.y);
+            Sleep(5); // Wait for update
 
-            // ROTATE CAMERA WITH MOUSE
-            case STATE_ALIGN_CAMERA: {
-                Vector3 camPos = camera.GetPosition();
-                Vector3 camFwd = camera.GetForward();
+            // 3. Perform Drag
+            mouse.PressButton(MOUSE_LEFT);
+            Sleep(5);
+            mouse.Move(pixels, 0); // Relative move
+            Sleep(5);
+            mouse.ReleaseButton(MOUSE_LEFT);
 
-                logFile << "[LOOT] Rotate Camera With Mouse" << std::endl;
+            return false;
+        }
 
-                // 1. Calculate Yaw Angles (Top-Down view)
-                // atan2(y, x) gives angle from X-axis in radians
-                float camYaw = std::atan2(camFwd.y, camFwd.x);
-
-                Vector3 toLoot = ws.lootPos - camPos;
-                float lootYaw = std::atan2(toLoot.y, toLoot.x);
-
-                // 2. Calculate Difference
-                float diff = lootYaw - camYaw;
-
-                // Normalize to shortest turn (-PI to +PI)
-                const float PI = 3.14159265f;
-                while (diff <= -PI) diff += 2 * PI;
-                while (diff > PI) diff -= 2 * PI;
-
-                // 3. Convert Radian Delta to Mouse Pixels
-                // Heuristic: ~800 pixels per radian (Adjust this based on mouse sensitivity)
-                // Negative sign because dragging Mouse Left (Negative X) usually turns Camera Left (Positive Yaw)
-                int pixels = (int)(diff * -800.0f);
-
-                // 4. Clamp speed (don't snap instantly, looks robotic)
-                if (pixels > 100) pixels = 100;
-                if (pixels < -100) pixels = -100;
-
-                // 5. If we are close enough, stop rotating
-                if (std::abs(pixels) < 5) {
-                    currentState = STATE_INIT_SCAN;
-                    return false;
-                }
-
-                // --- FIX: RESET CURSOR TO CENTER BEFORE DRAGGING ---
-                // If we don't do this, repeated small turns will eventually push the mouse off-screen.
-
-                // 1. Calculate Center of Game Window
-                RECT rect;
-                GetClientRect(hGameWindow, &rect);
-                POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
-                ClientToScreen(hGameWindow, &center);
-
-                // 2. Teleport Mouse to Center
-                mouse.MoveAbsolute(center.x, center.y);
-                Sleep(5); // Wait for update
-
-                // 3. Perform Drag
-                mouse.PressButton(MOUSE_LEFT);
-                Sleep(5);
-                mouse.Move(pixels, 0); // Relative move
-                Sleep(5);
-                mouse.ReleaseButton(MOUSE_LEFT);
-
+        // 3. MOVE MOUSE TO OFFSET
+        case STATE_MOVE_MOUSE: {
+            logFile << "[LOOT] Moving the mouse to loot position" << std::endl;
+            if (currentOffsetIndex >= searchOffsets.size()) {
+                currentState = STATE_RESET; // Exhausted all points
                 return false;
             }
-            
-            // 3. MOVE MOUSE TO OFFSET
-            case STATE_MOVE_MOUSE: {
-                logFile << "[LOOT] Moving the mouse to loot position" << std::endl;
-                if (currentOffsetIndex >= searchOffsets.size()) {
-                    currentState = STATE_RESET; // Exhausted all points
-                    return false;
-                }
 
-                POINT p = searchOffsets[currentOffsetIndex];
-                ClientToScreen(hGameWindow, &p);
-                if (camera.WorldToScreen(ws.lootPos, sx, sy, &mouse))
+            POINT p = searchOffsets[currentOffsetIndex];
+            ClientToScreen(hGameWindow, &p);
+            if (camera.WorldToScreen(ws.lootPos, sx, sy, &mouse))
                 mouse.MoveAbsolute(sx + p.x, sy + p.y);
 
-                // Start Timer for Hover
-                timerStart = GetTickCount();
-                currentState = STATE_WAIT_HOVER;
+            // Start Timer for Hover
+            timerStart = GetTickCount();
+            currentState = STATE_WAIT_HOVER;
+            return false;
+        }
+
+        // 4. WAIT FOR HOVER (Replaces Sleep(40))
+        case STATE_WAIT_HOVER: {
+            // Non-blocking wait: Check if 40ms passed
+            if (GetTickCount() - timerStart < 1000) {
+                return false; // Come back next tick
+            }
+
+            // Time is up, Check Memory
+            ULONG_PTR currentLow = 0, currentHigh = 0;
+            // Note: Verify MOUSE_OVER_GUID_OFFSET definition location in Memory.h
+            analyzer.ReadPointer(procId, baseAddress + MOUSE_OVER_GUID_OFFSET, currentLow);
+            analyzer.ReadPointer(procId, baseAddress + MOUSE_OVER_GUID_OFFSET + 0x8, currentHigh);
+
+            if (currentLow == ws.lootGuidLow && currentHigh == ws.lootGuidHigh) {
+                logFile << "[LOOT] Verified. Clicking." << std::endl;
+                currentState = STATE_CLICK;
+            }
+            else {
+                // Try next point
+                currentOffsetIndex++;
+                currentState = STATE_MOVE_MOUSE;
+            }
+            return false;
+        }
+
+        // 5. CLICK
+        case STATE_CLICK: {
+            mouse.Click(MOUSE_RIGHT);
+            timerStart = GetTickCount();
+            currentState = STATE_WAIT_WINDOW;
+            return false;
+        }
+
+         // 6. WAIT FOR WINDOW (Replaces Sleep(50000))
+        case STATE_WAIT_WINDOW: {
+            // Wait 500ms (0.5s) for window. 
+            // NOTE: User code had 50,000 (50s). Assuming 500ms is intended.
+            if (GetTickCount() - timerStart < 50000) {
                 return false;
             }
 
-            // 4. WAIT FOR HOVER (Replaces Sleep(40))
-            case STATE_WAIT_HOVER: {
-                // Non-blocking wait: Check if 40ms passed
-                if (GetTickCount() - timerStart < 1000) {
-                    return false; // Come back next tick
-                }
-
-                // Time is up, Check Memory
-                ULONG_PTR currentLow = 0, currentHigh = 0;
-                // Note: Verify MOUSE_OVER_GUID_OFFSET definition location in Memory.h
-                analyzer.ReadPointer(procId, baseAddress + MOUSE_OVER_GUID_OFFSET, currentLow);
-                analyzer.ReadPointer(procId, baseAddress + MOUSE_OVER_GUID_OFFSET + 0x8, currentHigh);
-
-                if (currentLow == ws.lootGuidLow && currentHigh == ws.lootGuidHigh) {
-                    logFile << "[LOOT] Verified. Clicking." << std::endl;
-                    currentState = STATE_CLICK;
-                }
-                else {
-                    // Try next point
-                    currentOffsetIndex++;
-                    currentState = STATE_MOVE_MOUSE;
-                }
-                return false;
+            // Action Complete
+            ws.hasLootTarget = false;
+            for (int i = 0; i < 4; ++i) {
+                keyboard.TypeKey(VK_END);
+                Sleep(5);
             }
+            ResetState(); // Reset for next time
+            return true;
+        }
 
-            // 5. CLICK
-            case STATE_CLICK: {
-                mouse.Click(MOUSE_RIGHT);
-                timerStart = GetTickCount();
-                currentState = STATE_WAIT_WINDOW;
-                return false;
+        // 7. FAILURE / RESET
+        case STATE_RESET: {
+            logFile << "[LOOT] Search exhausted. Re-adjusting." << std::endl;
+            // Nudge player to reset camera angle
+            if (dist > INTERACT_RANGE) {
+                // FIX: Added ws.player.isFlying
+                pilot.SteerTowards(ws.player.position, ws.player.rotation, ws.lootPos, ws.flyingPath);
             }
-
-            // 6. WAIT FOR WINDOW (Replaces Sleep(50000))
-            case STATE_WAIT_WINDOW: {
-                // Wait 500ms (0.5s) for window. 
-                // NOTE: User code had 50,000 (50s). Assuming 500ms is intended.
-                if (GetTickCount() - timerStart < 50000) {
-                    return false;
-                }
-
-                // Action Complete
-                ws.hasLootTarget = false;
-                for (int i = 0; i < 4; ++i) {
-                    keyboard.TypeKey(VK_END);
-                    Sleep(5);
-                }
-                ResetState(); // Reset for next time
-                return true;
-            }
-
-            // 7. FAILURE / RESET
-            case STATE_RESET: {
-                logFile << "[LOOT] Search exhausted. Re-adjusting." << std::endl;
-                // Nudge player to reset camera angle
-                if (dist > INTERACT_RANGE) {
-                    pilot.SteerTowards(ws.player.position, ws.player.rotation, ws.lootPos);
-                }
-                ResetState(); // Restart logic from approach
-                return false;
-            }
+            ResetState(); // Restart logic from approach
+            return false;
+        }
         }
         return false;
     }
@@ -334,7 +339,7 @@ public:
 // --- CONCRETE ACTION: FOLLOW PATH ---
 class ActionFollowPath : public GoapAction {
 private:
-    const float ACCEPTANCE_RADIUS = 2.0f;
+    const float ACCEPTANCE_RADIUS = 3.0f;
 
 public:
     bool CanExecute(const WorldState& ws) override {
@@ -345,6 +350,7 @@ public:
     std::string GetName() override { return "Follow Path"; }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
+        std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
         // 1. Check if we finished the path
         if (ws.pathIndex >= ws.currentPath.size()) {
             pilot.Stop();
@@ -358,7 +364,9 @@ public:
         // 3. Check distance
         float dx = target.x - ws.player.position.x;
         float dy = target.y - ws.player.position.y;
+        float dz = target.z - ws.player.position.z;
         float dist = std::sqrt(dx * dx + dy * dy);
+		logFile << "[GOAP] Distance to waypoint " << dist << ": " << ws.player.position.z << std::endl;
 
         if (dist < ACCEPTANCE_RADIUS) {
             ws.pathIndex++; // Advance state
@@ -367,7 +375,10 @@ public:
         }
 
         // 4. Steer
-        pilot.SteerTowards(ws.player.position, ws.player.rotation, target);
+        bool canFly = (ws.player.isFlying || ws.player.flyingMounted);
+		logFile << "[GOAP] Steering towards waypoint " << ws.pathIndex << " at (" << target.x << ", " << target.y << ", " << target.z << ")" << std::endl;
+		logFile << "Player flying status: " << canFly << std::endl;
+        pilot.SteerTowards(ws.player.position, ws.player.rotation, target, ws.flyingPath);
         return false; // Still running
     }
 };

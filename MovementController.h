@@ -6,10 +6,19 @@
 class MovementController {
 private:
     SimpleKeyboardClient& kbd;
-    const float TURN_THRESHOLD = 0.2f;      // Widen slightly to prevent jitter
-    const float STOP_MOVE_THRESHOLD = 1.0f; // Stop moving if turn is > 57 degrees
+    const float TURN_THRESHOLD = 0.05f;      // 0.05 rad ~= 2.8 degrees
+    const float STOP_MOVE_THRESHOLD = 1.0f;
     const float PI = 3.14159265f;
     const float TWO_PI = 6.28318530f;
+
+    // User specified: 1.0 radian per second
+    // ADJUST THIS if the bot consistently undershoots (increase value) or overshoots (decrease value)
+    const float TURN_SPEED_RAD_SEC = PI;
+
+    // Vertical control constants
+    const float VERTICAL_DEADZONE = 2.0f;
+    const WORD KEY_ASCEND = VK_SPACE;
+    const WORD KEY_DESCEND = 'X';
 
     float NormalizeAngle(float angle) {
         while (angle <= -PI) angle += TWO_PI;
@@ -22,53 +31,112 @@ public:
 
     // Emergency Stop
     void Stop() {
+        // Must cancel async threads first
+        kbd.StopHold('A');
+        kbd.StopHold('D');
+        kbd.StopHold(KEY_ASCEND);
+        kbd.StopHold(KEY_DESCEND);
+
         kbd.SendKey('W', 0, false);
         kbd.SendKey('A', 0, false);
         kbd.SendKey('D', 0, false);
+        kbd.SendKey(KEY_ASCEND, 0, false);
+        kbd.SendKey(KEY_DESCEND, 0, false);
     }
 
-    void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos) {
+    void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool isFlying) {
         float dx = targetPos.x - currentPos.x;
         float dy = targetPos.y - currentPos.y;
+        float dist2D = std::sqrt(dx * dx + dy * dy);
 
-        // 1. Calculate Error
-        // WoW Heading: 0 = North (+X), PI/2 = West (+Y)
-        float targetAngle = std::atan2(dy, dx);
+        // --- 1. Horizontal Steering (Yaw) ---
+        float targetAngle = std::atan2(dy, dx);        
         float angleDiff = NormalizeAngle(targetAngle - currentRot);
 
-        // 2. Determine Desired Key States
-        bool wantLeft = (angleDiff > TURN_THRESHOLD);
-        bool wantRight = (angleDiff < -TURN_THRESHOLD);
+        bool isTurningLeft = kbd.IsHolding('A');
+        bool isTurningRight = kbd.IsHolding('D');
 
-        // Only move forward if we are roughly facing the target
-        bool wantForward = (std::abs(angleDiff) < STOP_MOVE_THRESHOLD);
+        // Check if we need to turn
+        if (angleDiff > TURN_THRESHOLD) {
+            // WE WANT TO GO LEFT
+            if (isTurningRight) kbd.StopHold('D'); // Cancel opposite turn
 
-        // 3. Apply Controls (Continuous Assertion)
-        // We purposefully re-send 'true' (Down) every tick. 
-        // This simulates the natural "Key Repeat" of a held keyboard button
-        // and ensures the game doesn't drop the input.
+            // Only start a new turn if we aren't already holding the key
+            if (!isTurningLeft) {
+                // Calculate precise duration
+                // Time = Distance / Speed
+                float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
+                int durationMs = static_cast<int>(durationSeconds * 1000.0f);
 
-        // -- Turning --
-        if (wantLeft) {
-            kbd.SendKey('A', 0, true);  // Hold Left
-            kbd.SendKey('D', 0, false); // Release Right
+                // Min duration to avoid micro-presses
+                if (durationMs > 20) {
+                    kbd.HoldKeyAsync('A', durationMs);
+                }
+            }
         }
-        else if (wantRight) {
-            kbd.SendKey('D', 0, true);  // Hold Right
-            kbd.SendKey('A', 0, false); // Release Left
+        else if (angleDiff < -TURN_THRESHOLD) {
+            // WE WANT TO GO RIGHT
+            if (isTurningLeft) kbd.StopHold('A');
+
+            if (!isTurningRight) {
+                float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
+                int durationMs = static_cast<int>(durationSeconds * 1000.0f);
+
+                if (durationMs > 20) {
+                    kbd.HoldKeyAsync('D', durationMs);
+                }
+            }
+        }
+        // DEADZONE (Aligned)
+        else {
+            // FIX: Force stop if we are aligned, even if the timer is still running.
+            // This prevents the bot from continuing to turn if it reached the target faster than calculated.
+            if (isTurningLeft) kbd.StopHold('A');
+            if (isTurningRight) kbd.StopHold('D');
+        }
+
+        // --- 2. Vertical Steering (Altitude) ---
+        bool isVerticalMove = false;
+
+        // Loosen forward constraint slightly while flying
+        float forwardThreshold = isFlying ? STOP_MOVE_THRESHOLD * 1.5f : STOP_MOVE_THRESHOLD;
+        bool wantForward = (std::abs(angleDiff) < forwardThreshold);
+
+        if (isFlying) {
+            float dz = targetPos.z - currentPos.z;
+
+            // If target is significantly above us
+            if (dz > VERTICAL_DEADZONE) {
+                kbd.SendKey(KEY_ASCEND, 0, true);   // Hold Space
+                kbd.SendKey(KEY_DESCEND, 0, false);
+                isVerticalMove = true;
+            }
+            // If target is significantly below us
+            else if (dz < -VERTICAL_DEADZONE) {
+                kbd.SendKey(KEY_DESCEND, 0, true);  // Hold X
+                kbd.SendKey(KEY_ASCEND, 0, false);
+                isVerticalMove = true;
+            }
+            else {
+                kbd.SendKey(KEY_ASCEND, 0, false);
+                kbd.SendKey(KEY_DESCEND, 0, false);
+            }
         }
         else {
-            // Deadzone: Release both
-            kbd.SendKey('A', 0, false);
-            kbd.SendKey('D', 0, false);
+            kbd.SendKey(KEY_ASCEND, 0, false);
+            kbd.SendKey(KEY_DESCEND, 0, false);
         }
 
-        // -- Throttle --
-        if (wantForward) {
-            kbd.SendKey('W', 0, true);  // Hold Forward
+        // --- 3. Throttle (W) ---
+        // Stop moving forward if we are just adjusting altitude (Vertical Takeoff/Landing)
+        if (isFlying && dist2D < 1.0f && isVerticalMove) {
+            kbd.SendKey('W', 0, false); // Hover mode
+        }
+        else if (wantForward) {
+            kbd.SendKey('W', 0, true);
         }
         else {
-            kbd.SendKey('W', 0, false); // Stop Forward
+            kbd.SendKey('W', 0, false);
         }
     }
 };
