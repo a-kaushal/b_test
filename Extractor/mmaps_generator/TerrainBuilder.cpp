@@ -141,8 +141,8 @@ namespace MMAP
         }
 
         // --- DEBUG: Check Header Offsets ---
-        printf("[DEBUG] Map %u_%u: HeightOffset: %u, TerrainOffset: %u\n",
-            tileY, tileX, fheader.heightMapOffset, fheader.terrainMapOffset);
+        //printf("[DEBUG] Map %u_%u: HeightOffset: %u, TerrainOffset: %u\n",
+            //tileY, tileX, fheader.heightMapOffset, fheader.terrainMapOffset);
 
         // --- 1. READ TERRAIN ---
         uint8 terrain_type[128][128];
@@ -151,21 +151,21 @@ namespace MMAP
         if (fheader.terrainMapOffset)
         {
             fseek(mapFile, fheader.terrainMapOffset, SEEK_SET);
-            printf("[DEBUG] Seek to Terrain: ftell says %ld\n", ftell(mapFile)); // Check cursor
+            //printf("[DEBUG] Seek to Terrain: ftell says %ld\n", ftell(mapFile)); // Check cursor
 
             size_t readCount = fread(terrain_type, sizeof(terrain_type), 1, mapFile);
-            printf("[DEBUG] Read Terrain: result %zu, ftell now %ld\n", readCount, ftell(mapFile));
+            //printf("[DEBUG] Read Terrain: result %zu, ftell now %ld\n", readCount, ftell(mapFile));
 
             // Sanity Check for Road Data
             int roadCellCount = 0;
             for (int r = 0; r < 128; ++r) for (int c = 0; c < 128; ++c) if (terrain_type[r][c] == 1) roadCellCount++;
-            if (roadCellCount > 0) printf("[DEBUG] Loaded %d road cells.\n", roadCellCount);
+            //if (roadCellCount > 0) printf("[DEBUG] Loaded %d road cells.\n", roadCellCount);
         }
 
         // --- 2. CLEAR ERRORS & SEEK TO HEIGHT ---
         clearerr(mapFile); // FORCE clear EOF state
         fseek(mapFile, fheader.heightMapOffset, SEEK_SET);
-        printf("[DEBUG] Seek to Height: ftell says %ld\n", ftell(mapFile)); // Verify cursor reset
+        //printf("[DEBUG] Seek to Height: ftell says %ld\n", ftell(mapFile)); // Verify cursor reset
 
         map_heightHeader hheader;
         bool haveTerrain = false;
@@ -175,11 +175,11 @@ namespace MMAP
         {
             haveTerrain = !(hheader.flags & MAP_HEIGHT_NO_HEIGHT);
             haveLiquid = fheader.liquidMapOffset && !m_skipLiquid;
-            printf("[DEBUG] Read Height Header. Flags: %u, haveTerrain: %d\n", hheader.flags, haveTerrain);
+            //printf("[DEBUG] Read Height Header. Flags: %u, haveTerrain: %d\n", hheader.flags, haveTerrain);
         }
         else
         {
-            printf("[DEBUG] FAILED to read Height Header! ferror: %d, feof: %d\n", ferror(mapFile), feof(mapFile));
+            //printf("[DEBUG] FAILED to read Height Header! ferror: %d, feof: %d\n", ferror(mapFile), feof(mapFile));
         }
 
         // no data in this map file
@@ -539,29 +539,37 @@ namespace MMAP
                     // 1. Calculate Area ID
                     int row = i / 128;
                     int col = i % 128;
-                    uint8 areaId = terrain_type[row][col] == 1 ? 2 : 1;
+                    // Check for Road (2)
+                    uint8 areaId = terrain_type[row][col] == 2 ? 2 : 1;
 
-                    // --- DEBUG 2: Notify on first road detected ---
-                    // This ensures we only print once per tile to avoid lag/spam
+                    // --- DEBUG ---
                     static bool printedRoadFound = false;
                     if (areaId == 2 && !printedRoadFound) {
-                        printf("[DEBUG] Map %u_%u: Applying ROAD area (ID 2) to mesh!\n", tileY, tileX);
+                        //printf("[DEBUG] Map %u_%u: Applying ROAD area (ID 2) to mesh!\n", tileY, tileX);
                         printedRoadFound = true;
                     }
-                    // ---------------------------------------------
+
+                    // FIX: Copy only 2 triangles (6 indices) per pass
+                    // Since this block runs twice (j=0, j=1), we effectively copy all 4 triangles (12 indices)
+                    int indicesToCopy = 6;
 
                     // 2. Add the Triangles
-                    for (int k = 0; k < 3 * tTriCount / 2; ++k)
+                    for (int k = 0; k < indicesToCopy; ++k)
                         meshData.solidTris.append(ttris[k]);
 
-                    // 3. Add the Area ID
+                    // 3. Add the Area ID (Twice, once for each triangle in this batch)
                     meshData.solidAreas.append(areaId);
                     meshData.solidAreas.append(areaId);
                 }
 
-                // advance to next set of triangles
+                // FIX: Advance by 6 (Standard behavior)
+                // j=0: consumes indices 0-5
+                // j=1: consumes indices 6-11
+                // Total: 12 indices (4 triangles) consumed per square
+                ttris += 6;
+
+                // Advance liquid
                 ltris += 3;
-                ttris += 3*tTriCount/2;
             }
         }
 
@@ -714,10 +722,10 @@ namespace MMAP
 
                 // transform data
                 float scale = instance.iScale;
-                G3D::Matrix3 rotation = G3D::Matrix3::fromEulerAnglesXYZ(G3D::pi()*instance.iRot.z/-180.f, G3D::pi()*instance.iRot.x/-180.f, G3D::pi()*instance.iRot.y/-180.f);
+                G3D::Matrix3 rotation = G3D::Matrix3::fromEulerAnglesXYZ(G3D::pi() * instance.iRot.z / -180.f, G3D::pi() * instance.iRot.x / -180.f, G3D::pi() * instance.iRot.y / -180.f);
                 G3D::Vector3 position = instance.iPos;
-                position.x -= 32*GRID_SIZE;
-                position.y -= 32*GRID_SIZE;
+                position.x -= 32 * GRID_SIZE;
+                position.y -= 32 * GRID_SIZE;
 
                 for (std::vector<GroupModel>::iterator it = groupModels.begin(); it != groupModels.end(); ++it)
                 {
@@ -739,26 +747,52 @@ namespace MMAP
                     // --- FIX: Detect Bridges and Paths in Models ---
                     uint8 modelAreaId = 1; // Default to Ground (Green)
 
-                    // Convert model name to lowercase for checking
                     std::string mName = instance.name;
                     std::transform(mName.begin(), mName.end(), mName.begin(), ::tolower);
 
-                    // Check for keywords that indicate a walkable structure
+                    // Updated Filter list
+                    bool isRoad = false;
                     if (mName.find("bridge") != std::string::npos ||
                         mName.find("dock") != std::string::npos ||
                         mName.find("jetty") != std::string::npos ||
                         mName.find("walk") != std::string::npos ||
                         mName.find("ramp") != std::string::npos ||
                         mName.find("stair") != std::string::npos ||
-                        mName.find("span") != std::string::npos ||  // e.g. "GreatSpan"
+                        mName.find("span") != std::string::npos ||
                         mName.find("platform") != std::string::npos ||
                         mName.find("plank") != std::string::npos ||
-                        mName.find("wood") != std::string::npos ||  // Wooden structures
+                        mName.find("wood") != std::string::npos || 
+                        mName.find("road") != std::string::npos || 
                         mName.find("floor") != std::string::npos)
                     {
                         modelAreaId = 2; // Road (Grey)
-                        // printf("[DEBUG] Structure detected as Road: %s\n", instance.name.c_str()); 
+                        isRoad = true;
                     }
+
+                    // --- DEBUG PRINT: RAW & GAME COORDS ---
+                    std::string shortName = instance.name;
+                    size_t slash = shortName.find_last_of("\\/");
+                    if (slash != std::string::npos) shortName = shortName.substr(slash + 1);
+
+                    // WOW STANDARD TRANSFORM:
+                    // Game = Center (17066) - Raw
+                    // (Note: Depending on the core version, it might be Raw - Center. 
+                    // We print the standard "Center - Raw" which is typical for North/West positive).
+                    float center = 32.0f * GRID_SIZE; 
+                    float gameX = center - instance.iPos.x;
+                    float gameY = center - instance.iPos.y; 
+                    float gameZ = instance.iPos.z;
+
+                    // Only print if it looks like a road candidate or a WMO
+                    // (Comment out the 'if' to see ABSOLUTELY EVERYTHING)
+                    /*if (isRoad || mName.find("wmo") != std::string::npos) {
+                        printf("[MODEL] %s [%s] -> %s\n      Root Game Coords: (X: %.1f, Y: %.1f, Z: %.1f)\n",
+                            shortName.c_str(),
+                            (mName.find(".m2") != std::string::npos) ? "M2" : "WMO",
+                            isRoad ? "ROAD" : "DIRT",
+                            gameX, gameY, gameZ);
+                    }*/
+                    // -----------------------------------------------------------
 
                     // Append the Area ID for every triangle in this model
                     for (size_t k = 0; k < tempTriangles.size(); ++k) {

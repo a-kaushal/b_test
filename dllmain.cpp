@@ -475,11 +475,13 @@ void MainThread(HMODULE hModule) {
                     path = CalculatePath(agent.state.player.position, Vector3(7.07241, 7449.82, 17.3746), false, 530);
                     //pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[0], false);
                     logFile << "Player Pos: (" << agent.state.player.position.x << ", " << agent.state.player.position.y << ", " << agent.state.player.position.z << ")" << "  Player Rotation: " << agent.state.player.rotation << std::endl;
-                    logFile << "Steering towards: (" << path[0].x << ", " << path[0].y << ", " << path[0].z << ")" << std::endl;
+                    for (size_t i = 0; i < path.size(); ++i) {
+                        logFile << "Path Point " << i << ": (" << path[i].x << ", " << path[i].y << ", " << path[i].z << ")" << std::endl;
+                    }
 
-                    //agent.state.currentPath = path;
-                    //agent.state.pathIndex = 0;
-                    //agent.state.hasPath = true;
+                    agent.state.currentPath = path;
+                    agent.state.pathIndex = 0;
+                    agent.state.hasPath = true;
 
                     while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
                         if (GetAsyncKeyState(VK_END) & 1) {

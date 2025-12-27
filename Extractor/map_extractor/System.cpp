@@ -527,6 +527,48 @@ bool IsRoadTexture(const char* fullPath)
     return false;
 }
 
+static uint8 terrain_type[ADT_GRID_SIZE][ADT_GRID_SIZE];
+
+// --- HELPER: Generate High-Res Detail Map (128x128) ---
+void GenerateDetailMapSVG(int map_x, int map_y, map_id map_id)
+{
+    // Only generate for the map we are debugging (530)
+    if (map_id.id != 530) return;
+
+    char filename[128];
+    sprintf(filename, "Detail_Map_%02d_%02d.svg", map_y, map_x);
+
+    std::ofstream svg(filename);
+    if (!svg.is_open()) return;
+
+    // Viewbox is 128x128 (8 cells per chunk * 16 chunks)
+    svg << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 128 128\">";
+
+    // Background (Green/Grass)
+    svg << "<rect x=\"0\" y=\"0\" width=\"128\" height=\"128\" fill=\"#228822\" />\n";
+
+    for (int y = 0; y < 128; ++y) {
+        for (int x = 0; x < 128; ++x) {
+            // terrain_type: 2 = ROAD, 1 = GROUND (Default)
+            if (terrain_type[y][x] == 2) {
+                // Draw Road Pixel (Grey)
+                svg << "<rect x=\"" << x << "\" y=\"" << y << "\" width=\"1\" height=\"1\" "
+                    << "fill=\"#AAAAAA\" />\n";
+            }
+        }
+    }
+
+    // Overlay Chunk Borders (for reference)
+    for (int i = 0; i <= 128; i += 8) {
+        svg << "<line x1=\"" << i << "\" y1=\"0\" x2=\"" << i << "\" y2=\"128\" stroke=\"black\" stroke-width=\"0.1\" opacity=\"0.5\" />";
+        svg << "<line x1=\"0\" y1=\"" << i << "\" x2=\"128\" y2=\"" << i << "\" stroke=\"black\" stroke-width=\"0.1\" opacity=\"0.5\" />";
+    }
+
+    svg << "</svg>";
+    svg.close();
+    printf("[OUTPUT] Generated Detail Map: %s\n", filename);
+}
+
 // --- HELPER: Generate SVG Debug Map (Detailed) ---
 void GenerateTextureSVG(int cell_x, int cell_y,
     const std::vector<std::string>& texNames,
@@ -534,7 +576,7 @@ void GenerateTextureSVG(int cell_x, int cell_y,
     const std::vector<uint32> chunkTextures[16][16], map_id map_id) // Now accepts a list of textures per chunk
 {
     char filename[128];
-    if (map_id.id == 530) {
+    if (map_id.id != 530000) {
         sprintf(filename, "Debug_Tile_%02d_%02d.svg", cell_y, cell_x);
 
         std::ofstream svg(filename);
@@ -594,8 +636,6 @@ struct adt_MTEX {
     uint32 size;
 };
 
-static uint8 terrain_type[ADT_GRID_SIZE][ADT_GRID_SIZE];
-
 // --- Helper to find a specific MCNK chunk in a file by coordinates ---
 adt_MCNK* GetMCNK(ChunkedFile& file, int x, int y)
 {
@@ -612,6 +652,97 @@ adt_MCNK* GetMCNK(ChunkedFile& file, int x, int y)
         if (mcnk->ix == x && mcnk->iy == y) return mcnk;
     }
     return nullptr;
+}
+
+// --- Helper: Safe Decompress ADT Alpha Map (Relaxed) ---
+// Returns true to indicate we should use the data (even if partial)
+bool DecompressAlphaSafe(uint8* src, size_t srcLen, uint8* dst)
+{
+    // 1. Initialize destination to 0 (Transparent)
+    memset(dst, 0, 4096);
+
+    if (!src || srcLen == 0) return false;
+
+    uint8* srcEnd = src + srcLen;
+    int i = 0; // Destination index (0..4096)
+
+    while (i < 4096 && src < srcEnd)
+    {
+        uint8 info = *src++;
+
+        // Safety: If Fill Mode needs a value byte but we are at end
+        if (src >= srcEnd && (info & 0x80)) break;
+
+        bool fill = (info & 0x80); // Top bit = Mode (1=Fill, 0=Copy)
+        int count = (info & 0x7F); // Bottom 7 bits = Count
+
+        if (count == 0) continue;
+
+        if (fill)
+        {
+            uint8 val = *src++;
+            for (int k = 0; k < count && i < 4096; ++k) dst[i++] = val;
+        }
+        else
+        {
+            // Copy mode
+            for (int k = 0; k < count && i < 4096; ++k) {
+                if (src >= srcEnd) break;
+                dst[i++] = *src++;
+            }
+        }
+    }
+
+    // Always return true. Partial data is better than no data.
+    return true;
+}
+
+// --- Helper: Calculate In-Game Coordinates ---
+void GetChunkCoordinates(int mapX, int mapY, int chunkX, int chunkY, float& outX, float& outY)
+{
+    // WoW Constants
+    const float TILE_SIZE = 533.33333f;
+    const float CHUNK_SIZE = TILE_SIZE / 16.0f;
+    const float ZERO_POINT = 32.0f * TILE_SIZE;
+
+    // Calculate Top-Left of the Tile
+    float tileStartX = ZERO_POINT - (mapX * TILE_SIZE);
+    float tileStartY = ZERO_POINT - (mapY * TILE_SIZE);
+
+    // Calculate Center of the Chunk (Chunk Y corresponds to X axis in-game, Chunk X to Y axis... it's rotated)
+    // Actually, standard ADT mapping:
+    // Game X = (32 - TileY) * 533.33 - (ChunkY * 33.33)
+    // Game Y = (32 - TileX) * 533.33 - (ChunkX * 33.33)
+
+    outX = ((32 - mapY) * TILE_SIZE) - (chunkY * CHUNK_SIZE) - (CHUNK_SIZE / 2);
+    outY = ((32 - mapX) * TILE_SIZE) - (chunkX * CHUNK_SIZE) - (CHUNK_SIZE / 2);
+}
+
+// --- Helper: Calculate In-Game Coordinates for a specific 8x8 Cell ---
+void GetCellCoordinates(int tileX, int tileY, int chunkX, int chunkY, int cellX, int cellY, float& outX, float& outY)
+{
+    // WoW Constants
+    const float TILE_SIZE = 533.33333f;
+    const float CHUNK_SIZE = TILE_SIZE / 16.0f;     // ~33.33 yards
+    const float UNIT_SIZE = CHUNK_SIZE / 8.0f;      // ~4.16 yards (8x8 grid)
+    const float ZERO_POINT = 32.0f * TILE_SIZE;
+
+    // Tile Start (Top-Left of the Tile)
+    // Game X = (32 - TileY) * 533.33
+    // Game Y = (32 - TileX) * 533.33
+    float tileStartX = ZERO_POINT - (tileY * TILE_SIZE);
+    float tileStartY = ZERO_POINT - (tileX * TILE_SIZE);
+
+    // Chunk Start (Top-Left of the Chunk)
+    // Game X decreases as ChunkY (Rows) increases
+    // Game Y decreases as ChunkX (Cols) increases
+    float chunkStartX = tileStartX - (chunkY * CHUNK_SIZE);
+    float chunkStartY = tileStartY - (chunkX * CHUNK_SIZE);
+
+    // Cell Center
+    // We want the center of the 8x8 block
+    outX = chunkStartX - (cellY * UNIT_SIZE) - (UNIT_SIZE / 2.0f);
+    outY = chunkStartY - (cellX * UNIT_SIZE) - (UNIT_SIZE / 2.0f);
 }
 
 bool ConvertADT(char* filename, char* filename2, int cell_y, int cell_x, uint32 build, map_id map_id)
@@ -697,206 +828,233 @@ bool ConvertADT(char* filename, char* filename2, int cell_y, int cell_x, uint32 
         }
     }
 
-    // DEBUG DATA: Stores ALL textures for each chunk
     std::vector<uint32> debugTextureLayers[16][16];
+
+    // --- CREATE AUDIT FILE ---
+    /*char auditFilename[128];
+    sprintf(auditFilename, "TextureAudit_%u_%02d_%02d.txt", map_id.id, cell_y, cell_x);
+    std::ofstream auditFile(auditFilename);
+    if (auditFile.is_open()) {
+        auditFile << "ChunkX,ChunkY,GameCoordX,GameCoordY,TextureName,Roadness,IsRoad\n";
+        printf("[AUDIT] Writing full texture log to %s...\n", auditFilename);
+    }*/
 
     // --- ITERATE MAIN CHUNKS ---
     auto itrRange = adt.chunks.equal_range("MCNK");
     if (itrRange.first == itrRange.second) itrRange = adt.chunks.equal_range("KNCM");
 
-    // DEBUG: Confirm we are entering the loop for this file
-    // (Only print for the specific tile you are debugging, e.g. 21_30, to avoid spam)
-    if (cell_y == 30 && cell_x == 20) {
-        printf("[DEBUG] Processing MCNK Loop for Tile %d_%d...\n", cell_y, cell_x);
-        fflush(stdout);
-    }
-
-    // --- DEBUG: DUMP PALETTE (Only for target tile) ---
-    // This tells us what textures are AVAILABLE in this file, 
-    // even if the chunks are failing to load them.
-    for (int x = 18; x < 22; ++x) {
-        for (int y = 28; y < 32; ++y) {
-            if (cell_y == y && cell_x == x) {
-                printf("\n[DEBUG PALETTE] Textures available in Map %d_%d:\n", cell_y, cell_x);
-                for (size_t i = 0; i < textureNames.size(); ++i) {
-                    bool isRoad = textureIsRoad[i];
-                    printf("  [%zu] %s %s\n", i, textureNames[i].c_str(), isRoad ? "[ROAD]" : "");
-                }
-                printf("------------------------------------------------\n");
-                fflush(stdout);
-            }
-        }
-    }
-
     for (auto itr = itrRange.first; itr != itrRange.second; ++itr)
     {
         adt_MCNK* mcnk = itr->second->As<adt_MCNK>();
 
-        // Safety Check: bounds
-        if (mcnk->ix >= 16 || mcnk->iy >= 16) continue;
-
-        // --- 1. SET TARGET CHUNK HERE (From your SVG) ---
-        int targetY = 13; // Row
-        int targetX = 9;  // Col
-        // ------------------------------------------------
-
         adt_MCNK* texMcnk = mcnk;
-        if (hasTexFile) {
+        if (hasTexFile && mcnk->iy < 16 && mcnk->ix < 16) {
             if (texChunkGrid[mcnk->iy][mcnk->ix]) {
                 texMcnk = texChunkGrid[mcnk->iy][mcnk->ix];
             }
         }
 
-        // --- 2. DEBUG PRINT FOR TARGET ---
-        if (mcnk->iy == targetY && mcnk->ix == targetX)
-        {
-            printf("\n[DEBUG] INSPECTING CHUNK [%d, %d] in Map %u_%u\n", targetY, targetX, cell_y, cell_x);
-            printf("  Has TexFile: %d\n", hasTexFile);
-            printf("  Using Offset: %u (Size: %u)\n", texMcnk->offsMCLY, texMcnk->size);
-            fflush(stdout); // FORCE PRINT
-        }
-
-        // --- 3. READ LAYERS (Robust + Offset 64 Fix) ---
+        // --- 3. READ LAYERS & AUDIT ---
         bool chunkHasRoad = false;
         int maxLayers = 4;
 
-        // Variables to track where we find the data
         adt_MCNK* sourceMcnk = texMcnk;
         uint32 readOffset = texMcnk->offsMCLY;
         bool usingMain = (texMcnk == mcnk);
         bool dataFound = false;
 
-        // --- STEP 1: VALIDATE STANDARD OFFSET ---
-        // Check if the standard offset (usually 256) points to garbage
+        // [Offset Logic - Smart Rewind]
         bool standardOffsetBad = false;
         if (hasTexFile && readOffset > 0 && readOffset < texMcnk->size) {
             adt_MCLY* t = (adt_MCLY*)((uint8*)texMcnk + readOffset);
-            // If ID is -1 (0xFF..) or unreasonably large, it's garbage
-            if (t->textureId == 0xFFFFFFFF || (textureNames.size() > 0 && t->textureId > textureNames.size() + 50)) {
+            if (t->textureId == 0xFFFFFFFF || (textureNames.size() > 0 && t->textureId > textureNames.size() + 50))
                 standardOffsetBad = true;
-            }
         }
-        else {
-            standardOffsetBad = true; // Offset 0 or out of bounds
-        }
+        else standardOffsetBad = true;
 
-        // --- STEP 2: TRY OFFSET 64 (The "Hunter" Fix) ---
-        // If standard failed, check if valid data hides at Offset 64 in the Tex file
         if (standardOffsetBad && hasTexFile) {
-            uint32 altOffset = 64; // The magic offset found by the scan
-            if (altOffset < texMcnk->size) {
-                adt_MCLY* t = (adt_MCLY*)((uint8*)texMcnk + altOffset);
-
-                // valid check: ID must be small (valid texture index)
+            if (64 < texMcnk->size) {
+                uint32 candidateOffset = 64;
+                while (candidateOffset >= 32) {
+                    uint32 prevOffset = candidateOffset - 16;
+                    adt_MCLY* prev = (adt_MCLY*)((uint8*)texMcnk + prevOffset);
+                    if (prev->textureId < textureNames.size()) candidateOffset = prevOffset;
+                    else break;
+                }
+                adt_MCLY* t = (adt_MCLY*)((uint8*)texMcnk + candidateOffset);
                 if (t->textureId < textureNames.size()) {
-                    readOffset = altOffset; // SUCCESS! Use this offset.
-                    standardOffsetBad = false; // We found good data
-                    if (mcnk->iy == targetY && mcnk->ix == targetX)
-                        printf("    [FIX] Standard offset garbage. Using Hidden Offset 64.\n");
+                    readOffset = candidateOffset;
+                    standardOffsetBad = false;
                 }
             }
         }
-
-        // --- STEP 3: FALLBACK TO MAIN FILE ---
-        // If both Standard and Offset 64 failed in _tex0, look at the Main File
         if (standardOffsetBad && mcnk->offsMCLY > 0) {
             sourceMcnk = mcnk;
             readOffset = mcnk->offsMCLY;
             usingMain = true;
-            if (mcnk->iy == targetY && mcnk->ix == targetX)
-                printf("    [FIX] _tex0 failed. Switching to MAIN file.\n");
         }
 
-        // --- STEP 4: READ THE LAYERS ---
-        if (readOffset > 0 && readOffset < sourceMcnk->size)
+        // Arrays for Pixel Logic
+        float pixelRoadness[64][64];
+        memset(pixelRoadness, 0, sizeof(pixelRoadness));
+        int dominantTexID[64][64];
+        memset(dominantTexID, -1, sizeof(dominantTexID));
+
+        int validLayerCount = 0;
+        if (readOffset > 0 && readOffset < sourceMcnk->size) {
+            adt_MCLY* scan = (adt_MCLY*)((uint8*)sourceMcnk + readOffset);
+            for (int l = 0; l < maxLayers; ++l) {
+                if (readOffset + (l + 1) * sizeof(adt_MCLY) > sourceMcnk->size) break;
+                if (scan[l].textureId >= textureNames.size()) break;
+                validLayerCount++;
+            }
+        }
+
+        if (validLayerCount > 0)
         {
             adt_MCLY* mcly = (adt_MCLY*)((uint8*)sourceMcnk + readOffset);
+            uint32 mcalStart = readOffset + (validLayerCount * sizeof(adt_MCLY));
 
-            for (int l = 0; l < maxLayers; ++l)
+            for (int l = 0; l < validLayerCount; ++l)
             {
-                // Safety boundary check
-                if (readOffset + (l + 1) * sizeof(adt_MCLY) > sourceMcnk->size) break;
-
                 uint32 texID = mcly[l].textureId;
-
-                // Final Sanity Check
-                if (texID >= textureNames.size()) break;
-
-                // SAVE DATA
-                debugTextureLayers[mcnk->iy][mcnk->ix].push_back(texID);
-
-                // CHECK ROAD
-                if (textureIsRoad[texID]) {
-                    chunkHasRoad = true;
-                }
-
                 dataFound = true;
+                debugTextureLayers[mcnk->iy][mcnk->ix].push_back(texID);
+                bool isRoad = textureIsRoad[texID];
 
-                // Debug print (Target Only)
-                if (mcnk->iy == targetY && mcnk->ix == targetX) {
-                    printf("    [SUCCESS] Layer %d: %s (%u)\n", l, textureNames[texID].c_str(), texID);
+                if (l == 0) {
+                    float val = isRoad ? 1.0f : 0.0f;
+                    for (int y = 0; y < 64; ++y) for (int x = 0; x < 64; ++x) {
+                        pixelRoadness[y][x] = val;
+                        dominantTexID[y][x] = texID;
+                    }
+                }
+                else {
+                    uint32 offsetInMCAL = mcly[l].offsetInMCAL;
+                    uint32 alphaPtrOffset = mcalStart + offsetInMCAL;
+                    if (alphaPtrOffset < sourceMcnk->size) {
+                        uint8* alphaSrc = (uint8*)sourceMcnk + alphaPtrOffset;
+                        size_t remainingSize = sourceMcnk->size - alphaPtrOffset;
+                        uint8 alphaMap[4096];
+                        if ((sourceMcnk->flags & 0x200) || remainingSize < 4096)
+                            DecompressAlphaSafe(alphaSrc, remainingSize, alphaMap);
+                        else memcpy(alphaMap, alphaSrc, 4096);
+
+                        float layerVal = isRoad ? 1.0f : 0.0f;
+                        for (int y = 0; y < 64; ++y) {
+                            for (int x = 0; x < 64; ++x) {
+                                float alpha = alphaMap[y * 64 + x] / 255.0f;
+                                pixelRoadness[y][x] = pixelRoadness[y][x] * (1.0f - alpha) + layerVal * alpha;
+                                if (alpha > 0.5f) dominantTexID[y][x] = texID;
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // --- STEP 5: ULTIMATE FALLBACK ---
-        // If we still found nothing, default to Texture 0 to avoid empty holes
-        if (!dataFound && !(mcnk->flags & 0x10000))
-        {
-            if (!textureNames.empty()) {
-                uint32 defaultTexID = 0;
-                debugTextureLayers[mcnk->iy][mcnk->ix].push_back(defaultTexID);
-                if (textureIsRoad[defaultTexID]) chunkHasRoad = true;
+        // Fallback
+        if (!dataFound && !(mcnk->flags & 0x10000) && !textureNames.empty()) {
+            uint32 defID = 0;
+            debugTextureLayers[mcnk->iy][mcnk->ix].push_back(defID);
+            if (textureIsRoad[defID]) {
+                for (int y = 0; y < 64; ++y) for (int x = 0; x < 64; ++x) pixelRoadness[y][x] = 1.0f;
+            }
+            for (int y = 0; y < 64; ++y) for (int x = 0; x < 64; ++x) dominantTexID[y][x] = defID;
+        }
 
-                if (mcnk->iy == targetY && mcnk->ix == targetX)
-                    printf("    [FALLBACK] No data found. Defaulting to Texture 0.\n");
+        // --- DOWNSAMPLE & WRITE TO FILE ---
+        for (int cy = 0; cy < ADT_CELL_SIZE; ++cy) { // 8 Cells High
+            for (int cx = 0; cx < ADT_CELL_SIZE; ++cx) { // 8 Cells Wide
+                float sum = 0.0f;
+                float maxVal = 0.0f;
+                int cellDominantID = -1;
+                int maxCount = -1;
+                std::vector<int> counts(textureNames.size(), 0);
+
+                for (int py = 0; py < 8; ++py) {
+                    for (int px = 0; px < 8; ++px) {
+                        float v = pixelRoadness[cy * 8 + py][cx * 8 + px];
+                        sum += v;
+                        if (v > maxVal) maxVal = v;
+
+                        int tid = dominantTexID[cy * 8 + py][cx * 8 + px];
+                        if (tid >= 0 && tid < textureNames.size()) {
+                            counts[tid]++;
+                            if (counts[tid] > maxCount) {
+                                maxCount = counts[tid];
+                                cellDominantID = tid;
+                            }
+                        }
+                    }
+                }
+                float avg = sum / 64.0f;
+
+                // --- WRITE LINE TO FILE ---
+                //if (auditFile.is_open()) {
+                //    float gameX, gameY;
+                //    GetCellCoordinates(cell_y, cell_x, mcnk->ix, mcnk->iy, cx, cy, gameX, gameY);
+                //    std::string texName = (cellDominantID >= 0) ? textureNames[cellDominantID] : "None";
+
+                //    // Simplify name (remove path)
+                //    size_t slash = texName.find_last_of("\\/");
+                //    if (slash != std::string::npos) texName = texName.substr(slash + 1);
+
+                //    bool isRoad = (avg > 0.15f || maxVal > 0.60f);
+
+                //    auditFile << mcnk->ix << "," << mcnk->iy << ","
+                //        << gameX << "," << gameY << ","
+                //        << texName << "," << avg << "," << (isRoad ? "1" : "0") << "\n";
+                //}
+
+                //if (avg > 0.15f || maxVal > 0.60f) {
+                //    terrain_type[mcnk->iy * ADT_CELL_SIZE + cy][mcnk->ix * ADT_CELL_SIZE + cx] = 2;
+                //}
             }
         }
-        
-        // ... (Rest of the standard MCNK processing: Road Data / Height / Holes) ...
-        // Apply Road Data
-        if (chunkHasRoad)
-        {
-            for (int y = 0; y < ADT_CELL_SIZE; ++y)
-                for (int x = 0; x < ADT_CELL_SIZE; ++x)
-                    terrain_type[mcnk->iy * ADT_CELL_SIZE + y][mcnk->ix * ADT_CELL_SIZE + x] = 2; 
-        }
 
-        // ... Copy the rest of your original logic here (Area, Height, Liquid, Holes) ...
-        // (Use the logic from your provided System.cpp for the rest of the loop)
-        
         // -- Area Data --
         if (mcnk->areaid <= maxAreaId && areas[mcnk->areaid] != 0xFFFF)
             area_flags[mcnk->iy][mcnk->ix] = areas[mcnk->areaid];
 
         // -- Height Data --
-        for (int y = 0; y <= ADT_CELL_SIZE; y++) {
+        for (int y = 0; y <= ADT_CELL_SIZE; y++)
+        {
             int cy = mcnk->iy * ADT_CELL_SIZE + y;
-            for (int x = 0; x <= ADT_CELL_SIZE; x++) {
+            for (int x = 0; x <= ADT_CELL_SIZE; x++)
+            {
                 int cx = mcnk->ix * ADT_CELL_SIZE + x;
                 V9[cy][cx] = mcnk->ypos;
             }
         }
-        for (int y = 0; y < ADT_CELL_SIZE; y++) {
+
+        for (int y = 0; y < ADT_CELL_SIZE; y++)
+        {
             int cy = mcnk->iy * ADT_CELL_SIZE + y;
-            for (int x = 0; x < ADT_CELL_SIZE; x++) {
+            for (int x = 0; x < ADT_CELL_SIZE; x++)
+            {
                 int cx = mcnk->ix * ADT_CELL_SIZE + x;
                 V8[cy][cx] = mcnk->ypos;
             }
         }
 
-        if (FileChunk* chunk = itr->second->GetSubChunk("MCVT")) {
+        if (FileChunk* chunk = itr->second->GetSubChunk("MCVT"))
+        {
             adt_MCVT* mcvt = chunk->As<adt_MCVT>();
-            for (int y = 0; y <= ADT_CELL_SIZE; y++) {
+            for (int y = 0; y <= ADT_CELL_SIZE; y++)
+            {
                 int cy = mcnk->iy * ADT_CELL_SIZE + y;
-                for (int x = 0; x <= ADT_CELL_SIZE; x++) {
+                for (int x = 0; x <= ADT_CELL_SIZE; x++)
+                {
                     int cx = mcnk->ix * ADT_CELL_SIZE + x;
                     V9[cy][cx] += mcvt->height_map[y * (ADT_CELL_SIZE * 2 + 1) + x];
                 }
             }
-            for (int y = 0; y < ADT_CELL_SIZE; y++) {
+            for (int y = 0; y < ADT_CELL_SIZE; y++)
+            {
                 int cy = mcnk->iy * ADT_CELL_SIZE + y;
-                for (int x = 0; x < ADT_CELL_SIZE; x++) {
+                for (int x = 0; x < ADT_CELL_SIZE; x++)
+                {
                     int cx = mcnk->ix * ADT_CELL_SIZE + x;
                     V8[cy][cx] += mcvt->height_map[y * (ADT_CELL_SIZE * 2 + 1) + ADT_CELL_SIZE + 1 + x];
                 }
@@ -904,36 +1062,50 @@ bool ConvertADT(char* filename, char* filename2, int cell_y, int cell_x, uint32 
         }
 
         // -- Liquid Data --
-        if (mcnk->sizeMCLQ > 8) {
-            if (FileChunk* chunk = itr->second->GetSubChunk("MCLQ")) {
+        if (mcnk->sizeMCLQ > 8)
+        {
+            if (FileChunk* chunk = itr->second->GetSubChunk("MCLQ"))
+            {
                 adt_MCLQ* liquid = chunk->As<adt_MCLQ>();
-                for (int y = 0; y < ADT_CELL_SIZE; ++y) {
+                int count = 0;
+                for (int y = 0; y < ADT_CELL_SIZE; ++y)
+                {
                     int cy = mcnk->iy * ADT_CELL_SIZE + y;
-                    for (int x = 0; x < ADT_CELL_SIZE; ++x) {
+                    for (int x = 0; x < ADT_CELL_SIZE; ++x)
+                    {
                         int cx = mcnk->ix * ADT_CELL_SIZE + x;
-                        if (liquid->flags[y][x] != 0x0F) {
+                        if (liquid->flags[y][x] != 0x0F)
+                        {
                             liquid_show[cy][cx] = true;
                             if (liquid->flags[y][x] & (1 << 7))
                                 liquid_flags[mcnk->iy][mcnk->ix] |= MAP_LIQUID_TYPE_DARK_WATER;
+                            ++count;
                         }
                     }
                 }
+
                 uint32 c_flag = mcnk->flags;
-                if (c_flag & (1 << 2)) {
+                if (c_flag & (1 << 2))
+                {
                     liquid_entry[mcnk->iy][mcnk->ix] = 1;
                     liquid_flags[mcnk->iy][mcnk->ix] |= MAP_LIQUID_TYPE_WATER;
                 }
-                if (c_flag & (1 << 3)) {
+                if (c_flag & (1 << 3))
+                {
                     liquid_entry[mcnk->iy][mcnk->ix] = 2;
                     liquid_flags[mcnk->iy][mcnk->ix] |= MAP_LIQUID_TYPE_OCEAN;
                 }
-                if (c_flag & (1 << 4)) {
+                if (c_flag & (1 << 4))
+                {
                     liquid_entry[mcnk->iy][mcnk->ix] = 3;
                     liquid_flags[mcnk->iy][mcnk->ix] |= MAP_LIQUID_TYPE_MAGMA;
                 }
-                for (int y = 0; y <= ADT_CELL_SIZE; ++y) {
+
+                for (int y = 0; y <= ADT_CELL_SIZE; ++y)
+                {
                     int cy = mcnk->iy * ADT_CELL_SIZE + y;
-                    for (int x = 0; x <= ADT_CELL_SIZE; ++x) {
+                    for (int x = 0; x <= ADT_CELL_SIZE; ++x)
+                    {
                         int cx = mcnk->ix * ADT_CELL_SIZE + x;
                         liquid_height[cy][cx] = liquid->liquid[y][x].height;
                     }
@@ -942,19 +1114,26 @@ bool ConvertADT(char* filename, char* filename2, int cell_y, int cell_x, uint32 
         }
 
         // -- Hole Data --
-        if (!(mcnk->flags & 0x10000)) {
-            if (uint16 hole = mcnk->holes) {
+        if (!(mcnk->flags & 0x10000))
+        {
+            if (uint16 hole = mcnk->holes)
+            {
                 holes[mcnk->iy][mcnk->ix] = mcnk->holes;
                 hasHoles = true;
             }
         }
-    }
+    } // End MCNK Loop
 
-    // --- WRITE DEBUG SVG ---
+    //if (auditFile.is_open()) auditFile.close();
+
+    // Write SVGs
     GenerateTextureSVG(cell_x, cell_y, textureNames, textureIsRoad, debugTextureLayers, map_id);
+    GenerateDetailMapSVG(cell_x, cell_y, map_id);
 
-    // ... (The rest of file writing is the same as before) ...
-    // --- MH2O LIQUID DATA ---
+    // Write .map file logic (MH2O, Headers, etc)...
+    // (Ensure you keep the file writing logic from your original System.cpp)
+
+    // ... [MH2O LIQUID DATA] ...
     if (FileChunk* chunk = adt.GetChunk("MH2O"))
     {
         adt_MH2O* h2o = chunk->As<adt_MH2O>();
@@ -985,12 +1164,12 @@ bool ConvertADT(char* filename, char* filename2, int cell_y, int cell_x, uint32 
                 liquid_entry[i][j] = h->liquidType;
                 switch (LiqType[h->liquidType])
                 {
-                case LIQUID_TYPE_WATER: liquid_flags[i][j] |= MAP_LIQUID_TYPE_WATER; break;
-                case LIQUID_TYPE_OCEAN: liquid_flags[i][j] |= MAP_LIQUID_TYPE_OCEAN; break;
-                case LIQUID_TYPE_MAGMA: liquid_flags[i][j] |= MAP_LIQUID_TYPE_MAGMA; break;
-                case LIQUID_TYPE_SLIME: liquid_flags[i][j] |= MAP_LIQUID_TYPE_SLIME; break;
+                case 1: liquid_flags[i][j] |= MAP_LIQUID_TYPE_WATER; break; // LIQUID_TYPE_WATER
+                case 2: liquid_flags[i][j] |= MAP_LIQUID_TYPE_OCEAN; break; // LIQUID_TYPE_OCEAN
+                case 4: liquid_flags[i][j] |= MAP_LIQUID_TYPE_MAGMA; break; // LIQUID_TYPE_MAGMA
+                case 8: liquid_flags[i][j] |= MAP_LIQUID_TYPE_SLIME; break; // LIQUID_TYPE_SLIME
                 }
-                if (LiqType[h->liquidType] == LIQUID_TYPE_OCEAN)
+                if (LiqType[h->liquidType] == 2) // LIQUID_TYPE_OCEAN
                 {
                     uint8* lm = h2o->getLiquidLightMap(h);
                     if (!lm) liquid_flags[i][j] |= MAP_LIQUID_TYPE_DARK_WATER;
@@ -1015,6 +1194,7 @@ bool ConvertADT(char* filename, char* filename2, int cell_y, int cell_x, uint32 
         }
     }
 
+    // ... [Original File Writing Logic] ...
     bool fullAreaData = false;
     uint32 areaflag = area_flags[0][0];
     for (int y = 0; y < ADT_CELLS_PER_GRID; y++)
@@ -1306,7 +1486,7 @@ void ExtractMapsFromMpq(uint32 build)
     printf("Convert map files\n");
     for (uint32 z = 0; z < map_count; ++z)
     {
-        if (map_ids[z].id == 530) {
+        if (map_ids[z].id != 530000) {
             printf("Extract %s (%d/%u)                  \n", map_ids[z].name, z + 1, map_count);
             // Loadup map grid data
             snprintf(mpq_map_name, sizeof(mpq_map_name), "World\\Maps\\%s\\%s.wdt", map_ids[z].name, map_ids[z].name);

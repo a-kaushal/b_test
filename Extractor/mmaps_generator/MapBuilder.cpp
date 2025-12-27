@@ -15,6 +15,10 @@
 #include "DisableMgr.h"
 #include <ace/OS_NS_unistd.h>
 
+#ifndef STATIC_POLY_BITS
+#define STATIC_POLY_BITS 31  // Allows up to 2048 polygons per tile
+#endif
+
 uint32 GetLiquidFlags(uint32 /*liquidType*/) { return 0; }
 
 namespace DisableMgr
@@ -389,23 +393,38 @@ namespace MMAP
     }
 
     /**************************************************************************/
-    void MapBuilder::buildNavMesh(uint32 mapID, dtNavMesh* &navMesh)
+    void MapBuilder::buildNavMesh(uint32 mapID, dtNavMesh*& navMesh)
     {
         std::set<uint32>* tiles = getTileList(mapID);
 
-        // old code for non-statically assigned bitmask sizes:
-        ///*** calculate number of bits needed to store tiles & polys ***/
-        //int tileBits = dtIlog2(dtNextPow2(tiles->size()));
-        //if (tileBits < 1) tileBits = 1;                                     // need at least one bit!
-        //int polyBits = sizeof(dtPolyRef)*8 - SALT_MIN_BITS - tileBits;
+        // With STATIC bit allocations (DT_TILE_BITS=28, DT_POLY_BITS=20):
+        // We can use any power-of-2 values that FIT WITHIN those bit limits
+        // We don't need to allocate 2^28 tiles - that would use too much memory!
+        // Just use reasonable values based on actual tile count
 
-        int polyBits = STATIC_POLY_BITS;
+        int polyBits = STATIC_POLY_BITS;  // Should be 20
+        int maxPolysPerTile = 1 << 20; // 2^20 = 1,048,576
 
-        int maxTiles = tiles->size();
-        int maxPolysPerTile = 1 << polyBits;
+        // Calculate reasonable maxTiles based on actual needs
+        // Use next power of 2 of tile count, with reasonable minimum
+        int rawTileCount = tiles->size();
+        //int maxTiles = 1;
+        //while (maxTiles < rawTileCount) maxTiles <<= 1;
+        //if (maxTiles < 2048) maxTiles = 2048;  // Reasonable minimum
+        //if (maxTiles > 8192) maxTiles = 8192;  // Reasonable maximum for single map
+        int maxTiles = 4096;
+
+        // Verify these fit within static bit limits
+        int tileBits = 0;
+        for (int i = maxTiles; i > 1; i >>= 1) tileBits++;
+
+        printf("[Map %04u] STATIC bit limits: DT_TILE_BITS=28 (max 2^28), DT_POLY_BITS=20 (max 2^20)\n", mapID);
+        printf("[Map %04u] Actual tile count: %d, using maxTiles=%d (needs %d bits, limit 28)\n",
+            mapID, rawTileCount, maxTiles, tileBits);
+        printf("[Map %04u] Using maxPolys=%d (needs %d bits, limit 20)\n",
+            mapID, maxPolysPerTile, polyBits);
 
         /*** calculate bounds of map ***/
-
         uint32 tileXMin = 64, tileYMin = 64, tileXMax = 0, tileYMax = 0, tileX, tileY;
         for (std::set<uint32>::iterator it = tiles->begin(); it != tiles->end(); ++it)
         {
@@ -426,24 +445,56 @@ namespace MMAP
         float bmin[3], bmax[3];
         getTileBounds(tileXMax, tileYMax, NULL, 0, bmin, bmax);
 
-        /*** now create the navmesh ***/
-
-        // navmesh creation params
+        /*** create the navmesh ***/
         dtNavMeshParams navMeshParams;
         memset(&navMeshParams, 0, sizeof(dtNavMeshParams));
         navMeshParams.tileWidth = GRID_SIZE;
         navMeshParams.tileHeight = GRID_SIZE;
-        rcVcopy(navMeshParams.orig, bmin);
+        navMeshParams.orig[0] = (32 - 64) * GRID_SIZE - GRID_SIZE;  // -17599.999
+        navMeshParams.orig[1] = -500.0f;
+        navMeshParams.orig[2] = (32 - 64) * GRID_SIZE - GRID_SIZE;  // -17599.999
+
+        printf("[Map %04u] Using FIXED origin: [%.3f, %.3f, %.3f]\n",
+            mapID, navMeshParams.orig[0], navMeshParams.orig[1], navMeshParams.orig[2]);
+
         navMeshParams.maxTiles = maxTiles;
         navMeshParams.maxPolys = maxPolysPerTile;
 
         navMesh = dtAllocNavMesh();
-        printf("[Map %04u] Creating navMesh...\n", mapID);
-        if (!navMesh->init(&navMeshParams))
+        printf("[Map %04u] Initializing navMesh...\n", mapID);
+
+        printf("[Map %04u] Validating params before init:\n", mapID);
+        printf("  maxTiles=%d (2^%d), expected 2^%d\n", maxTiles, dtIlog2(dtNextPow2(maxTiles)), 12);
+        printf("  maxPolys=%d (2^%d), expected 2^%d\n", maxPolysPerTile, dtIlog2(dtNextPow2(maxPolysPerTile)), 20);
+        printf("  origin: [%.3f, %.3f, %.3f]\n", navMeshParams.orig[0], navMeshParams.orig[1], navMeshParams.orig[2]);
+        printf("  tileWidth: %.3f, tileHeight: %.3f\n", navMeshParams.tileWidth, navMeshParams.tileHeight);
+        printf("  Is maxTiles power of 2? %s\n", (maxTiles & (maxTiles - 1)) == 0 ? "YES" : "NO");
+        printf("  Is maxPolys power of 2? %s\n", (maxPolysPerTile & (maxPolysPerTile - 1)) == 0 ? "YES" : "NO");
+        printf("[DEBUG] sizeof(dtPolyRef) = %zu bits\n", sizeof(dtPolyRef) * 8);
+        printf("[DEBUG] Total bits used: SALT=%d + TILE=%d + POLY=%d = %d\n",
+            12, 12, 20, 12 + 12 + 20);
+
+        dtStatus initStatus = navMesh->init(&navMeshParams);
+        if (dtStatusFailed(initStatus))
         {
-            printf("[Map %04u] Failed creating navmesh!  \n", mapID);
+
+            printf("[Map %04u] ERROR: navMesh->init() FAILED! Status: 0x%X\n", mapID, initStatus);
+
+            // Check Detour's internal validations
+            printf("[DEBUG] Checking why init failed:\n");
+            printf("  maxTiles & (maxTiles-1) = %d (should be 0)\n", maxTiles & (maxTiles - 1));
+            printf("  maxPolys & (maxPolys-1) = %d (should be 0)\n", maxPolysPerTile & (maxPolysPerTile - 1));
+            printf("  dtIlog2(dtNextPow2(maxTiles)) = %d (should equal DT_TILE_BITS=%d)\n",
+                dtIlog2(dtNextPow2(maxTiles)), 12);
+            printf("  dtIlog2(dtNextPow2(maxPolys)) = %d (should equal DT_POLY_BITS=%d)\n",
+                dtIlog2(dtNextPow2(maxPolysPerTile)), 20);
+
+            dtFreeNavMesh(navMesh);
+            navMesh = NULL;
             return;
         }
+
+        printf("[Map %04u] navMesh->init() SUCCESS!\n", mapID);
 
         char fileName[25];
         snprintf(fileName, sizeof(fileName), "mmaps/%04u.mmap", mapID);
@@ -458,9 +509,10 @@ namespace MMAP
             return;
         }
 
-        // now that we know navMesh params are valid, we can write them to file
+        // Write params to file
         fwrite(&navMeshParams, sizeof(dtNavMeshParams), 1, file);
         fclose(file);
+        printf("[Map %04u] Wrote .mmap file successfully\n", mapID);
     }
 
     /**************************************************************************/
@@ -766,16 +818,35 @@ namespace MMAP
                 continue;
             }
 
+            printf("%s Created navmesh data: %d bytes\n", tileString, navDataSize);
+            printf("%s Tile coords: tileX=%d, tileY=%d (from params)\n",
+                tileString, params.tileX, params.tileY);
+
             dtTileRef tileRef = 0;
             printf("%s Adding tile to navmesh...\n", tileString);
-            // DT_TILE_FREE_DATA tells detour to unallocate memory when the tile
-            // is removed via removeTile()
+
             dtStatus dtResult = navMesh->addTile(navData, navDataSize, DT_TILE_FREE_DATA, 0, &tileRef);
-            if (!tileRef || dtResult != DT_SUCCESS)
+            printf("%s addTile result: status=0x%X, tileRef=%llu\n",
+                tileString, dtResult, (unsigned long long)tileRef);
+
+            if (!tileRef || dtStatusFailed(dtResult))
             {
-                printf("%s Failed adding tile to navmesh!\n", tileString);
+                printf("%s ERROR: Failed adding tile to navmesh! Status: 0x%X\n",
+                    tileString, dtResult);
+
+                // Check for common failure reasons
+                if (dtResult & DT_INVALID_PARAM)
+                    printf("%s   Reason: DT_INVALID_PARAM - tile coords or data invalid\n", tileString);
+                if (dtResult & DT_OUT_OF_MEMORY)
+                    printf("%s   Reason: DT_OUT_OF_MEMORY\n", tileString);
+                if (dtResult & DT_FAILURE)
+                    printf("%s   Reason: DT_FAILURE - generic failure\n", tileString);
+
                 continue;
             }
+
+            printf("%s Tile added successfully! TileRef: %llu\n",
+                tileString, (unsigned long long)tileRef);
 
             // file output
             char fileName[255];
@@ -790,7 +861,7 @@ namespace MMAP
                 continue;
             }
 
-            printf("%s Writing to file...\n", tileString);
+            printf("%s Writing to file: %s\n", tileString, fileName);
 
             // write header
             MmapTileHeader header;
@@ -801,6 +872,8 @@ namespace MMAP
             // write data
             fwrite(navData, sizeof(unsigned char), navDataSize, file);
             fclose(file);
+
+            printf("%s SUCCESS: Wrote .mmtile file (%d bytes)\n", tileString, navDataSize);
 
             // now that tile is written to disk, we can unload it
             navMesh->removeTile(tileRef, NULL, NULL);
