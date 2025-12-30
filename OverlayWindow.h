@@ -3,14 +3,21 @@
 #include <string>
 #include <random>
 #include <algorithm>
+#include <vector>
 
 class OverlayWindow {
 private:
+    struct OverlayPoint {
+        int x, y;
+        COLORREF color;
+    };
+
     HWND hOverlay = NULL;
     HWND hGame = NULL;
     int width = 0, height = 0;
     std::string className;
     std::string windowTitle;
+    std::vector<OverlayPoint> activePoints; // Stores points for the current frame
 
     // Generate a random string of length N
     std::string RandomString(size_t length) {
@@ -76,15 +83,9 @@ public:
 
         SetLayeredWindowAttributes(hOverlay, RGB(0, 0, 0), 0, LWA_COLORKEY);
 
-        // 2. STEALTH: Exclude from Capture (Anti-Screenshot)
-        // This makes the window invisible to BitBlt/PrintWindow/OBS
-        // Only works on Windows 10 version 2004 and later.
-        //SetWindowDisplayAffinity(hOverlay, WDA_EXCLUDEFROMCAPTURE);
-
         return true;
     }
 
-    // ... (Keep UpdatePosition and DrawFrame exactly the same as before) ...
     void UpdatePosition() {
         if (!hGame || !hOverlay) return;
         RECT rect;
@@ -96,26 +97,42 @@ public:
         MoveWindow(hOverlay, pt.x, pt.y, width, height, TRUE);
     }
 
-    void DrawFrame(int x, int y, COLORREF color) {
+    // UPDATED: Now supports accumulating points
+    // accumulate = false: Clears screen, adds this point, draws. (Default/Standard behavior)
+    // accumulate = true:  Keeps existing points, adds this point, draws everything.
+    void DrawFrame(int x, int y, COLORREF color, bool accumulate = false) {
         if (!hOverlay) return;
+
+        // 1. Manage Points
+        if (!accumulate) {
+            activePoints.clear();
+        }
+        activePoints.push_back({ x, y, color });
+
         HDC hdc = GetDC(hOverlay);
         if (hdc) {
             HDC memDC = CreateCompatibleDC(hdc);
             HBITMAP memBitmap = CreateCompatibleBitmap(hdc, width, height);
             HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
 
+            // 2. Clear Background (Black = Transparent)
             HBRUSH blackBrush = CreateSolidBrush(RGB(0, 0, 0));
             RECT r = { 0, 0, width, height };
             FillRect(memDC, &r, blackBrush);
             DeleteObject(blackBrush);
 
-            if (x >= 0 && x < width && y >= 0 && y < height) {
-                HBRUSH targetBrush = CreateSolidBrush(color);
-                RECT dotRect = { x - 4, y - 4, x + 4, y + 4 };
-                FillRect(memDC, &dotRect, targetBrush);
-                DeleteObject(targetBrush);
+            // 3. Draw All Points
+            for (const auto& pt : activePoints) {
+                // Bounds check for each point
+                if (pt.x >= 0 && pt.x < width && pt.y >= 0 && pt.y < height) {
+                    HBRUSH targetBrush = CreateSolidBrush(pt.color);
+                    RECT dotRect = { pt.x - 4, pt.y - 4, pt.x + 4, pt.y + 4 };
+                    FillRect(memDC, &dotRect, targetBrush);
+                    DeleteObject(targetBrush);
+                }
             }
 
+            // 4. Blit to Screen
             BitBlt(hdc, 0, 0, width, height, memDC, 0, 0, SRCCOPY);
 
             SelectObject(memDC, oldBitmap);

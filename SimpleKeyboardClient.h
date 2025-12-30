@@ -92,11 +92,11 @@ private:
 public:
     SimpleKeyboardClient() : m_hDevice(INVALID_HANDLE_VALUE), m_Connected(false) {
         // Default config with anti-detection enabled
-        m_Config.EnableJitter = TRUE;
-        m_Config.EnableHardwareSimulation = TRUE;
-        m_Config.StealthMode = TRUE;
-        m_Config.MinDelayMs = 10;
-        m_Config.MaxDelayMs = 50;
+        m_Config.EnableJitter = FALSE;
+        m_Config.EnableHardwareSimulation = FALSE;
+        m_Config.StealthMode = FALSE;
+        m_Config.MinDelayMs = 5;
+        m_Config.MaxDelayMs = 15;
     }
 
     ~SimpleKeyboardClient() {
@@ -356,5 +356,66 @@ public:
             HoldKeyAsync(vk, durationMs);
         }
         return true;
+    }
+};
+
+class ConsoleInput {
+private:
+    // --- STATE MACHINE VARIABLES ---
+    enum CommandState {
+        OPEN_CHAT_WINDOW,
+        ENTER_COMMAND,
+        PRESS_ENTER,
+        WAIT_FOR_EXECUTION,   // Move to next offset
+    };
+
+    CommandState currentState = OPEN_CHAT_WINDOW;
+    SimpleKeyboardClient& kbd;
+    DWORD timerStart = 0;
+
+public:
+    ConsoleInput(SimpleKeyboardClient& k) : kbd(k) {
+        currentState = OPEN_CHAT_WINDOW;
+    }
+
+    void Reset() {
+        currentState = OPEN_CHAT_WINDOW;
+    }
+
+    std::string GetState() {
+        switch (currentState) {
+            case OPEN_CHAT_WINDOW: return "OPEN_CHAT_WINDOW";
+            case ENTER_COMMAND: return "ENTER_COMMAND";
+            case PRESS_ENTER: return "PRESS_ENTER";
+            case WAIT_FOR_EXECUTION: return "WAIT_FOR_EXECUTION";
+            default: return "UNKNOWN";
+        }
+    }
+
+    bool SendData(std::wstring input) {
+
+        switch (currentState) {
+        case OPEN_CHAT_WINDOW: {
+            kbd.TypeString(std::wstring(L"/"));
+            timerStart = GetTickCount();
+            currentState = ENTER_COMMAND;
+            return false;
+        }
+        case ENTER_COMMAND: {
+            if (GetTickCount() - timerStart > 200) {
+                kbd.TypeString(input);
+                currentState = PRESS_ENTER;
+            }
+            return false;
+        }
+        case PRESS_ENTER: {
+            if (GetTickCount() - timerStart > 600) {
+                kbd.PressKey(VK_RETURN);
+                currentState = WAIT_FOR_EXECUTION;
+                return true;
+            }
+        }
+        }
+        return false;
     }
 };

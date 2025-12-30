@@ -23,6 +23,7 @@
 #include "GoapSystem.h"
 #include "ScreenRenderer.h"
 #include "OverlayWindow.h"
+#include "Gathering.h"
 
 // Global Atomic Flag to control all threads
 #include <atomic>
@@ -193,7 +194,17 @@ uint64_t get_bits_u128(uint64_t low, uint64_t high, int start, int len)
     return lowbits | highbits;
 }
 
-std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray, int hashArrayMaximum, ULONG_PTR entityArray, PlayerInfo& playerInfo, bool playerOnly = false) {
+void GUIDBreakdown(uint32_t& low_counter, uint32_t& type_field, uint32_t& instance, uint32_t& id, uint32_t& map_id, uint32_t& server_id, ULONG_PTR guidLow, ULONG_PTR guidHigh) {
+    low_counter = (uint32_t)get_bits_u128(guidLow, guidHigh, 0, 32);    // bits 0..31
+    type_field = (uint32_t)get_bits_u128(guidLow, guidHigh, 18, 3);    // bits 18..20
+    instance = (uint32_t)get_bits_u128(guidLow, guidHigh, 40, 6);    // bits 40..45
+    id = (uint32_t)get_bits_u128(guidLow, guidHigh, 70, 24);   // bits 70..93
+    map_id = (uint32_t)get_bits_u128(guidLow, guidHigh, 93, 13);   // bits 93..105
+    server_id = (uint32_t)get_bits_u128(guidLow, guidHigh, 106, 16);  // bits 106..121
+}
+
+std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray, int hashArrayMaximum, ULONG_PTR entityArray, PlayerInfo& playerInfo, GoapAgent& agent, bool playerOnly = false) {
+    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
 
     std::vector<GameEntity> entityList; // This will hold all our data
     PlayerInfo newPlayer = {};
@@ -213,11 +224,11 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
             (((newPlayer.state & (1 << 23)) >> 23) == 1) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
             (((newPlayer.state & (1 << 20)) >> 20) == 1) ? newPlayer.inWater = true : newPlayer.inWater = false;
 
-            analyzer.ReadUInt32(procId, playerInfo.playerPtr + 0xA40, newPlayer.mountState);
-            (newPlayer.mountState == 1) ? newPlayer.groundMounted = true : newPlayer.groundMounted = false;
-            (newPlayer.mountState == 3) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
+            analyzer.ReadUInt32(procId, playerInfo.playerPtr + ENTITY_PLAYER_MOUNT_STATE, newPlayer.mountState);
+            //(newPlayer.mountState == 1) ? newPlayer.groundMounted = true : newPlayer.groundMounted = false;
+            (newPlayer.mountState >= 1) ? newPlayer.isMounted = true : newPlayer.isMounted = false;
 
-            analyzer.ReadInt32(procId, playerInfo.playerPtr + 0x119F8, newPlayer.health);
+            analyzer.ReadInt32(procId, playerInfo.playerPtr + ENTITY_PLAYER_HEALTH, newPlayer.health);
 
             playerInfo = newPlayer;
             return entityList;
@@ -225,7 +236,7 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
         else {
             std::cerr << "Player pointer is invalid, reading all entities!" << std::endl;
 		}
-	}
+	}    
 
     for (int i = 0; i < hashArrayMaximum; ++i) {
         ULONG_PTR EntryGuidLow, EntryGuidHigh, EntityIndex;
@@ -248,16 +259,11 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
             analyzer.ReadInt32(procId, entity_ptr + ENTITY_OBJECT_TYPE_OFFSET, objType);
             analyzer.ReadPointer(procId, entity_ptr + ENTITY_GUID_LOW_OFFSET, guidLow);
             analyzer.ReadPointer(procId, entity_ptr + ENTITY_GUID_HIGH_OFFSET, guidHigh);
-
-            uint32_t low_counter = (uint32_t)get_bits_u128(guidLow, guidHigh, 0, 32);    // bits 0..31
-            uint32_t type_field = (uint32_t)get_bits_u128(guidLow, guidHigh, 18, 3);    // bits 18..20
-            uint32_t instance = (uint32_t)get_bits_u128(guidLow, guidHigh, 40, 6);    // bits 40..45
-            uint32_t id = (uint32_t)get_bits_u128(guidLow, guidHigh, 70, 24);   // bits 70..93
-            uint32_t map_id = (uint32_t)get_bits_u128(guidLow, guidHigh, 93, 13);   // bits 93..105
-            uint32_t server_id = (uint32_t)get_bits_u128(guidLow, guidHigh, 106, 16);  // bits 106..121
+            uint32_t low_counter, type_field, instance, id, map_id, server_id;
+            GUIDBreakdown(low_counter, type_field, instance, id, map_id, server_id, guidLow, guidHigh);
 
             // Filter for specific types
-            if ((objType == 33) || (objType == 225) || (objType == 257)) {
+            if ((objType == 3) || (objType == 7) || (objType == 33) || (objType == 225) || (objType == 257)) {
 
                 // 3. Store the data in our struct
                 GameEntity newEntity;
@@ -266,6 +272,33 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                 newEntity.entityIndex = EntInd;
                 newEntity.entityPtr = entity_ptr;
                 newEntity.type = objType;
+                if (objType == 3) {
+                    newEntity.objType = "Item";
+                    auto itemInfo = std::make_shared<ItemInfo>();
+                    newEntity.info = itemInfo;
+
+					analyzer.ReadInt32(procId, entity_ptr + PLAYER_ITEM_QUANTITY, std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->stackCount);
+                    analyzer.ReadPointer(procId, entity_ptr + PLAYER_BAG_LOW_GUID, std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->bagGuidLow);
+                    analyzer.ReadPointer(procId, entity_ptr + PLAYER_BAG_HIGH_GUID, std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->bagGuidHigh);
+                    analyzer.ReadUInt32(procId, entity_ptr + PLAYER_BAG_ITEM_ID, std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->id);
+
+                    id = std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->id;
+
+                    string rawData = item_db.getRawLine(std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->id);
+                    if (!rawData.empty()) {
+                        std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->name = item_db.getColumn(rawData, ITEM_NAME_COLUMN_INDEX);
+                    }
+				}
+                if (objType == 7) {
+                    newEntity.objType = "Bag";
+                    auto bagInfo = std::make_shared<BagInfo>();
+                    newEntity.info = bagInfo;
+
+                    analyzer.ReadUInt32(procId, entity_ptr + PLAYER_BAG_ITEM_ID, std::dynamic_pointer_cast<BagInfo>(newEntity.info)->id);
+                    analyzer.ReadInt32(procId, entity_ptr + PLAYER_BAG_SLOTS, std::dynamic_pointer_cast<BagInfo>(newEntity.info)->bagSlots);
+
+                    id = std::dynamic_pointer_cast<BagInfo>(newEntity.info)->id;
+                }
                 if (objType == 33) {
                     newEntity.objType = "NPC";
                     auto enemyInfo = std::make_shared<EnemyInfo>();
@@ -274,6 +307,7 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_X_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.x);
                     analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Y_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.y);
                     analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Z_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.z);
+                    std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id = id;
                     string rawData = creature_db.getRawLine(id);
 
                     if (!rawData.empty()) {
@@ -292,13 +326,13 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     analyzer.ReadFloat(procId, entity_ptr + ENTITY_ROTATION_OFFSET, newPlayer.rotation);
                     analyzer.ReadUInt32(procId, entity_ptr + ENTITY_PLAYER_STATE_OFFSET, newPlayer.state);
 
-                    (((newPlayer.state & (1 << 24)) >> 24) == 1) ? newPlayer.isFlying = true : newPlayer.isFlying = false;
-                    (((newPlayer.state & (1 << 23)) >> 23) == 1) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
-                    (((newPlayer.state & (1 << 20)) >> 20) == 1) ? newPlayer.inWater = true : newPlayer.inWater = false;
+                    (((newPlayer.state& (1 << 24)) >> 24) == 1) ? newPlayer.isFlying = true : newPlayer.isFlying = false;
+                    (((newPlayer.state& (1 << 23)) >> 23) == 1) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
+                    (((newPlayer.state& (1 << 20)) >> 20) == 1) ? newPlayer.inWater = true : newPlayer.inWater = false;
 
-					analyzer.ReadUInt32(procId, entity_ptr + ENTITY_PLAYER_MOUNT_STATE, newPlayer.mountState);
-                    (newPlayer.mountState == 1) ? newPlayer.groundMounted = true : newPlayer.groundMounted = false;
-					(newPlayer.mountState == 3) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
+                    analyzer.ReadUInt32(procId, entity_ptr + ENTITY_PLAYER_MOUNT_STATE, newPlayer.mountState);
+                    //(newPlayer.mountState == 2) ? newPlayer.groundMounted = true : newPlayer.groundMounted = false;
+                    (newPlayer.mountState == 1) ? newPlayer.isMounted = true : newPlayer.isMounted = false;
 
                     analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_HEALTH, newPlayer.health);
                     std::cout << "Player Health: " << std::dec << newPlayer.health << std::fixed << std::setprecision(2) << "  Player Rotation: " << newPlayer.rotation << "  Player Pos: (" 
@@ -312,10 +346,14 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     auto objInfo = std::make_shared<ObjectInfo>();
                     newEntity.info = objInfo;
 
-                    analyzer.ReadFloat(procId, entity_ptr + 0xF0, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->position.x);
-                    analyzer.ReadFloat(procId, entity_ptr + 0xF4, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->position.y);
-                    analyzer.ReadFloat(procId, entity_ptr + 0xF8, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->position.z);
+                    analyzer.ReadFloat(procId, entity_ptr + OBJECT_POSITION_X_OFFSET, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->position.x);
+                    analyzer.ReadFloat(procId, entity_ptr + OBJECT_POSITION_Y_OFFSET, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->position.y);
+                    analyzer.ReadFloat(procId, entity_ptr + OBJECT_POSITION_Z_OFFSET, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->position.z);
+                    analyzer.ReadInt32(procId, entity_ptr + OBJECT_COLLECTED_OFFSET, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->nodeActive);
+                    std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->id = id;
+                    object_db.getGatherInfo(std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->id, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->skillLevel, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->type);
                     string rawData = object_db.getRawLine(id);
+
 
                     if (!rawData.empty()) {
                         std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->name = object_db.getColumn(rawData, OBJ_NAME_COLUMN_INDEX);
@@ -327,17 +365,54 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                 // Add to our list
                 entityList.push_back(newEntity);
             }
-            if (newPlayer.position.x != 0) {
-                for (auto& entity : entityList) {
-                    if (entity.entityPtr != newPlayer.playerPtr && entity.info) {
-                        // Use std::dynamic_pointer_cast for shared_ptr
-                        if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
-                            enemy->distance = enemy->position.Dist3D(newPlayer.position);
-                        }
-                        else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(entity.info)) {
-                            object->distance = object->position.Dist3D(newPlayer.position);
+        }
+    }
+    ULONG_PTR guidLowBag1, guidHighBag1, guidLowBag2, guidHighBag2, guidLowBag3, guidHighBag3, guidLowBag4, guidHighBag4;
+    if (newPlayer.position.x != 0) {
+
+        analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET, guidLowBag1);
+        analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x8, guidHighBag1);
+        analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x10, guidLowBag2);
+        analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x18, guidHighBag2);
+        analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x20, guidLowBag3);
+        analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x28, guidHighBag3);
+        analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x30, guidLowBag4);
+        analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x38, guidHighBag4);
+
+        agent.state.globalState.bagFreeSlots = 0;
+        for (auto& entity : entityList) {
+            if (entity.entityPtr != newPlayer.playerPtr && entity.info) {
+                // Use std::dynamic_pointer_cast for shared_ptr
+                if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
+                    enemy->distance = enemy->position.Dist3D(newPlayer.position);
+                }
+                else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(entity.info)) {
+                    object->distance = object->position.Dist3D(newPlayer.position);
+                }
+
+                if (auto bag = std::dynamic_pointer_cast<BagInfo>(entity.info)) {
+
+                    bag->freeSlots = bag->bagSlots;
+                    if ((entity.guidLow == guidLowBag1) && (entity.guidHigh == guidHighBag1))
+						bag->id = 1;
+                    else if ((entity.guidLow == guidLowBag2) && (entity.guidHigh == guidHighBag2))
+                        bag->id = 2;
+                    else if ((entity.guidLow == guidLowBag3) && (entity.guidHigh == guidHighBag3))
+                        bag->id = 3;
+                    else if ((entity.guidLow == guidLowBag4) && (entity.guidHigh == guidHighBag4))
+                        bag->id = 4;
+                    else
+						bag->id = 0;
+
+                    for (auto& itemList : entityList) {
+                        if (auto item = std::dynamic_pointer_cast<ItemInfo>(itemList.info)) {
+                            if ((item->bagGuidLow == entity.guidLow) && (item->bagGuidHigh == entity.guidHigh)) {
+                                bag->freeSlots = bag->freeSlots - 1;
+                                item->bagID = bag->id;
+                            }
                         }
                     }
+					agent.state.globalState.bagFreeSlots += bag->freeSlots;
                 }
             }
         }
@@ -345,11 +420,45 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
     return entityList;
 }
 
+inline std::vector<Vector3> ParsePathString(const std::string& input) {
+    std::vector<Vector3> path;
+    size_t currentPos = 0;
+
+    while (true) {
+        // 1. Find the start of a tuple '('
+        size_t start = input.find('(', currentPos);
+        if (start == std::string::npos) break;
+
+        // 2. Find the end of the tuple ')'
+        size_t end = input.find(')', start);
+        if (end == std::string::npos) break;
+
+        // 3. Extract the "x, y, z" string inside
+        std::string content = input.substr(start + 1, end - start - 1);
+
+        // 4. Parse the numbers
+        float x, y, z;
+        char comma; // Dummy variable to eat the ',' characters
+        std::stringstream ss(content);
+
+        // This reads: Float -> Char(,) -> Float -> Char(,) -> Float
+        if (ss >> x >> comma >> y >> comma >> z) {
+            path.push_back(Vector3(x, y, z));
+        }
+
+        // 5. Advance search position
+        currentPos = end + 1;
+    }
+
+    return path;
+}
+
 void MainThread(HMODULE hModule) {
     // Load the database files
-    creature_db.loadDatabase("C:\\Driver\\creatures.tsv");
-    item_db.loadDatabase("C:\\Driver\\items.tsv");
-    object_db.loadDatabase("C:\\Driver\\objects.tsv");
+    creature_db.loadDatabase("Z:\\WowDB\\creatures.tsv");
+    item_db.loadDatabase("Z:\\WowDB\\items.tsv");
+    object_db.loadDatabase("Z:\\WowDB\\objects.tsv");
+    object_db.loadLocks("Z:\\WowDB\\Lock.csv");
 
     // Create log file early
     std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
@@ -470,33 +579,89 @@ void MainThread(HMODULE hModule) {
                     bool isPaused = false;
                     bool lastF3State = false;
 
-                    std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player);
-                    std::vector<Vector3> path = { Vector3{7.07241, 7449.82, 17.3746}, Vector3{7.07241, 7459.82, 17.3746} };
-                    path = CalculatePath(agent.state.player.position, Vector3(7.07241, 7449.82, 17.3746), false, 530);
-                    //pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[0], false);
-                    logFile << "Player Pos: (" << agent.state.player.position.x << ", " << agent.state.player.position.y << ", " << agent.state.player.position.z << ")" << "  Player Rotation: " << agent.state.player.rotation << std::endl;
-                    for (size_t i = 0; i < path.size(); ++i) {
-                        logFile << "Path Point " << i << ": (" << path[i].x << ", " << path[i].y << ", " << path[i].z << ")" << std::endl;
-                    }
+                    agent.state.entities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent);
 
-                    agent.state.currentPath = path;
-                    agent.state.pathIndex = 0;
-                    agent.state.hasPath = true;
+                    std::string temp = "(-358.46, 6509.65, 116.46), (-395.20, 6475.67, 116.46), (-438.96, 6449.58, 116.46), (-482.82, 6425.01, 116.46), (-508.78, 6381.19, 116.46), (-529.89, 6335.85, 116.46), (-547.69, 6288.27, 116.46), (-568.29, 6241.66, 116.46), (-591.41, 6196.38, 116.46), (-630.93, 6164.87, 116.46), (-679.63, 6150.37, 116.46), (-728.66, 6137.20, 116.46), (-777.38, 6122.58, 116.46), (-826.50, 6112.96, 116.46), (-876.56, 6103.19, 116.46), (-926.79, 6102.21, 116.46), (-974.92, 6115.97, 116.46), (-1021.64, 6135.66, 116.46), (-1070.59, 6147.56, 116.46), (-1108.42, 6114.36, 116.46), (-1116.81, 6064.22, 116.46), (-1112.63, 6023.29, 145.06), (-1083.49, 5987.18, 164.99), (-1046.92, 5952.05, 164.99), (-1006.52, 5922.57, 164.99), (-965.26, 5892.46, 164.99), (-924.46, 5861.86, 164.99), (-915.96, 5812.52, 164.99), (-916.19, 5761.44, 164.99), (-908.62, 5711.04, 164.99), (-899.11, 5661.90, 164.99), (-855.82, 5636.18, 164.99), (-806.45, 5628.13, 164.99), (-756.05, 5619.92, 164.96), (-721.15, 5614.23, 129.60), (-682.91, 5608.00, 97.27), (-632.02, 5605.64, 97.27), (-583.31, 5593.95, 97.27), (-533.39, 5584.45, 97.27), (-483.33, 5592.52, 97.27), (-436.47, 5611.26, 97.27), (-389.20, 5630.16, 97.27), (-342.72, 5648.75, 97.27), (-295.78, 5667.52, 97.27), (-251.82, 5692.99, 97.27), (-213.12, 5725.18, 97.27), (-174.67, 5757.16, 97.27), (-125.34, 5769.89, 97.27), (-74.43, 5771.82, 97.27), (-23.49, 5774.45, 97.27), (6.49, 5734.40, 97.27), (21.24, 5686.60, 97.27), (36.31, 5637.81, 97.27), (45.13, 5588.17, 97.27), (53.44, 5538.02, 97.27), (56.05, 5487.54, 97.27), (41.91, 5438.62, 97.27), (19.79, 5392.02, 97.27), (-16.80, 5356.57, 97.27), (-51.41, 5319.75, 97.27), (-67.72, 5271.60, 97.30), (-54.05, 5223.70, 107.79), (-25.12, 5182.87, 107.79), (12.66, 5148.95, 107.79), (49.14, 5113.51, 107.79), (99.49, 5106.84, 107.79), (150.01, 5100.33, 107.79), (200.39, 5094.32, 107.79), (251.19, 5090.80, 107.79), (302.10, 5089.47, 107.79), (351.49, 5080.94, 107.79), (400.78, 5072.43, 107.79), (450.40, 5063.53, 107.79), (497.86, 5047.46, 107.79), (546.30, 5031.06, 107.79), (593.44, 5014.39, 107.79), (643.58, 5005.99, 107.79), (693.62, 5015.84, 107.79), (742.61, 5026.80, 107.79), (791.43, 5037.73, 107.79), (841.04, 5041.72, 98.02), (866.62, 5066.11, 62.65), (894.69, 5093.29, 31.05), (928.30, 5131.29, 31.05), (948.19, 5177.60, 31.05), (959.67, 5226.44, 31.05), (960.40, 5276.46, 31.05), (949.54, 5325.44, 31.05), (915.60, 5363.38, 31.05), (870.56, 5386.79, 31.05), (820.35, 5393.04, 31.05), (770.97, 5405.88, 31.05), (726.76, 5429.27, 31.05), (677.55, 5442.15, 31.05), (627.63, 5438.95, 31.05), (577.35, 5430.87, 31.05), (527.26, 5425.94, 31.05), (495.91, 5466.19, 31.05), (463.93, 5505.60, 31.05), (433.48, 5538.86, 53.98), (398.98, 5569.29, 75.79), (364.08, 5605.63, 75.79), (354.80, 5655.29, 75.79), (346.35, 5705.41, 75.79), (335.31, 5754.00, 69.02), (326.02, 5803.92, 69.02), (354.10, 5845.89, 69.02), (392.51, 5879.17, 69.02), (432.32, 5909.69, 73.53), (466.07, 5947.63, 73.53), (496.15, 5988.32, 73.53), (533.36, 6022.97, 73.53), (572.06, 6055.46, 73.53), (610.36, 6087.62, 73.53), (649.48, 6120.47, 73.53), (688.10, 6152.90, 73.53), (726.40, 6185.06, 73.53), (761.76, 6220.58, 73.53), (758.20, 6270.69, 73.53), (742.82, 6319.40, 73.53), (738.70, 6369.91, 73.53), (739.20, 6419.92, 73.53), (739.70, 6469.94, 73.53), (740.20, 6519.95, 73.53), (740.70, 6570.99, 73.53), (749.73, 6620.66, 73.53), (770.46, 6666.99, 73.53), (776.16, 6717.08, 73.53), (788.34, 6766.65, 73.53), (800.30, 6815.34, 73.53), (813.85, 6864.03, 73.53), (844.40, 6904.35, 73.53), (878.85, 6941.42, 73.53), (913.24, 6978.05, 73.53), (927.41, 7026.19, 73.53), (923.96, 7077.05, 73.53), (882.31, 7105.08, 73.53), (832.27, 7114.13, 73.53), (783.90, 7100.69, 73.53), (733.14, 7095.72, 73.53), (682.66, 7089.52, 73.53), (634.71, 7074.09, 73.53), (584.68, 7066.22, 73.53), (536.03, 7050.79, 73.53), (492.98, 7024.58, 73.53), (450.26, 6998.57, 73.53), (402.57, 6980.30, 73.53), (352.86, 6968.60, 73.53), (302.46, 6962.74, 73.53), (252.19, 6962.96, 73.53), (202.11, 6963.19, 73.53), (151.04, 6963.41, 73.53), (100.86, 6963.64, 73.53), (49.79, 6963.87, 73.53), (-0.26, 6972.52, 73.53), (-50.24, 6976.64, 73.53), (-100.09, 6980.74, 73.53), (-150.18, 6988.99, 73.53), (-198.67, 7004.94, 73.53), (-247.72, 7018.33, 73.53), (-298.02, 7014.87, 73.53), (-320.93, 6970.22, 73.53), (-334.14, 6921.07, 73.53)";
+                    std::vector<Vector3> myPath = ParsePathString(temp);
+                    agent.state.pathFollowState.presetPath = myPath;
+                    agent.state.pathFollowState.presetIndex = FindClosestWaypoint(myPath, agent.state.player.position);
+                    agent.state.pathFollowState.looping = true;
+
+                    //std::vector<Vector3> path = { Vector3{7.07241, 7449.82, 17.3746}, Vector3{15.2708, 7443.25, 113.991} };
+                    //pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[0], false);
+                    path = CalculatePath(agent.state.pathFollowState.presetPath, agent.state.player.position, agent.state.pathFollowState.presetIndex, true, 530, agent.state.pathFollowState.looping);
+                    //pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[2], true, agent.state.player);
+
+                    for (const auto& point : path) {
+                        logFile << "Point: " << point.x << ", " << point.y << ", " << point.z << std::endl;
+                    }
+                    logFile << agent.state.player.isMounted << std::endl;
+                    
+                    agent.state.pathFollowState.path = path;
+                    agent.state.pathFollowState.index = 0;
+                    agent.state.pathFollowState.hasPath = true;
+					agent.state.pathFollowState.flyingPath = true;
+
+                    // Move to first waypoint in path
+                    agent.state.waypointReturnState.enabled = true;
+                    agent.state.waypointReturnState.savedPath = path;
+                    agent.state.waypointReturnState.savedIndex = 0;
+
+                    logFile << "Underwater Check: " << globalNavMesh.IsUnderwater(Vector3(414.4220886f, 6918.97f, -5.0f)) << std::endl;
 
                     while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
-                        if (GetAsyncKeyState(VK_END) & 1) {
-                            g_IsRunning = false;
-                            break;
+                        if (agent.state.pathFollowState.pathIndexChange == true) {
+                            if (agent.state.pathFollowState.path[agent.state.pathFollowState.index - 1].Dist3D(agent.state.pathFollowState.presetPath[agent.state.pathFollowState.presetIndex]) < 5.0) {                                
+                                if ((agent.state.pathFollowState.presetIndex >= agent.state.pathFollowState.presetPath.size() - 1) && (agent.state.pathFollowState.looping == 1)) {
+                                    agent.state.pathFollowState.presetIndex = 0;
+                                }
+                                else if (agent.state.pathFollowState.presetIndex < agent.state.pathFollowState.presetPath.size() - 1) {
+                                    agent.state.pathFollowState.presetIndex++;
+                                }
+                                //path = CalculatePath(agent.state.presetPath, agent.state.player.position, agent.state.presetPathIndex, true, 530);
+                            }
+                            agent.state.pathFollowState.pathIndexChange = false;
                         }
-                        for (size_t i = 0; i < path.size() - 1; ++i) {
+
+                        if (agent.state.gatherState.enabled == true) {
+                            UpdateGatherTarget(agent.state);
+                        }
+
+                        // Sync Overlay Position
+                        overlay.UpdatePosition();
+
+                        // 1. Get Window Metrics
+                        RECT clientRect;
+                        GetClientRect(hGameWindow, &clientRect);
+                        int width = clientRect.right - clientRect.left;
+                        int height = clientRect.bottom - clientRect.top;
+
+                        // 2. Update Camera with ACTUAL window size
+                        cam.UpdateScreenSize(width, height);
+
+                        overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
+                        for (size_t i = agent.state.globalState.activeIndex; i < agent.state.globalState.activeIndex + 8; ++i) {
                             int screenPosx, screenPosy;
-                            if (cam.WorldToScreen(path[i], screenPosx, screenPosy, &mouse)) {
+                            if (i >= agent.state.globalState.activePath.size()) break;
+                            if (cam.WorldToScreen(agent.state.globalState.activePath[i], screenPosx, screenPosy, &mouse)) {
                                 // Draw a line using your overlay's draw list
-                                overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0));
+                                overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
                             }
                         }
                         // 1. Extract Data
-                        std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player);
+                        agent.state.entities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent);
+
+                        /*for (size_t i = 0; i < agent.state.entities.size(); ++i) {
+							if (auto object = std::dynamic_pointer_cast<ObjectInfo>(agent.state.entities[i].info)) {
+                                logFile << "Object ID: " << object->id << "  Name: " << object->name << "  Skill Level: " << object->skillLevel << "  Type: " << object->type << std::endl;
+							}
+                            if (auto item = std::dynamic_pointer_cast<ItemInfo>(agent.state.entities[i].info)) {
+								logFile << "Item ID: " << item->id << "  Name: " << item->name << "  Stack Count: " << item->stackCount << "  Bag GUID: (" << std::hex << item->bagGuidHigh << ", " << item->bagGuidLow << std::dec << ")" << std::endl;
+                            }
+                            if (auto bag = std::dynamic_pointer_cast<BagInfo>(agent.state.entities[i].info)) {
+								logFile << "Bag ID: " << bag->id << "  Slots: " << bag->bagSlots << "  Free Slots: " << bag->freeSlots << std::endl;
+                            }
+						}*/
                         //logFile << playerInfo.rotation << std::endl;
 
                         //while (playerInfo.position.Dist3D(tempPos) > 5) {
@@ -515,7 +680,7 @@ void MainThread(HMODULE hModule) {
                         //Sleep(10000000);
 
                         // 2. Update GUI
-                        UpdateGuiData(currentEntities);
+                        UpdateGuiData(agent.state.entities);
 
                         // 3. Logic (Rotation/Console Print)
                         //logFile << nextKey << std::endl;
@@ -523,119 +688,7 @@ void MainThread(HMODULE hModule) {
                         Sleep(10); // Prevent high CPU usage
                         agent.Tick();
                     }
-
-                    while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
-                        // Sync Overlay Position
-                        overlay.UpdatePosition();
-
-                        // HANDLE F3 (PAUSE TOGGLE)
-                        bool currentF3State = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
-
-                        if (currentF3State && !lastF3State) {
-                            isPaused = !isPaused;
-                            if (isPaused) {
-                                std::cout << ">>> PAUSED <<<" << std::endl;
-                                pilot.Stop();
-                            }
-                            else {
-                                std::cout << ">>> RESUMED <<<" << std::endl;
-                            }
-                        }
-                        lastF3State = currentF3State;
-
-                        if (isPaused) {
-                            overlay.DrawFrame(100, 100, RGB(255, 255, 0));
-                            Sleep(100);
-                            continue;
-                        }
-
-                        // 1. Get Window Metrics
-                        RECT clientRect;
-                        GetClientRect(hGameWindow, &clientRect);
-                        int width = clientRect.right - clientRect.left;
-                        int height = clientRect.bottom - clientRect.top;
-
-                        // 2. Update Camera with ACTUAL window size
-                        cam.UpdateScreenSize(width, height);
-
-                        // 3. Extract Entities
-                        std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player);
-                        SortEntitiesByDistance(currentEntities);
-
-                        // Loot Logic (Default behavior)
-                        float min_distance = 99999.0f;
-                        Vector3 closest_enemy_pos = {};
-
-                        // Only auto-target loot if we are NOT currently running a manual path test
-                        if (!agent.state.hasPath) {
-                            for (auto& entity : currentEntities) {
-                                if (auto object = std::dynamic_pointer_cast<ObjectInfo>(entity.info)) {
-                                    if (min_distance > object->distance) {
-                                        if (object->name == "Felweed") {
-                                            min_distance = object->distance;
-                                            closest_enemy_pos = object->position;
-                                            agent.state.lootGuidLow = entity.guidLow;
-                                            agent.state.lootGuidHigh = entity.guidHigh;
-                                            agent.state.hasLootTarget = true;
-                                            agent.state.lootPos = object->position;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // 4. Calculate Screen Position for Overlay
-                        int sx, sy;
-                        if (closest_enemy_pos.x != 0 && cam.WorldToScreen(closest_enemy_pos, sx, sy, &mouse)) {
-                            overlay.DrawFrame(sx, sy, RGB(255, 0, 0));
-                        }
-                        else {
-                            overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
-                        }
-
-                        // --- NEW: FLIGHT TEST (F6) ---
-                        // Only trigger if F6 pressed and not holding down (Edge detect optional, but safe here)
-                            logFile << "[TEST] Starting Flight Test..." << std::endl;
-							logFile << "Player Pos: (" << agent.state.player.position.x << ", " << agent.state.player.position.y << ", " << agent.state.player.position.z << ")" << std::endl;
-
-                            // 1. Define Target: 50 yards away on X+Y
-                            Vector3 start = agent.state.player.position;
-                            Vector3 target = start;
-                            target.x -= 80.0f;
-                            target.y += 10.0f;
-                            // Note: Z is handled by CalculatePath, but we can hint it
-
-                            // 2. Generate Path
-                             //true = Enable Flying Logic (Ascend -> Cruise -> Descend)
-                            //if (agent.state.hasPath == false) {
-                            //    path = CalculatePath(start, target, false, 530);
-                            //    agent.state.currentPath = path;
-                            //    agent.state.pathIndex = 0;
-                            //    agent.state.hasPath = true;
-                            //    agent.state.hasLootTarget = false; // Override loot to force movement
-                            //}
-							logFile << "player position: (" << start.x << ", " << start.y << ", " << start.z << ")" << std::endl;
-                            std::vector<Vector3> path = { Vector3{7.07241, 7449.82, 17.3746}, Vector3{7.07241, 7459.82, 17.3746} };
-                            agent.state.currentPath = path;
-                            agent.state.pathIndex = 0;
-                            agent.state.hasPath = true;
-							pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[0], false);
-
-                            if (!path.empty()) {
-
-                                logFile << "[TEST] Flight path generated with " << path.size() << " waypoints." << std::endl;
-                                for (const auto& p : path) {
-                                    logFile << "WP: " << p.x << ", " << p.y << ", " << p.z << std::endl;
-                                }
-                            }
-                            else {
-                                logFile << "[TEST] Failed to generate flight path. Check NavMesh load." << std::endl;
-                            }
-
-                        // Fast update to reduce flickering
-                        Sleep(10);
-                        //agent.Tick();
-                    }
+                    pilot.Stop();
                     g_IsRunning = false;
                     RaiseException(0xDEADBEEF, 0, 0, nullptr); // Forcibly exit all threads (including GUI)
 
@@ -695,7 +748,7 @@ void MainThread(HMODULE hModule) {
                         // 2. Update Camera with ACTUAL window size
                         cam.UpdateScreenSize(width, height);
 
-                        std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player);
+                        std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent);
                         SortEntitiesByDistance(currentEntities);
 						float min_distance = 99999.0f;
 						Vector3 closest_enemy_pos = {};
@@ -706,10 +759,10 @@ void MainThread(HMODULE hModule) {
                                     if (object->name == "Felweed") {
                                         min_distance = object->distance;
                                         closest_enemy_pos = object->position;
-                                        agent.state.lootGuidLow = entity.guidLow;
-                                        agent.state.lootGuidHigh = entity.guidHigh;
-                                        agent.state.hasLootTarget = true;
-                                        agent.state.lootPos = object->position;
+                                        agent.state.lootState.guidLow = entity.guidLow;
+                                        agent.state.lootState.guidHigh = entity.guidHigh;
+                                        agent.state.lootState.hasLoot = true;
+                                        agent.state.lootState.position = object->position;
                                     }
                                 }
                             }
@@ -744,18 +797,18 @@ void MainThread(HMODULE hModule) {
                     // We use GetAsyncKeyState(VK_END) to allow unloading the DLL safely
                     while (!GetAsyncKeyState(VK_END)) {
 
-                        agent.state.hasLootTarget = true;
+                        agent.state.lootState.hasLoot = true;
 
                         // --- 1. SENSOR UPDATE (Update World State) ---
 						// Only update player every tick
                         static DWORD lastTick = 0;
                         if (GetTickCount() - lastTick < 100) {
-                            std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, true);
+                            std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent, true);
                         }
                         // --- 2. ENTITY UPDATE (GUI) ---
                         // Update all entities every 100ms
                         else {
-                            std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player);
+                            std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent);
                             UpdateGuiData(currentEntities);
                             lastTick = GetTickCount();
                         }

@@ -68,5 +68,14 @@
     <ClInclude Include="Pathfinding2.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="CombatController.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Profile.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Gathering.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

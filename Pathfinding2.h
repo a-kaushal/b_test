@@ -16,11 +16,20 @@
 #include "Vector.h"
 
 // --- CONFIGURATION ---
-const float PATH_STEP_SIZE = 4.0f;
-const float FLY_ALTITUDE = 30.0f;
-const float AGENT_RADIUS = 0.6f;
+const float COLLISION_STEP_SIZE = 2.0f; // Finer granularity for flight checks
+const float WAYPOINT_STEP_SIZE = 5.0f;
+const float HOVER_ALTITUDE = 6.0f;      // Reduced slightly for tighter tunnels
+const float MIN_CLEARANCE = 3.0f;  // Minimum space required below bot
+const float AGENT_RADIUS = 1.5f;   // Collision radius
 const float TILE_SIZE = 533.33333f;
 const int MAX_POLYS = 256;
+
+// --- CONSTANTS FOR DETECTION ---
+const unsigned char AREA_GROUND = 1;
+const unsigned char AREA_MAGMA = 2;  // WARNING: Your generator also sets Roads/Bridges to 2! (Need to recreate mmap)
+const unsigned char AREA_SLIME = 4;
+const unsigned char AREA_WATER = 8;  // 0x08
+const unsigned char AREA_ROAD = 16; 
 
 #pragma pack(push, 1)
 struct MmapTileHeader {
@@ -32,6 +41,29 @@ struct MmapTileHeader {
     char padding[3];
 };
 #pragma pack(pop)
+
+// --- CACHE HELPERS ---
+
+// Custom key for our cache map
+struct PathCacheKey {
+    Vector3 start;
+    Vector3 end;
+    bool flying;
+
+    // Comparison operator for std::map
+    bool operator<(const PathCacheKey& other) const {
+        if (start.x != other.start.x) return start.x < other.start.x;
+        if (start.y != other.start.y) return start.y < other.start.y;
+        if (start.z != other.start.z) return start.z < other.start.z;
+        if (end.x != other.end.x) return end.x < other.end.x;
+        if (end.y != other.end.y) return end.y < other.end.y;
+        if (end.z != other.end.z) return end.z < other.end.z;
+        return flying < other.flying;
+    }
+};
+
+// Global Cache: Stores the calculated path between two waypoints
+static std::map<PathCacheKey, std::vector<Vector3>> globalPathCache;
 
 // Helper function to round up to next power of 2
 inline int nextPowerOfTwo(int n) {
@@ -66,12 +98,77 @@ public:
         dtFreeNavMeshQuery(query);
         query = nullptr;
         currentMapId = -1;
+        // IMPORTANT: Clear the path cache when the mesh is destroyed/changed
+        // because old coordinates might mean different things on a new map.
+        globalPathCache.clear();
+    }
+
+    // 1. DETECT WATER
+    // Checks if the polygon at the location is flagged as liquid
+    bool IsUnderwater(const Vector3& pos) {
+        std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+        if (!query || !mesh) return false;
+
+        float center[3] = { pos.y, pos.z, pos.x };
+        float extent[3] = { 20.0f, 40.0f, 20.0f };
+
+        dtPolyRef ref;
+        float nearest[3];
+        dtQueryFilter filter;
+
+        query->findNearestPoly(center, extent, &filter, &ref, nearest);
+        if (!ref) return false;
+
+        const dtMeshTile* tile = 0;
+        const dtPoly* poly = 0;
+        if (dtStatusSucceed(mesh->getTileAndPolyByRef(ref, &tile, &poly))) {
+            logFile << poly->getArea() << std::endl;
+            unsigned char areaID = poly->getArea();
+
+
+            // Check for Liquids
+            if (areaID == AREA_WATER || areaID == AREA_SLIME) {
+                return true;
+            }
+
+            // OPTIONAL: Treat Area 2 as dangerous ONLY if you are sure it's not a road.
+            // Since your extractor sets Bridges to 2, treating 2 as Lava might break pathing on bridges.
+            // Safe approach: Only treat 8 (Water) and 4 (Slime) as swimming zones for now.
+            // if (areaID == AREA_MAGMA) return true; 
+        }
+        return false;
+    }
+    
+    // 2. DETECT TUNNEL / INDOORS
+    // Checks if there is a "Ceiling" (Walkable Mesh) above the node.
+    bool IsUnderground(const Vector3& pos) {
+        if (!query || !mesh) return false;
+
+        // Logic: Search for ground 20-50 yards ABOVE the node.
+        // If we find valid navmesh up there, we are likely inside/under something.
+
+        Vector3 highProbe = pos;
+        highProbe.z += 40.0f; // Look 40 yards up
+
+        // Reuse GetLocalGroundHeight logic from previous step
+        // (Ensure GetLocalGroundHeight is defined in class as shown previously)
+        float ceilingZ = GetLocalGroundHeight(highProbe);
+
+        // If we found a surface, and it is significantly above our head
+        if (ceilingZ > -90000.0f && ceilingZ > (pos.z + 10.0f)) {
+            return true;
+        }
+
+        return false;
     }
 
     bool LoadMap(const std::string& directory, int mapId) {
         std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
-        if (currentMapId == mapId && mesh && query) return true;
-        Clear();
+        // OPTIMIZATION: Keep map loaded in memory until mapId changes
+        if (currentMapId == mapId && mesh && query) {
+            return true;
+        }
+        Clear();// This now also clears the path cache
 
         query = dtAllocNavMeshQuery();
         if (!query) {
@@ -95,22 +192,8 @@ public:
             size_t fileSize = mmapFile.tellg();
             mmapFile.seekg(0, std::ios::beg);
 
-            logFile << "[MMAP] File size: " << fileSize << " bytes" << std::endl;
-            logFile << "[MMAP] Expected: " << sizeof(dtNavMeshParams) << " bytes" << std::endl;
-
             if (fileSize >= sizeof(dtNavMeshParams)) {
                 mmapFile.read((char*)&params, sizeof(dtNavMeshParams));
-
-                logFile << "[MMAP] Read params (raw):" << std::endl;
-                logFile << "  orig: [" << params.orig[0] << ", " << params.orig[1] << ", " << params.orig[2] << "]" << std::endl;
-                logFile << "  tileWidth: " << params.tileWidth << std::endl;
-                logFile << "  tileHeight: " << params.tileHeight << std::endl;
-                logFile << "  maxTiles: " << params.maxTiles << std::endl;
-                logFile << "  maxPolys: " << params.maxPolys << " (as int: " << (int)params.maxPolys << ")" << std::endl;
-
-                // Don't modify the values from the file - they're already correct
-                // Just validate they're reasonable
-
                 // Validate parameters
                 bool validOrig = !std::isnan(params.orig[0]) && !std::isnan(params.orig[1]) && !std::isnan(params.orig[2]) &&
                     !std::isinf(params.orig[0]) && !std::isinf(params.orig[1]) && !std::isinf(params.orig[2]) &&
@@ -139,7 +222,6 @@ public:
 
         // If .mmap file is invalid or doesn't exist, use calculated fallback
         if (!paramsValid) {
-            logFile << "[MMAP] Using fallback parameters" << std::endl;
 
             // IMPORTANT: We need to determine the correct origin BEFORE initializing the mesh
             // Temporarily load ONE tile to get its coordinates
@@ -171,9 +253,6 @@ public:
                     calcOrig[0] = meshHeader->bmin[0] - (meshHeader->x * 533.33333f);
                     calcOrig[1] = meshHeader->bmin[1];
                     calcOrig[2] = meshHeader->bmin[2] - (meshHeader->y * 533.33333f);
-
-                    logFile << "[MMAP] Calculated origin from first tile: ["
-                        << calcOrig[0] << ", " << calcOrig[1] << ", " << calcOrig[2] << "]" << std::endl;
 
                     dtFree(tileData);
 
@@ -211,32 +290,8 @@ public:
             }
         }
 
-        // Validate parameters before init
-        logFile << "[VALIDATION] Checking parameter validity..." << std::endl;
-
-        // Check for NaN/Inf in origin
-        bool validOrigin = !std::isnan(params.orig[0]) && !std::isinf(params.orig[0]) &&
-            !std::isnan(params.orig[1]) && !std::isinf(params.orig[1]) &&
-            !std::isnan(params.orig[2]) && !std::isinf(params.orig[2]);
-        logFile << "  Origin valid: " << (validOrigin ? "YES" : "NO") << std::endl;
-
-        // Check tile dimensions
-        bool validDims = params.tileWidth > 0 && !std::isnan(params.tileWidth) && !std::isinf(params.tileWidth) &&
-            params.tileHeight > 0 && !std::isnan(params.tileHeight) && !std::isinf(params.tileHeight);
-        logFile << "  Tile dimensions valid: " << (validDims ? "YES" : "NO") << std::endl;
-
-        // Check power of 2 - use unsigned comparison
-        bool isPow2Tiles = (params.maxTiles & (params.maxTiles - 1)) == 0 && params.maxTiles > 0;
-        bool isPow2Polys = (params.maxPolys & (params.maxPolys - 1)) == 0 && params.maxPolys > 0;
-        logFile << "  maxTiles power of 2: " << (isPow2Tiles ? "YES" : "NO") << std::endl;
-        logFile << "  maxPolys power of 2: " << (isPow2Polys ? "YES" : "NO") << std::endl;
-
         // Initialize mesh with params
         mesh = dtAllocNavMesh();
-        logFile << "[MESH] Attempting init with params:" << std::endl;
-        logFile << "  orig: [" << params.orig[0] << ", " << params.orig[1] << ", " << params.orig[2] << "]" << std::endl;
-        logFile << "  tileWidth: " << params.tileWidth << ", tileHeight: " << params.tileHeight << std::endl;
-        logFile << "  tiles: " << params.maxTiles << ", polys: " << params.maxPolys << std::endl;
 
         dtStatus initStatus = mesh->init(&params);
         if (dtStatusFailed(initStatus)) {
@@ -246,8 +301,6 @@ public:
             logFile << "[WORKAROUND] Ignoring .mmap file, using calculated defaults" << std::endl;
 
             // Use defaults that match your actual Detour configuration
-            // DT_TILE_BITS=21 allows up to 2^21 = 2,097,152 tiles
-            // DT_POLY_BITS=31 requires 2^31 = 2,147,483,648 polys
             memset(&params, 0, sizeof(params));
             params.orig[0] = (32.0f - 64.0f) * 533.33333f - 533.33333f;  // -17599.999
             params.orig[1] = -1000.0f;
@@ -277,9 +330,6 @@ public:
                 return false;
             }
         }
-
-        logFile << "[MESH] Init succeeded" << std::endl;
-
         // Load tiles...
         int tilesLoaded = 0;
         for (const auto& entry : std::filesystem::directory_iterator(directory)) {
@@ -290,14 +340,10 @@ public:
                 }
             }
         }
-
         logFile << "[INFO] Loaded " << tilesLoaded << " tiles" << std::endl;
 
         // Initialize query
         dtStatus status = query->init(mesh, 2048);
-        logFile << "[DEBUG] Query init status: " << (dtStatusSucceed(status) ? "SUCCESS" : "FAILED")
-            << " (code: " << status << ")" << std::endl;
-
         if (dtStatusFailed(status)) {
             logFile << "[ERROR] Query init failed" << std::endl;
             return false;
@@ -318,12 +364,6 @@ public:
         // Log version info from first tile only
         static bool versionLogged = false;
         if (!versionLogged) {
-            logFile << "[TILE VERSION CHECK]" << std::endl;
-            logFile << "  mmapMagic: 0x" << std::hex << header.mmapMagic << std::dec << std::endl;
-            logFile << "  dtVersion: " << header.dtVersion << std::endl;
-            logFile << "  mmapVersion: " << header.mmapVersion << std::endl;
-            logFile << "  Current DT_NAVMESH_VERSION: " << DT_NAVMESH_VERSION << std::endl;
-
             if (header.dtVersion != DT_NAVMESH_VERSION) {
                 logFile << "  [WARNING] VERSION MISMATCH! Tiles generated with different Detour version!" << std::endl;
                 logFile << "  Expected: " << DT_NAVMESH_VERSION << " Got: " << header.dtVersion << std::endl;
@@ -338,23 +378,12 @@ public:
         dtMeshHeader* meshHeader = (dtMeshHeader*)data;
         static int diagCount = 0;
         if (diagCount < 5) {
-            logFile << "[TILE DIAG] File: " << filepath << std::endl;
-            logFile << "  Tile header x=" << meshHeader->x << ", y=" << meshHeader->y << std::endl;
-            logFile << "  Tile bmin: [" << meshHeader->bmin[0] << ", " << meshHeader->bmin[1] << ", " << meshHeader->bmin[2] << "]" << std::endl;
-            logFile << "  Tile bmax: [" << meshHeader->bmax[0] << ", " << meshHeader->bmax[1] << ", " << meshHeader->bmax[2] << "]" << std::endl;
-            logFile << "  polyCount: " << meshHeader->polyCount << std::endl;
-
             // Calculate what the tile index SHOULD be
             const dtNavMeshParams* params = mesh->getParams();
             float tileCenterX = (meshHeader->bmin[0] + meshHeader->bmax[0]) / 2.0f;
             float tileCenterZ = (meshHeader->bmin[2] + meshHeader->bmax[2]) / 2.0f;
             int expectedTileX = (int)floorf((tileCenterX - params->orig[0]) / params->tileWidth);
             int expectedTileY = (int)floorf((tileCenterZ - params->orig[2]) / params->tileHeight);
-
-            logFile << "  Tile center: [" << tileCenterX << ", " << tileCenterZ << "]" << std::endl;
-            logFile << "  Expected tileX from position: " << expectedTileX << std::endl;
-            logFile << "  Expected tileY from position: " << expectedTileY << std::endl;
-            logFile << "  Actual header x,y: " << meshHeader->x << "," << meshHeader->y << std::endl;
 
             if (meshHeader->x != expectedTileX || meshHeader->y != expectedTileY) {
                 logFile << "  [ERROR] TILE COORDINATE MISMATCH!" << std::endl;
@@ -374,11 +403,6 @@ public:
         const int tileLutSize = 64;
 
         int tileIndex = tx + ty * tileLutSize;
-
-        if (diagCount < 5) {
-            logFile << "[TILE INDEX CALC] tileLutSize=" << tileLutSize
-                << ", tileIndex=" << tileIndex << " (0x" << std::hex << tileIndex << std::dec << ")" << std::endl;
-        }
 
         // Try to remove any existing tile at this index first
         const dtMeshTile* existingTile = mesh->getTileAt(tx, ty, layer);
@@ -406,139 +430,111 @@ public:
         if (addCount < 5) { // Only log first 5 tiles
             unsigned int salt, tileIdx, polyIdx;
             mesh->decodePolyId(tileRef, salt, tileIdx, polyIdx);  // Use references, not pointers
-            logFile << "[TILE] Added " << filepath << " -> tileRef=" << tileRef
-                << " (tileIdx=" << tileIdx << ", salt=" << salt << ")" << std::endl;
             addCount++;
         }
 
         return true;
     }
-
-    float GetTerrainHeight(const Vector3& pos) {
+    
+    // Helper: Snap to ground
+    float GetGroundZ(const Vector3& pos) {
+        if (!query || !mesh) return -99999.0f;
+        float center[3] = { pos.y, pos.z, pos.x };
+        float extent[3] = { 5.0f, 15.0f, 5.0f }; // Search 15y up/down
         dtPolyRef polyRef;
         float nearest[3];
-        float extent[3] = { 2.0f, 100.0f, 2.0f };
         dtQueryFilter filter;
+        dtStatus status = query->findNearestPoly(center, extent, &filter, &polyRef, nearest);
+        if (dtStatusSucceed(status) && polyRef) return nearest[1];
+        return -99999.0f;
+    }
 
-        if (dtStatusSucceed(query->findNearestPoly(&pos.x, extent, &filter, &polyRef, nearest))) {
+    // UPDATED: Finds the nearest ground surface LOCALLY
+    // Returns -99999.0f if no ground is found within the vertical search range.
+    float GetLocalGroundHeight(const Vector3& pos) {
+        if (!query || !mesh) return -99999.0f;
+        float center[3] = { pos.y, pos.z, pos.x };
+        float extent[3] = { 10.0f, 20.0f, 10.0f };
+        dtPolyRef polyRef; float nearest[3]; dtQueryFilter filter;
+        dtStatus status = query->findNearestPoly(center, extent, &filter, &polyRef, nearest);
+        if (dtStatusSucceed(status) && polyRef) {
             return nearest[1];
         }
         return -99999.0f;
     }
 
-    // Test function to verify query is working
-    bool TestQuery() {
-        std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
-        logFile << "[TEST] Testing query object..." << std::endl;
-
-        if (!mesh || !query) {
-            logFile << "[TEST] FAIL - mesh or query is NULL" << std::endl;
-            return false;
-        }
-
-        // Get first valid tile by scanning ALL slots
-        const dtNavMesh* nav = mesh;
-        const dtMeshTile* testTile = nullptr;
-        int tileIndex = -1;
-
-        for (int i = 0; i < nav->getMaxTiles(); i++) {
-            const dtPoly* poly = nullptr;
-            dtPolyRef testRef = nav->encodePolyId(0, i, 0);  // Use salt=0
-            nav->getTileAndPolyByRef(testRef, &testTile, &poly);
-
-            if (testTile && testTile->header && testTile->header->polyCount > 0) {
-                tileIndex = i;
-                logFile << "[TEST] Found tile at index " << i << " with " << testTile->header->polyCount << " polys" << std::endl;
-                logFile << "[TEST] Tile coords: x=" << testTile->header->x << ", y=" << testTile->header->y << std::endl;
-                logFile << "[TEST] Tile salt: " << testTile->salt << std::endl;
-                logFile << "[TEST] Tile bounds: [" << testTile->header->bmin[0] << "," << testTile->header->bmin[1] << "," << testTile->header->bmin[2]
-                    << "] to [" << testTile->header->bmax[0] << "," << testTile->header->bmax[1] << "," << testTile->header->bmax[2] << "]" << std::endl;
-                break;
-            }
-        }
-
-        if (!testTile) {
-            logFile << "[TEST] FAIL - no valid tiles found in mesh" << std::endl;
-            return false;
-        }
-
-        // Get center of first polygon
-        const dtPoly* poly = &testTile->polys[0];
-        float testPos[3] = { 0, 0, 0 };
-        for (int i = 0; i < poly->vertCount; i++) {
-            const float* v = &testTile->verts[poly->verts[i] * 3];
-            testPos[0] += v[0];
-            testPos[1] += v[1];
-            testPos[2] += v[2];
-        }
-        testPos[0] /= poly->vertCount;
-        testPos[1] /= poly->vertCount;
-        testPos[2] /= poly->vertCount;
-
-        logFile << "[TEST] Testing with position: [" << testPos[0] << ", "
-            << testPos[1] << ", " << testPos[2] << "]" << std::endl;
-
-        // Try findNearestPoly
-        dtPolyRef resultRef = 0;
-        float resultPt[3];
-        float extent[3] = { 10.0f, 10.0f, 10.0f };
+    // --- RECAST SAFE SUBDIVISION (GROUND) ---
+    std::vector<Vector3> SubdivideOnMesh(const std::vector<Vector3>& input) {
+        if (input.empty()) return {};
+        if (!query || !mesh) return input;
+        std::vector<Vector3> output;
+        output.push_back(input[0]);
         dtQueryFilter filter;
+        filter.setIncludeFlags(0xFFFF); filter.setExcludeFlags(0);
 
-        try {
-            dtStatus status = query->findNearestPoly(testPos, extent, &filter, &resultRef, resultPt);
-            logFile << "[TEST] findNearestPoly status: " << status << " (success=" << dtStatusSucceed(status) << ")" << std::endl;
-            logFile << "[TEST] resultRef: " << resultRef << " (0x" << std::hex << resultRef << std::dec << ")" << std::endl;
+        for (size_t i = 0; i < input.size() - 1; ++i) {
+            Vector3 start = input[i]; Vector3 end = input[i + 1];
+            float dist = start.Dist3D(end);
+            if (dist < 0.1f) continue;
+            int steps = (int)(dist / WAYPOINT_STEP_SIZE);
+            if (steps == 0) { output.push_back(end); continue; }
 
-            if (resultRef) {
-                // Try to decode the polyRef
-                const dtMeshTile* refTile = nullptr;
-                const dtPoly* refPoly = nullptr;
-                mesh->getTileAndPolyByRef(resultRef, &refTile, &refPoly);
+            Vector3 dir = (end - start).Normalize();
+            dtPolyRef startPoly;
+            float startPt[3] = { start.y, start.z, start.x };
+            float extent[3] = { 5.0f, 10.0f, 5.0f };
+            query->findNearestPoly(startPt, extent, &filter, &startPoly, startPt);
 
-                if (!refTile || !refPoly) {
-                    logFile << "[TEST] FAIL - polyRef " << resultRef << " couldn't be decoded" << std::endl;
-                    logFile << "[TEST] refTile=" << refTile << ", refPoly=" << refPoly << std::endl;
-
-                    // Try to manually decode
-                    unsigned int salt, tileIdx, polyIdx;
-                    mesh->decodePolyId(resultRef, salt, tileIdx, polyIdx);  // Use references
-                    logFile << "[TEST] Decoded: salt=" << salt << ", tileIdx=" << tileIdx << ", polyIdx=" << polyIdx << std::endl;
-                    logFile << "[TEST] Max tiles in mesh: " << mesh->getMaxTiles() << std::endl;
-
-                    // Check if any tiles exist at all by scanning
-                    int foundTiles = 0;
-                    for (int scan = 0; scan < mesh->getMaxTiles() && foundTiles < 5; scan++) {
-                        const dtMeshTile* scanTile = nullptr;
-                        const dtPoly* scanPoly = nullptr;
-                        // Encode a polyRef for this tile index and try to get it (use salt=0)
-                        dtPolyRef testRef = mesh->encodePolyId(0, scan, 0);
-                        mesh->getTileAndPolyByRef(testRef, &scanTile, &scanPoly);
-                        if (scanTile && scanTile->header) {
-                            logFile << "[TEST]   Found tile at index " << scan
-                                << " coords(" << scanTile->header->x << "," << scanTile->header->y
-                                << ") salt=" << scanTile->salt << std::endl;
-                            foundTiles++;
-                        }
-                    }
-                    logFile << "[TEST] Found " << foundTiles << " tiles total" << std::endl;
-
-                    return false;
-                }
-                else {
-                    logFile << "[TEST] SUCCESS - Query is working!" << std::endl;
-                    logFile << "[TEST] Found poly at tile (" << refTile->header->x << "," << refTile->header->y << ")" << std::endl;
-                    return true;
-                }
+            for (int j = 1; j <= steps; ++j) {
+                Vector3 target = start + (dir * (float)(j * WAYPOINT_STEP_SIZE));
+                float destPt[3] = { target.y, target.z, target.x };
+                float resultPt[3];
+                dtPolyRef visited[16];
+                int visitedCount = 0;
+                query->moveAlongSurface(startPoly, startPt, destPt, &filter, resultPt, visited, &visitedCount, 16);
+                Vector3 safePoint(resultPt[2], resultPt[0], resultPt[1]);
+                output.push_back(safePoint);
+                if (visitedCount > 0) startPoly = visited[visitedCount - 1];
+                dtVcopy(startPt, resultPt);
             }
-            else {
-                logFile << "[TEST] FAIL - No polygon found (status: " << std::hex << status << std::dec << ")" << std::endl;
-                return false;
+            if (output.back().Dist3D(end) > 0.5f) output.push_back(end);
+        }
+        return output;
+    }
+    
+    // Check single point clearance
+    bool CheckFlightPoint(const Vector3& pos) {
+        float gZ = GetGroundZ(pos);
+        if (gZ > -90000.0f) {
+            if (pos.z < gZ + MIN_CLEARANCE) return false;
+        }
+        return true;
+    }
+    
+    // Check entire segment clearance (Thick Raycast)
+    bool CheckFlightSegment(const Vector3& start, const Vector3& end) {
+        Vector3 dir = end - start;
+        float totalDist = dir.Length();
+        if (totalDist < 0.1f) return true;
+
+        dir = dir / totalDist;
+        int numSteps = (int)(totalDist / COLLISION_STEP_SIZE);
+        float r = AGENT_RADIUS;
+
+        // 5-Point Cylinder Check
+        Vector3 offsets[5] = { Vector3(0, 0, 0), Vector3(r, r, 0), Vector3(-r, -r, 0), Vector3(r, -r, 0), Vector3(-r, r, 0) };
+
+        for (int i = 1; i <= numSteps; ++i) {
+            Vector3 pointOnLine = start + (dir * (float)(i * COLLISION_STEP_SIZE));
+            for (const auto& off : offsets) {
+                if (!CheckFlightPoint(pointOnLine + off)) return false;
             }
         }
-        catch (...) {
-            logFile << "[TEST] EXCEPTION during findNearestPoly" << std::endl;
-            return false;
+        // Check destination
+        for (const auto& off : offsets) {
+            if (!CheckFlightPoint(end + off)) return false;
         }
+        return true;
     }
 };
 
@@ -574,19 +570,12 @@ inline std::vector<Vector3> FindPath(const Vector3& start, const Vector3& end) {
 
     float extent[3] = { 500.0f, 1000.0f, 500.0f };
 
-    logFile << "[Query] Detour coords: [" << detourStart[0] << ", "
-        << detourStart[1] << ", " << detourStart[2] << "]" << std::endl;
-
     // Verify coordinates are within mesh bounds
     const dtNavMeshParams* params = globalNavMesh.mesh->getParams();
-    logFile << "[Query] Mesh origin: [" << params->orig[0] << ", "
-        << params->orig[1] << ", " << params->orig[2] << "]" << std::endl;
-    logFile << "[Query] Tile size: " << params->tileWidth << std::endl;
 
     // Calculate expected tile coordinates
     int tileX = (int)floor((detourStart[0] - params->orig[0]) / params->tileWidth);
     int tileY = (int)floor((detourStart[2] - params->orig[2]) / params->tileHeight);
-    logFile << "[Query] Expected tile coords: (" << tileX << ", " << tileY << ")" << std::endl;
 
     // Verify that tile exists
     const dtMeshTile* tile = globalNavMesh.mesh->getTileAt(tileX, tileY, 0);
@@ -594,15 +583,10 @@ inline std::vector<Vector3> FindPath(const Vector3& start, const Vector3& end) {
         logFile << "[ERROR] Target tile doesn't exist!" << std::endl;
         return {};
     }
-    logFile << "[Query] Target tile valid with " << tile->header->polyCount << " polys" << std::endl;
-
-    logFile << "[Query] About to call findNearestPoly - query ptr: "
-        << globalNavMesh.query << " mesh ptr: " << globalNavMesh.mesh << std::endl;
     logFile.flush(); // Force write before potential crash
 
     // USE DETOUR'S findNearestPoly PROPERLY
     dtStatus status = globalNavMesh.query->findNearestPoly(detourStart, extent, &filter, &startRef, startPt);
-    logFile << "[Query] START findNearestPoly returned status: " << status << " startRef: " << startRef << std::endl;
 
     if (!startRef || dtStatusFailed(status)) {
         logFile << "[ERROR] Failed to find start polygon (status: " << status << ")" << std::endl;
@@ -614,7 +598,6 @@ inline std::vector<Vector3> FindPath(const Vector3& start, const Vector3& end) {
     }
 
     status = globalNavMesh.query->findNearestPoly(detourEnd, extent, &filter, &endRef, endPt);
-    logFile << "[Query] END findNearestPoly returned status: " << status << " endRef: " << endRef << std::endl;
 
     if (!endRef || dtStatusFailed(status)) {
         logFile << "[ERROR] Failed to find end polygon (status: " << status << ")" << std::endl;
@@ -624,10 +607,8 @@ inline std::vector<Vector3> FindPath(const Vector3& start, const Vector3& end) {
     dtPolyRef pathPolys[MAX_POLYS];
     int pathCount = 0;
 
-    logFile << "[PATH] Attempting findPath from " << startRef << " to " << endRef << std::endl;
     dtStatus pathStatus = globalNavMesh.query->findPath(startRef, endRef, startPt, endPt,
         &filter, pathPolys, &pathCount, MAX_POLYS);
-    logFile << "[PATH] findPath status: " << pathStatus << " pathCount: " << pathCount << std::endl;
 
     if (pathCount <= 0) {
         logFile << "[ERROR] No path found between polygons (status: " << pathStatus << ")" << std::endl;
@@ -652,81 +633,312 @@ inline std::vector<Vector3> FindPath(const Vector3& start, const Vector3& end) {
     return result;
 }
 
-void DebugNavMesh(dtNavMesh* mesh) {
-    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
-    if (!mesh) {
-        logFile << "[DEBUG] NavMesh is NULL." << std::endl;
-        return;
-    }
+// --- FLIGHT LOGIC UPDATED FOR TUNNELS/OBSTACLES ---
+inline bool IsFlightLineClear(const Vector3& start, const Vector3& end) {
+    Vector3 dir = end - start;
+    float totalDist = dir.Length();
+    if (totalDist < 0.1f) return true;
 
-    const dtNavMesh* nav = mesh;
-    int validTiles = 0;
-    float totalBmin[3] = { 1e9f, 1e9f, 1e9f };
-    float totalBmax[3] = { -1e9f, -1e9f, -1e9f };
+    dir = dir / totalDist;
+    float stepSize = COLLISION_STEP_SIZE;
+    int numSteps = (int)(totalDist / stepSize);
 
-    // Track first few tile locations
-    int firstTileIndices[10];
-    int indexCount = 0;
+    float r = AGENT_RADIUS;
+    Vector3 offsets[5] = {
+        Vector3(0, 0, 0), Vector3(r, r, 0), Vector3(-r, -r, 0),
+        Vector3(r, -r, 0), Vector3(-r, r, 0)
+    };
 
-    // Scan through ALL tile slots (up to maxTiles, which is 4096)
-    for (int i = 0; i < nav->getMaxTiles(); ++i) {
-        const dtMeshTile* tile = nullptr;
-        const dtPoly* poly = nullptr;
+    // Check intermediate points
+    for (int i = 1; i <= numSteps; ++i) {
+        Vector3 pointOnLine = start + (dir * (float)(i * stepSize));
+        for (const auto& off : offsets) {
+            Vector3 probe = pointOnLine + off;
+            
+            // Strict check: if this probe hits ground, the whole line is bad
+            if (!globalNavMesh.CheckFlightPoint(probe)) return false;
 
-        // Try to get tile by encoding a reference with salt=0 (tiles start with salt 0)
-        dtPolyRef testRef = nav->encodePolyId(0, i, 0);
-        nav->getTileAndPolyByRef(testRef, &tile, &poly);
+            // Check local ground height
+            float groundZ = globalNavMesh.GetLocalGroundHeight(probe);
 
-        if (!tile || !tile->header || !tile->dataSize) continue;
-
-        validTiles++;
-        if (indexCount < 10) {
-            firstTileIndices[indexCount++] = i;
+            // If terrain was found:
+            if (groundZ > -90000.0f) {
+                // COLLISION: If the ground is ABOVE our flight path (with buffer)
+                // This detects flying into a hill, tunnel wall, or floor.
+                if (probe.z < (groundZ + MIN_CLEARANCE)) {
+                    return false; // Blocked by terrain
+                }
+            }
+            // Note: If no ground found (void), we assume it's air and safe.
         }
-
-        if (tile->header->bmin[0] < totalBmin[0]) totalBmin[0] = tile->header->bmin[0];
-        if (tile->header->bmin[1] < totalBmin[1]) totalBmin[1] = tile->header->bmin[1];
-        if (tile->header->bmin[2] < totalBmin[2]) totalBmin[2] = tile->header->bmin[2];
-
-        if (tile->header->bmax[0] > totalBmax[0]) totalBmax[0] = tile->header->bmax[0];
-        if (tile->header->bmax[1] > totalBmax[1]) totalBmax[1] = tile->header->bmax[1];
-        if (tile->header->bmax[2] > totalBmax[2]) totalBmax[2] = tile->header->bmax[2];
     }
 
-    logFile << "[DEBUG] Map Statistics:" << std::endl;
-    logFile << " - Loaded Tiles: " << validTiles << std::endl;
-    logFile << " - Max tile slots: " << nav->getMaxTiles() << std::endl;
-
-    // Show first 10 tile indices
-    logFile << " - First " << indexCount << " tile indices with data: ";
-    for (int i = 0; i < indexCount; i++) {
-        logFile << firstTileIndices[i] << " ";
+    // Check destination point clearance
+    for (const auto& off : offsets) {
+        Vector3 probe = end + off;
+        float groundZ = globalNavMesh.GetLocalGroundHeight(probe);
+        if (groundZ > -90000.0f && probe.z < (groundZ + MIN_CLEARANCE)) return false;
     }
-    logFile << std::endl;
 
-    if (validTiles > 0) {
-        logFile << " - Mesh Bounds (Detour Coords):" << std::endl;
-        logFile << "   Min: [" << totalBmin[0] << ", " << totalBmin[1] << ", " << totalBmin[2] << "]" << std::endl;
-        logFile << "   Max: [" << totalBmax[0] << ", " << totalBmax[1] << ", " << totalBmax[2] << "]" << std::endl;
-    }
+    return true;
 }
 
-inline std::vector<Vector3> CalculatePath(Vector3 start, Vector3 end, bool flying, int mapId) {
-    std::string folder = "C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/mmaps/";
-    if (!globalNavMesh.LoadMap(folder, mapId)) return {};
-    DebugNavMesh(globalNavMesh.mesh);
+// --- FLIGHT LOGIC WITH DEBUG ---
+inline std::vector<Vector3> CalculateFlightPath(const Vector3& start, const Vector3& end) {
+    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+    logFile << "[FLIGHT] Calc Flight Path: " << start.x << "," << start.y << "," << start.z
+        << " -> " << end.x << "," << end.y << "," << end.z << std::endl;
 
-    // TEST THE QUERY FIRST
-    if (!globalNavMesh.TestQuery()) {
-        std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
-        printf("[RUNTIME] sizeof(dtBVNode) = %zu bytes\n", sizeof(dtBVNode));
-        printf("[RUNTIME] offsetof(bmin) = %zu\n", offsetof(dtBVNode, bmin));
-        printf("[RUNTIME] offsetof(bmax) = %zu\n", offsetof(dtBVNode, bmax));
-        printf("[RUNTIME] offsetof(i) = %zu\n", offsetof(dtBVNode, i));
-        logFile << "[CRITICAL] Query test failed - something is fundamentally broken" << std::endl;
+    // 1. OPTIMIZATION: Try Straight Line Flight first
+    // If we can see the target and fly there without hitting terrain, just do it.
+    if (globalNavMesh.CheckFlightSegment(start, end)) {
+        std::vector<Vector3> path; path.push_back(start); path.push_back(end); return path;
+    }
+
+    logFile << "[FLIGHT] Direct line blocked. Calculating obstacle avoidance path..." << std::endl;
+
+    // 2. OBSTACLE AVOIDANCE: Use Ground Path to navigate around mountains
+    // Find the ground path first. This gives us the "valley" route around the mountain.
+    std::vector<Vector3> groundPath = FindPath(start, end);
+
+    if (groundPath.empty()) {
+        logFile << "[FLIGHT] WARN: No ground path found. Fallback to High Altitude Safety Hop." << std::endl;
+        // Fallback: The old logic (Fly UP to safe altitude, Move, Down)
+        float maxZ = -99999.0f;
+        for (int i = 0; i < 10; i++) {
+            Vector3 p = start + (end - start) * (i / 10.0f);
+            // Scan higher for this fallback
+            Vector3 highProbe = p; highProbe.z += 100.0f;
+            float h = globalNavMesh.GetLocalGroundHeight(highProbe);
+            if (h > maxZ) maxZ = h;
+        }
+        float safeZ = maxZ + HOVER_ALTITUDE + 20.0f;
+        std::vector<Vector3> fallback;
+        fallback.push_back(start);
+        fallback.push_back(Vector3(start.x, start.y, safeZ));
+        fallback.push_back(Vector3(end.x, end.y, safeZ));
+        fallback.push_back(end);
+        return fallback;
+    }
+
+    // 3. Create "Hover" Path
+    // Lift the ground path by HOVER_ALTITUDE (e.g. 7 yards)
+    // This allows us to fly through tunnels (where ceiling > 7y) and under floating islands
+    std::vector<Vector3> rawFlightPath;
+    rawFlightPath.push_back(start);
+
+    for (size_t i = 1; i < groundPath.size() - 1; ++i) {
+        Vector3 p = groundPath[i];
+
+        // Hover above the ground point found by navigation
+        float targetZ = p.z + HOVER_ALTITUDE;
+
+        rawFlightPath.push_back(Vector3(p.x, p.y, targetZ));
+    }
+    rawFlightPath.push_back(end);
+
+    // 4. Smooth Path (String Pulling)
+    // Collapse waypoints if we can fly straight between them without hitting walls/ground
+    std::vector<Vector3> smoothedPath;
+    smoothedPath.push_back(rawFlightPath[0]);
+
+    size_t currentIdx = 0;
+    while (currentIdx < rawFlightPath.size() - 1) {
+        size_t bestNextIdx = currentIdx + 1;
+
+        // Look ahead to find the furthest visible node
+        for (size_t nextIdx = rawFlightPath.size() - 1; nextIdx > currentIdx + 1; --nextIdx) {
+            if (IsFlightLineClear(rawFlightPath[currentIdx], rawFlightPath[nextIdx])) {
+                bestNextIdx = nextIdx;
+                break;
+            }
+        }
+        smoothedPath.push_back(rawFlightPath[bestNextIdx]);
+        currentIdx = bestNextIdx;
+    }
+    return smoothedPath;
+}
+
+// --- SAFE FLIGHT SUBDIVISION WITH FALLBACKS ---
+inline std::vector<Vector3> SubdivideFlightPath(const std::vector<Vector3>& input) {
+    if (input.empty()) return {};
+    std::vector<Vector3> output;
+    output.push_back(input[0]);
+
+    for (size_t i = 0; i < input.size() - 1; ++i) {
+        Vector3 start = input[i];
+        Vector3 end = input[i + 1];
+
+        float dist3D = start.Dist3D(end);
+        int count = (int)(dist3D / WAYPOINT_STEP_SIZE);
+        if (count < 1) count = 1;
+
+        Vector3 dir2D = (Vector3(end.x, end.y, 0) - Vector3(start.x, start.y, 0)).Normalize();
+        float dist2D = std::sqrt(std::pow(end.x - start.x, 2) + std::pow(end.y - start.y, 2));
+        float heightDiff = end.z - start.z;
+
+        Vector3 prevPoint = start;
+
+        for (int j = 1; j <= count; ++j) {
+            float ratio = (float)j / count;
+            float currentDist2D = dist2D * ratio;
+
+            // 1. Define Candidates
+
+            // Linear Point (Straight Line)
+            Vector3 linearPt = start + (end - start) * ratio;
+
+            // Cruise Point (Maintain Altitude)
+            Vector3 cruisePt = linearPt;
+            cruisePt.z = prevPoint.z;
+
+            // 45-Degree Point
+            Vector3 anglePt = linearPt;
+            if (heightDiff > 0) { // Ascent
+                float climbZ = start.z + currentDist2D;
+                anglePt.z = (climbZ > end.z) ? end.z : climbZ;
+            }
+            else { // Descent
+                float distRemaining = dist2D - currentDist2D;
+                if (distRemaining < std::abs(heightDiff)) {
+                    anglePt.z = end.z + distRemaining; // Dive
+                }
+                else {
+                    anglePt.z = start.z; // Cruise high
+                }
+            }
+
+            Vector3 acceptedPoint = linearPt;
+
+            if (heightDiff < 0) { // DESCENDING
+                // Priority: Dive (45) -> Cruise (High) -> Linear
+                if (globalNavMesh.CheckFlightSegment(prevPoint, anglePt)) {
+                    acceptedPoint = anglePt;
+                }
+                else if (globalNavMesh.CheckFlightSegment(prevPoint, cruisePt)) {
+                    acceptedPoint = cruisePt; // Obstacle below? Stay high.
+                }
+                else {
+                    acceptedPoint = linearPt; // Fallback
+                }
+            }
+            else { // ASCENDING
+                // Priority: Climb (45) -> Linear -> Cruise (Low)
+                if (globalNavMesh.CheckFlightSegment(prevPoint, anglePt)) {
+                    acceptedPoint = anglePt;
+                }
+                else if (globalNavMesh.CheckFlightSegment(prevPoint, linearPt)) {
+                    acceptedPoint = linearPt; // Ceiling hit? Go straight.
+                }
+                else {
+                    acceptedPoint = cruisePt; // Stay low if absolutely blocked
+                }
+            }
+
+            // Final Safety Nudge if chosen point is bad
+            if (!globalNavMesh.CheckFlightPoint(acceptedPoint)) {
+                acceptedPoint.z += 5.0f;
+            }
+
+            output.push_back(acceptedPoint);
+            prevPoint = acceptedPoint;
+        }
+        output.push_back(end);
+    }
+    return output;
+}
+
+inline std::vector<Vector3> CalculatePath(const std::vector<Vector3>& inputPath, const Vector3& startPos, int currentIndex, bool flying, int mapId, bool path_loop = false) {
+    std::string folder = "C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/mmaps/";
+    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+    // LoadMap handles the "keep loaded" logic internally.
+    // It also clears globalPathCache if mapId changes.
+    if (!globalNavMesh.LoadMap(folder, mapId)) return {};
+    
+    std::vector<Vector3> stitchedPath;
+    std::vector<Vector3> modifiedInput;
+
+    // Validation
+    if (inputPath.empty() || currentIndex < 0 || currentIndex >= inputPath.size()) {
         return {};
     }
 
-    std::vector<Vector3> path = FindPath(start, end);
-    return path; // Already in correct WoW coordinate format
+    // Determine the window of points to calculate
+    int lookahead = inputPath.size() - currentIndex;
+    int endIndex = currentIndex + lookahead;
+
+    // Clamp to vector size
+    if (endIndex >= inputPath.size()) {
+        endIndex = (int)inputPath.size() - 1;
+    }
+
+    // If we are at the last point, there is no path to calculate
+    if ((currentIndex >= endIndex) && (startPos.Dist3D(inputPath[currentIndex]) < 5.0f)) {
+        return { inputPath[currentIndex] };
+    }
+
+    if (path_loop == false) {
+        modifiedInput.push_back(startPos);
+        for (int i = currentIndex; i <= endIndex; ++i) {
+            modifiedInput.push_back(inputPath[i]);
+        }
+    }
+    else {
+        for (int i = currentIndex; i < endIndex; ++i) {
+            modifiedInput.push_back(inputPath[i]);
+        }
+        for (int i = 0; i < currentIndex; ++i) {
+            modifiedInput.push_back(inputPath[i]);
+        }
+    }
+
+    // Loop through the segments in our window and stitch the paths
+    for (int i = 0; i < lookahead; ++i) {
+        Vector3 start = modifiedInput[i];
+        Vector3 end = modifiedInput[i + 1];
+        
+        // 1. CHECK CACHE
+        PathCacheKey key = { start, end, flying };
+        auto cacheIt = globalPathCache.find(key);
+
+        std::vector<Vector3> segment;
+
+        if (cacheIt != globalPathCache.end()) {
+            // CACHE HIT: Use existing segment (no recalculation)
+            segment = cacheIt->second;
+        }
+        else {
+            // CACHE MISS: Calculate and store
+            if (flying) {
+                segment = CalculateFlightPath(start, end);
+            }
+            else {
+                segment = FindPath(start, end);
+            }
+            globalPathCache[key] = segment;
+        }
+
+        // Stitching Logic:
+        // If this is the very first segment, add everything.
+        // If it's a subsequent segment, skip the first point (start) 
+        // because it is identical to the last point of the previous segment.
+        logFile << segment[0].x << "  " << segment[0].y << "  " << segment[0].z << segment[1].x << "  " << segment[1].y << "  " << segment[1].z << std::endl;
+        if (segment.size() > 0) {
+            if (stitchedPath.empty()) {
+                stitchedPath.insert(stitchedPath.end(), segment.begin(), segment.end());
+            }
+            else {
+                // Check if segment[0] == last point in fullDetailedPath to avoid dupes
+                // (It usually is, but let's be safe)
+                stitchedPath.insert(stitchedPath.end(), segment.begin() + 1, segment.end());
+            }
+        }
+    }
+    // Subdivide based on mode
+    if (flying) {
+        return SubdivideFlightPath(stitchedPath);
+    }
+    else {
+        return globalNavMesh.SubdivideOnMesh(stitchedPath);
+    }
 }

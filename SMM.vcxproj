@@ -148,15 +148,18 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Camera.h" />
+    <ClInclude Include="CombatController.h" />
     <ClInclude Include="Database.h" />
     <ClInclude Include="Entity.h" />
     <ClInclude Include="GameGui.h" />
+    <ClInclude Include="Gathering.h" />
     <ClInclude Include="GoapSystem.h" />
     <ClInclude Include="Memory.h" />
     <ClInclude Include="MovementController.h" />
     <ClInclude Include="OverlayWindow.h" />
     <ClInclude Include="PathFinding.h" />
     <ClInclude Include="Pathfinding2.h" />
+    <ClInclude Include="Profile.h" />
     <ClInclude Include="ScreenRenderer.h" />
     <ClInclude Include="SimpleKeyboardClient.h" />
     <ClInclude Include="SimpleMouseClient.h" />

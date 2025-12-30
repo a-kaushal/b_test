@@ -1,6 +1,8 @@
 #pragma once
 #include <cmath>
 #include <iostream>
+#include <limits>
+#include <fstream>
 
 struct Vector3 {
     float x, y, z;
@@ -124,4 +126,24 @@ inline Matrix4x4 MatrixPerspectiveFovRH(float fovY, float aspect, float zn, floa
     res.m[2][3] = -1.0f;
     res.m[3][2] = zn * zf / (zn - zf);
     return res;
+}
+
+// Finds the closest waypoint in a path to the input position
+inline int FindClosestWaypoint(std::vector<Vector3>& path, Vector3& position) {
+    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+    if (path.empty()) return -1;
+
+    int closestIndex = 0;
+    float minDistance = (std::numeric_limits<float>::max)();
+
+    for (size_t i = 0; i < path.size(); ++i) {
+        float dist = position.Dist3D(path[i]);
+        logFile << "Distance : " << dist << " | minDistance: " << minDistance << " | closestIndex: " << closestIndex << std::endl;
+        if (dist < minDistance) {
+            minDistance = dist;
+            closestIndex = (int)i;
+        }
+    }
+
+    return closestIndex;
 }

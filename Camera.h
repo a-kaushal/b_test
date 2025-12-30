@@ -66,7 +66,7 @@ public:
         mem.ReadFloat(procId, cameraPtr + CAMERA_PROJECTION_MATRIX_UP_Y, camUp.y);
         mem.ReadFloat(procId, cameraPtr + CAMERA_PROJECTION_MATRIX_UP_Z, camUp.z);
 
-		logFile << "[CAMERA] Position: (" << camPos.x << ", " << camPos.y << ", " << camPos.z << ")" << std::endl;
+		//logFile << "[CAMERA] Position: (" << camPos.x << ", " << camPos.y << ", " << camPos.z << ")" << std::endl;
 
         return (cameraPtr != 0);
     }

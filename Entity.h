@@ -40,6 +40,7 @@ struct PlayerInfo : EntityInfo {
     bool inWater;
 	bool groundMounted;
 	bool flyingMounted;
+    bool isMounted;
     float rotation;
     int32_t health;
     float distance;
@@ -59,7 +60,28 @@ struct ObjectInfo : EntityInfo {
     Vector3 position;
     float distance;
     uint32_t id;
+    int type; // 1 for Herb and 2 for Ore
+    int nodeActive; // 1 if not collected, 0 if collected (only for herb and ore)
+    int skillLevel; // Gathering skill level required
     std::string name;
+};
+
+struct ItemInfo : EntityInfo {
+    ULONG_PTR itemPtr;
+    uint32_t id;
+    std::string name;
+    int stackCount;
+    int bagID;
+    ULONG_PTR bagGuidLow;
+    ULONG_PTR bagGuidHigh;
+};
+
+struct BagInfo : EntityInfo {
+    ULONG_PTR bagPtr;
+    uint32_t id;
+    int bagSlots;
+    int slotCount;
+    int freeSlots;
 };
 
  /* Sorts a vector of GameEntities by distance (Ascending).

@@ -43,9 +43,17 @@ inline ULONG_PTR baseAddress;
 #define ENTITY_POSITION_Z_OFFSET 0x138
 #define ENTITY_ROTATION_OFFSET 0x140
 
+#define OBJECT_POSITION_X_OFFSET 0xF0
+#define OBJECT_POSITION_Y_OFFSET 0xF4
+#define OBJECT_POSITION_Z_OFFSET 0xF8
+#define OBJECT_COLLECTED_OFFSET 0x148
+
 #define ENTITY_PLAYER_STATE_OFFSET 0x2A8
-#define ENTITY_PLAYER_MOUNT_STATE 0xA40
+//#define ENTITY_PLAYER_MOUNT_STATE 0xA40
+#define ENTITY_PLAYER_MOUNT_STATE 0x8D0
 #define ENTITY_PLAYER_HEALTH 0x119F8
+#define ENTITY_PLAYER_EQUIPEMENT_OFFSET 0x14520 // Start of equipment array
+#define ENTITY_PLAYER_BAG_OFFSET 0x14700 // Offset to bag array
 
 
 #define MOUSE_OVER_GUID_OFFSET 0x3F2D038
@@ -67,6 +75,21 @@ inline ULONG_PTR baseAddress;
 #define CAMERA_PROJECTION_MATRIX_UP_X 0x34
 #define CAMERA_PROJECTION_MATRIX_UP_Y 0x38
 #define CAMERA_PROJECTION_MATRIX_UP_Z 0x3C
+
+
+#define PLAYER_BAG_ARRAY 0x8  // Offset to the bag item array in the entity array
+#define PLAYER_BAG_ARRAY_ITEM 0x50 // Offset between array entries
+#define PLAYER_BAG_ITEM 0x28 // Entry to player bag structure
+#define PLAYER_BAG_ITEM_LOW_GUID 0x18 // Low part of item GUID
+#define PLAYER_BAG_ITEM_HIGH_GUID 0x20 // High part of item GUID
+
+
+#define PLAYER_ITEM_TYPE 0xC // Item type in item structure
+#define PLAYER_BAG_ITEM_ID 0xC8 // Item ID in item structure
+#define PLAYER_ITEM_QUANTITY 0x1A8 // Quantity of item in item structure
+#define PLAYER_BAG_LOW_GUID 0x178 // Low part of bag GUID in item structure
+#define PLAYER_BAG_HIGH_GUID 0x180 // High part of bag GUID in item structure
+#define PLAYER_BAG_SLOTS 0x478 // Offset from bag entry
 
 // Helper function to get minimum of two values
 template<typename T>
