@@ -16,11 +16,11 @@
 #include "Vector.h"
 
 // --- CONFIGURATION ---
-const float COLLISION_STEP_SIZE = 2.0f; // Finer granularity for flight checks
+const float COLLISION_STEP_SIZE = 2.0f;
 const float WAYPOINT_STEP_SIZE = 5.0f;
-const float HOVER_ALTITUDE = 6.0f;      // Reduced slightly for tighter tunnels
-const float MIN_CLEARANCE = 3.0f;  // Minimum space required below bot
-const float AGENT_RADIUS = 1.5f;   // Collision radius
+const float HOVER_ALTITUDE = 8.0f;      // Height above ground
+const float MIN_CLEARANCE = 2.5f;       // Min space below bot
+const float AGENT_RADIUS = 1.0f;
 const float TILE_SIZE = 533.33333f;
 const int MAX_POLYS = 256;
 
@@ -685,81 +685,75 @@ inline bool IsFlightLineClear(const Vector3& start, const Vector3& end) {
 
 // --- FLIGHT LOGIC WITH DEBUG ---
 inline std::vector<Vector3> CalculateFlightPath(const Vector3& start, const Vector3& end) {
-    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
-    logFile << "[FLIGHT] Calc Flight Path: " << start.x << "," << start.y << "," << start.z
-        << " -> " << end.x << "," << end.y << "," << end.z << std::endl;
-
-    // 1. OPTIMIZATION: Try Straight Line Flight first
-    // If we can see the target and fly there without hitting terrain, just do it.
+    // 1. Direct Line Check
     if (globalNavMesh.CheckFlightSegment(start, end)) {
         std::vector<Vector3> path; path.push_back(start); path.push_back(end); return path;
     }
 
-    logFile << "[FLIGHT] Direct line blocked. Calculating obstacle avoidance path..." << std::endl;
-
-    // 2. OBSTACLE AVOIDANCE: Use Ground Path to navigate around mountains
-    // Find the ground path first. This gives us the "valley" route around the mountain.
+    // 2. Get Ground Path to navigate around obstacles
     std::vector<Vector3> groundPath = FindPath(start, end);
-
     if (groundPath.empty()) {
-        logFile << "[FLIGHT] WARN: No ground path found. Fallback to High Altitude Safety Hop." << std::endl;
-        // Fallback: The old logic (Fly UP to safe altitude, Move, Down)
-        float maxZ = -99999.0f;
-        for (int i = 0; i < 10; i++) {
-            Vector3 p = start + (end - start) * (i / 10.0f);
-            // Scan higher for this fallback
-            Vector3 highProbe = p; highProbe.z += 100.0f;
-            float h = globalNavMesh.GetLocalGroundHeight(highProbe);
-            if (h > maxZ) maxZ = h;
-        }
-        float safeZ = maxZ + HOVER_ALTITUDE + 20.0f;
-        std::vector<Vector3> fallback;
-        fallback.push_back(start);
+        std::vector<Vector3> fallback; fallback.push_back(start);
+        float safeZ = start.z + 50.0f;
         fallback.push_back(Vector3(start.x, start.y, safeZ));
         fallback.push_back(Vector3(end.x, end.y, safeZ));
-        fallback.push_back(end);
-        return fallback;
+        fallback.push_back(end); return fallback;
     }
 
-    // 3. Create "Hover" Path
-    // Lift the ground path by HOVER_ALTITUDE (e.g. 7 yards)
-    // This allows us to fly through tunnels (where ceiling > 7y) and under floating islands
+    // --- 3. SKYBRIDGE LOGIC ---
+    // Only ascend, never descend (until the end).
     std::vector<Vector3> rawFlightPath;
     rawFlightPath.push_back(start);
 
+    float currentCruiseAlt = start.z; // Track our "Skybridge" height
+
     for (size_t i = 1; i < groundPath.size() - 1; ++i) {
-        Vector3 p = groundPath[i];
+        Vector3& node = groundPath[i];
+        float safeFloorZ = node.z + HOVER_ALTITUDE;
 
-        // Hover above the ground point found by navigation
-        float targetZ = p.z + HOVER_ALTITUDE;
+        float targetZ;
 
-        rawFlightPath.push_back(Vector3(p.x, p.y, targetZ));
+        // A. Tunnel Check: Must drop down to fit
+        if (globalNavMesh.IsUnderground(node)) {
+            targetZ = safeFloorZ;
+            currentCruiseAlt = targetZ; // Reset cruise height to floor
+        }
+        // B. Outdoor Logic
+        else {
+            // If terrain is higher than our cruise, we must climb
+            if (safeFloorZ > currentCruiseAlt) {
+                targetZ = safeFloorZ;
+                currentCruiseAlt = targetZ; // Ratchet up
+            }
+            // If terrain drops (valley/water), we Maintain Altitude
+            else {
+                targetZ = currentCruiseAlt;
+            }
+        }
+
+        rawFlightPath.push_back(Vector3(node.x, node.y, targetZ));
     }
+
+    // Add End Point (The only time we truly descend)
     rawFlightPath.push_back(end);
 
-    // 4. Smooth Path (String Pulling)
-    // Collapse waypoints if we can fly straight between them without hitting walls/ground
-    std::vector<Vector3> smoothedPath;
-    smoothedPath.push_back(rawFlightPath[0]);
-
+    // --- 4. SMOOTHING ---
+    std::vector<Vector3> smoothedPath; smoothedPath.push_back(rawFlightPath[0]);
     size_t currentIdx = 0;
     while (currentIdx < rawFlightPath.size() - 1) {
         size_t bestNextIdx = currentIdx + 1;
-
-        // Look ahead to find the furthest visible node
+        // Check forwards to remove redundant points (e.g. while bridging over water)
         for (size_t nextIdx = rawFlightPath.size() - 1; nextIdx > currentIdx + 1; --nextIdx) {
-            if (IsFlightLineClear(rawFlightPath[currentIdx], rawFlightPath[nextIdx])) {
-                bestNextIdx = nextIdx;
-                break;
+            if (globalNavMesh.CheckFlightSegment(rawFlightPath[currentIdx], rawFlightPath[nextIdx])) {
+                bestNextIdx = nextIdx; break;
             }
         }
-        smoothedPath.push_back(rawFlightPath[bestNextIdx]);
-        currentIdx = bestNextIdx;
+        smoothedPath.push_back(rawFlightPath[bestNextIdx]); currentIdx = bestNextIdx;
     }
     return smoothedPath;
 }
 
-// --- SAFE FLIGHT SUBDIVISION WITH FALLBACKS ---
+// --- SUBDIVISION WITH 45-DEGREE DIVE ---
 inline std::vector<Vector3> SubdivideFlightPath(const std::vector<Vector3>& input) {
     if (input.empty()) return {};
     std::vector<Vector3> output;
@@ -783,63 +777,32 @@ inline std::vector<Vector3> SubdivideFlightPath(const std::vector<Vector3>& inpu
             float ratio = (float)j / count;
             float currentDist2D = dist2D * ratio;
 
-            // 1. Define Candidates
-
-            // Linear Point (Straight Line)
             Vector3 linearPt = start + (end - start) * ratio;
-
-            // Cruise Point (Maintain Altitude)
-            Vector3 cruisePt = linearPt;
-            cruisePt.z = prevPoint.z;
-
-            // 45-Degree Point
+            Vector3 cruisePt = linearPt; cruisePt.z = prevPoint.z;
             Vector3 anglePt = linearPt;
-            if (heightDiff > 0) { // Ascent
+            if (heightDiff > 0) {
                 float climbZ = start.z + currentDist2D;
                 anglePt.z = (climbZ > end.z) ? end.z : climbZ;
             }
-            else { // Descent
+            else {
                 float distRemaining = dist2D - currentDist2D;
-                if (distRemaining < std::abs(heightDiff)) {
-                    anglePt.z = end.z + distRemaining; // Dive
-                }
-                else {
-                    anglePt.z = start.z; // Cruise high
-                }
+                if (distRemaining < std::abs(heightDiff)) anglePt.z = end.z + distRemaining;
+                else anglePt.z = start.z;
             }
 
             Vector3 acceptedPoint = linearPt;
-
             if (heightDiff < 0) { // DESCENDING
-                // Priority: Dive (45) -> Cruise (High) -> Linear
-                if (globalNavMesh.CheckFlightSegment(prevPoint, anglePt)) {
-                    acceptedPoint = anglePt;
-                }
-                else if (globalNavMesh.CheckFlightSegment(prevPoint, cruisePt)) {
-                    acceptedPoint = cruisePt; // Obstacle below? Stay high.
-                }
-                else {
-                    acceptedPoint = linearPt; // Fallback
-                }
+                if (globalNavMesh.CheckFlightSegment(prevPoint, anglePt)) acceptedPoint = anglePt;
+                else if (globalNavMesh.CheckFlightSegment(prevPoint, cruisePt)) acceptedPoint = cruisePt;
+                else acceptedPoint = linearPt;
             }
             else { // ASCENDING
-                // Priority: Climb (45) -> Linear -> Cruise (Low)
-                if (globalNavMesh.CheckFlightSegment(prevPoint, anglePt)) {
-                    acceptedPoint = anglePt;
-                }
-                else if (globalNavMesh.CheckFlightSegment(prevPoint, linearPt)) {
-                    acceptedPoint = linearPt; // Ceiling hit? Go straight.
-                }
-                else {
-                    acceptedPoint = cruisePt; // Stay low if absolutely blocked
-                }
+                if (globalNavMesh.CheckFlightSegment(prevPoint, anglePt)) acceptedPoint = anglePt;
+                else if (globalNavMesh.CheckFlightSegment(prevPoint, linearPt)) acceptedPoint = linearPt;
+                else acceptedPoint = cruisePt;
             }
 
-            // Final Safety Nudge if chosen point is bad
-            if (!globalNavMesh.CheckFlightPoint(acceptedPoint)) {
-                acceptedPoint.z += 5.0f;
-            }
-
+            if (!globalNavMesh.CheckFlightPoint(acceptedPoint)) acceptedPoint.z += 5.0f;
             output.push_back(acceptedPoint);
             prevPoint = acceptedPoint;
         }
@@ -864,13 +827,8 @@ inline std::vector<Vector3> CalculatePath(const std::vector<Vector3>& inputPath,
     }
 
     // Determine the window of points to calculate
-    int lookahead = inputPath.size() - currentIndex;
-    int endIndex = currentIndex + lookahead;
-
-    // Clamp to vector size
-    if (endIndex >= inputPath.size()) {
-        endIndex = (int)inputPath.size() - 1;
-    }
+    int lookahead = inputPath.size() - 1;
+    int endIndex = inputPath.size();
 
     // If we are at the last point, there is no path to calculate
     if ((currentIndex >= endIndex) && (startPos.Dist3D(inputPath[currentIndex]) < 5.0f)) {
@@ -879,9 +837,10 @@ inline std::vector<Vector3> CalculatePath(const std::vector<Vector3>& inputPath,
 
     if (path_loop == false) {
         modifiedInput.push_back(startPos);
-        for (int i = currentIndex; i <= endIndex; ++i) {
+        for (int i = currentIndex; i < endIndex; ++i) {
             modifiedInput.push_back(inputPath[i]);
         }
+        lookahead = inputPath.size();
     }
     else {
         for (int i = currentIndex; i < endIndex; ++i) {
@@ -896,6 +855,8 @@ inline std::vector<Vector3> CalculatePath(const std::vector<Vector3>& inputPath,
     for (int i = 0; i < lookahead; ++i) {
         Vector3 start = modifiedInput[i];
         Vector3 end = modifiedInput[i + 1];
+        logFile << "Start: " << start.x << " " << start.y << " " << start.z << std::endl;
+        logFile << "End: " << end.x << " " << end.y << " " << end.z << std::endl;
         
         // 1. CHECK CACHE
         PathCacheKey key = { start, end, flying };
@@ -922,7 +883,6 @@ inline std::vector<Vector3> CalculatePath(const std::vector<Vector3>& inputPath,
         // If this is the very first segment, add everything.
         // If it's a subsequent segment, skip the first point (start) 
         // because it is identical to the last point of the previous segment.
-        logFile << segment[0].x << "  " << segment[0].y << "  " << segment[0].z << segment[1].x << "  " << segment[1].y << "  " << segment[1].z << std::endl;
         if (segment.size() > 0) {
             if (stitchedPath.empty()) {
                 stitchedPath.insert(stitchedPath.end(), segment.begin(), segment.end());

@@ -30,6 +30,15 @@ struct Vector3 {
     Vector3 operator/(float scalar) const {
         return Vector3(x / scalar, y / scalar, z / scalar);
     }
+    
+    // --- NEW: Equality Operators
+    bool operator==(const Vector3& other) const {
+        return x == other.x && y == other.y && z == other.z;
+    }
+
+    bool operator!=(const Vector3& other) const {
+        return !(*this == other);
+    }
 
     // --- REQUIRED MATH FUNCTIONS ---
 

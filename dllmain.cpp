@@ -307,6 +307,9 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_X_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.x);
                     analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Y_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.y);
                     analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Z_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.z);
+                    analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_LOW, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidLow);
+                    analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_HIGH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidHigh);
+                    analyzer.ReadBool(procId, entity_ptr + ENTITY_ENEMY_ATTACKING, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->inCombat);
                     std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id = id;
                     string rawData = creature_db.getRawLine(id);
 
@@ -325,6 +328,10 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Z_OFFSET, newPlayer.position.z);
                     analyzer.ReadFloat(procId, entity_ptr + ENTITY_ROTATION_OFFSET, newPlayer.rotation);
                     analyzer.ReadUInt32(procId, entity_ptr + ENTITY_PLAYER_STATE_OFFSET, newPlayer.state);
+                    analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_IN_COMBAT_GUID_LOW, newPlayer.inCombatGuidLow);
+                    analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_IN_COMBAT_GUID_HIGH, newPlayer.inCombatGuidLow);
+                    analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_UNDER_ATTACK_GUID_LOW, newPlayer.underAttackGuidLow);
+                    analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_UNDER_ATTACK_GUID_HIGH, newPlayer.underAttackGuidHigh);
 
                     (((newPlayer.state& (1 << 24)) >> 24) == 1) ? newPlayer.isFlying = true : newPlayer.isFlying = false;
                     (((newPlayer.state& (1 << 23)) >> 23) == 1) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
@@ -338,6 +345,9 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     std::cout << "Player Health: " << std::dec << newPlayer.health << std::fixed << std::setprecision(2) << "  Player Rotation: " << newPlayer.rotation << "  Player Pos: (" 
                         << newPlayer.position.x << ", " << newPlayer.position.y << ", " << newPlayer.position.z << ")" << "  Player Flying: " << std::dec << newPlayer.isFlying << "  Player Water: " 
                         << newPlayer.inWater << "  Player Ground Mount: " << newPlayer.groundMounted << "  Player Flying Mount: " << newPlayer.flyingMounted << std::endl;
+
+                    newPlayer.playerGuidLow = guidLow;
+                    newPlayer.playerGuidHigh = guidHigh;
 
                     playerInfo = newPlayer;
                 }
@@ -640,7 +650,7 @@ void MainThread(HMODULE hModule) {
                         cam.UpdateScreenSize(width, height);
 
                         overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
-                        for (size_t i = agent.state.globalState.activeIndex; i < agent.state.globalState.activeIndex + 8; ++i) {
+                        for (size_t i = agent.state.globalState.activeIndex; i < agent.state.globalState.activeIndex + 16; ++i) {
                             int screenPosx, screenPosy;
                             if (i >= agent.state.globalState.activePath.size()) break;
                             if (cam.WorldToScreen(agent.state.globalState.activePath[i], screenPosx, screenPosy, &mouse)) {

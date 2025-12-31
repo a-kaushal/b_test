@@ -42,6 +42,9 @@ inline ULONG_PTR baseAddress;
 #define ENTITY_POSITION_Y_OFFSET 0x134
 #define ENTITY_POSITION_Z_OFFSET 0x138
 #define ENTITY_ROTATION_OFFSET 0x140
+#define ENTITY_ENEMY_IN_COMBAT_GUID_LOW 0x670 // GUID of enemy target
+#define ENTITY_ENEMY_IN_COMBAT_GUID_HIGH 0x678 // Attacking Enemy
+#define ENTITY_ENEMY_ATTACKING 0x11AB0
 
 #define OBJECT_POSITION_X_OFFSET 0xF0
 #define OBJECT_POSITION_Y_OFFSET 0xF4
@@ -54,6 +57,10 @@ inline ULONG_PTR baseAddress;
 #define ENTITY_PLAYER_HEALTH 0x119F8
 #define ENTITY_PLAYER_EQUIPEMENT_OFFSET 0x14520 // Start of equipment array
 #define ENTITY_PLAYER_BAG_OFFSET 0x14700 // Offset to bag array
+#define ENTITY_PLAYER_IN_COMBAT_GUID_LOW 0x670 // Attacking Enemy
+#define ENTITY_PLAYER_IN_COMBAT_GUID_HIGH 0x678 // Attacking Enemy
+#define ENTITY_PLAYER_UNDER_ATTACK_GUID_LOW 0x11BF0 // Under attack from enemy
+#define ENTITY_PLAYER_UNDER_ATTACK_GUID_HIGH 0x11BF8 // Under attack from enemy
 
 
 #define MOUSE_OVER_GUID_OFFSET 0x3F2D038
@@ -274,6 +281,11 @@ public:
 
     // Read double
     bool ReadDouble(DWORD processId, ULONG_PTR address, double& value) {
+        return Read(processId, address, value);
+    }
+
+    // Read bool
+    bool ReadBool(DWORD processId, ULONG_PTR address, bool& value) {
         return Read(processId, address, value);
     }
 

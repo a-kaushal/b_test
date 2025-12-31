@@ -19,7 +19,7 @@ struct ActionState {
     std::vector<Vector3> activePath;
     int activeIndex = 0;
     bool actionChange = 0;
-    bool flyingPath = false;
+    bool flyingPath = true;
     int bagFreeSlots;
 };
 
@@ -39,10 +39,11 @@ struct Looting : public ActionState {
 
 struct Gathering : public ActionState {
     // Gathering (Nodes/Herbs)
-    bool enabled = false;
+    bool enabled = true;
     Vector3 position;
     std::vector<Vector3> path;
     bool hasNode = false;
+    bool nodeActive = false;
     int index;
     ULONG_PTR guidLow;
     ULONG_PTR guidHigh;
@@ -50,7 +51,7 @@ struct Gathering : public ActionState {
 
 struct PathFollowing : public ActionState {
     // Follow a set path
-    bool enabled = false;
+    bool enabled = true;
     std::vector<Vector3> path;
     std::vector<Vector3> presetPath;
     int index;
@@ -64,11 +65,21 @@ struct PathFollowing : public ActionState {
 struct WaypointReturn : public ActionState {
     // Follow a set path
     bool enabled = false;
-    std::vector<Vector3> path = {};
-    std::vector<Vector3> savedPath = {};
+    std::vector<Vector3> path = { { -1000.0f,-1000.0f, -1000.0f } };
+    std::vector<Vector3> savedPath = { { -1000.0f,-1000.0f, -1000.0f } };
     int index;
     int savedIndex;
     bool hasPath = false;
+};
+
+struct Combat : public ActionState {
+    bool enabled = false;
+    std::vector<Vector3> path;
+    bool inCombat;
+    bool underAttack;
+    Vector3 enemyPosition;
+    ULONG_PTR targetGuidLow;
+    ULONG_PTR targetGuidHigh;
 };
 
 // --- WORLD STATE (The Knowledge) ---
@@ -494,7 +505,7 @@ public:
     }
 
     // Priority 70: Higher than Pathing (50), Higher than Looting (60)
-    int GetPriority() override { return 70; }
+    int GetPriority() override { return 100; }
     std::string GetName() override { return "Gather Node"; }
 
     void ResetState() override {
@@ -508,6 +519,10 @@ public:
         ws.globalState.activePath = ws.gatherState.path;
         ws.globalState.activeIndex = ws.gatherState.index;
         int sx, sy;
+
+        if (ws.gatherState.nodeActive == false) {
+            currentState = STATE_FINISH;
+        }
 
         switch (currentState) {
         case STATE_CREATE_PATH: {
@@ -693,6 +708,7 @@ public:
             for (int i = 0; i < 3; ++i) { keyboard.TypeKey(VK_END); Sleep(5); } // Reset Camera
             ResetState();
             ws.gatherState.hasNode = false;
+            ws.gatherState.nodeActive = false;
             ws.gatherState.path.clear();
             return true;
         }
@@ -716,7 +732,7 @@ public:
         return ws.waypointReturnState.enabled;
     }
 
-    int GetPriority() override { return 100; } // STANDARD PRIORITY
+    int GetPriority() override { return 70; } // STANDARD PRIORITY
     std::string GetName() override { return "Return to previous waypoint"; }
 
     ActionState* GetState(WorldState& ws) override {
@@ -730,13 +746,14 @@ public:
             ws.waypointReturnState.index = 0;
         }
 
-        ws.globalState.activePath = ws.pathFollowState.path;
-        ws.globalState.activeIndex = ws.pathFollowState.index;
+        ws.globalState.activePath = ws.waypointReturnState.path;
+        ws.globalState.activeIndex = ws.waypointReturnState.index;
 
         // 1. Check if we finished the path
         if (ws.waypointReturnState.index >= ws.waypointReturnState.path.size()) {
             pilot.Stop();
-            ws.waypointReturnState.path = {};
+            ws.waypointReturnState.path = { { -1000.0f,-1000.0f, -1000.0f } };
+            ws.waypointReturnState.savedPath = { { -1000.0f,-1000.0f, -1000.0f } };
             ws.waypointReturnState.enabled = false;
             ws.waypointReturnState.hasPath = false;
             return true; // Action Complete
@@ -883,6 +900,11 @@ public:
                 pilot.Stop();
             }
             if (bestAction) {
+                // Return to saved waypoint if it exists
+                Vector3 temp = { -1000.0f,-1000.0f, -1000.0f };
+                if (state.waypointReturnState.savedPath[0] != temp) {
+                    state.waypointReturnState.enabled = true;
+                }
                 logFile << "[GOAP] Starting action: " << bestAction->GetName() << std::endl;
             }
             currentAction = bestAction;
@@ -890,11 +912,6 @@ public:
 
         // 3. Execute
         if (currentAction) {
-            // Return to saved waypoint if it exists
-            std::vector<Vector3> temp = {};
-            if (state.waypointReturnState.savedPath != temp) {
-                state.waypointReturnState.enabled = true;
-            }
 
             bool complete = currentAction->Execute(state, pilot);
             // If action finished itself (like reaching end of path), clear current

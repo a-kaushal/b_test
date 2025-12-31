@@ -33,6 +33,8 @@ struct GameEntity {
 
 struct PlayerInfo : EntityInfo {
     ULONG_PTR playerPtr;
+    ULONG_PTR playerGuidLow;
+    ULONG_PTR playerGuidHigh;
     Vector3 position;
     uint32_t state;
     uint32_t mountState;
@@ -41,6 +43,10 @@ struct PlayerInfo : EntityInfo {
 	bool groundMounted;
 	bool flyingMounted;
     bool isMounted;
+    ULONG_PTR inCombatGuidLow;
+    ULONG_PTR inCombatGuidHigh;
+    ULONG_PTR underAttackGuidLow;
+    ULONG_PTR underAttackGuidHigh;
     float rotation;
     int32_t health;
     float distance;
@@ -52,7 +58,10 @@ struct EnemyInfo : EntityInfo {
     float distance;
     int32_t health;
     uint32_t id;
+    bool inCombat = false;
     std::string name;
+    ULONG_PTR targetGuidLow;
+    ULONG_PTR targetGuidHigh;
 };
 
 struct ObjectInfo : EntityInfo {
