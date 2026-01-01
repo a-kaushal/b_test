@@ -82,6 +82,8 @@ private:
     bool m_Connected;
     MOUSE_DRIVER_CONFIG m_Config;
 
+    DWORD holdStart = 0;
+
     // --- SAFETY LOCK VARIABLES ---
     HWND m_LockWindow; // The window we are restricted to
     bool m_SafetyEnabled;

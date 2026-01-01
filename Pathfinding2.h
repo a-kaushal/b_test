@@ -15,6 +15,8 @@
 
 #include "Vector.h"
 
+extern "C" bool CheckVMapLine(int mapId, float x1, float y1, float z1, float x2, float y2, float z2);
+
 // --- CONFIGURATION ---
 const float COLLISION_STEP_SIZE = 2.0f;
 const float WAYPOINT_STEP_SIZE = 5.0f;
@@ -634,7 +636,20 @@ inline std::vector<Vector3> FindPath(const Vector3& start, const Vector3& end) {
 }
 
 // --- FLIGHT LOGIC UPDATED FOR TUNNELS/OBSTACLES ---
-inline bool IsFlightLineClear(const Vector3& start, const Vector3& end) {
+inline bool IsFlightLineClear(const Vector3& start, const Vector3& end, int mapId) {
+    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+
+    // 1. VMAP CHECK (Tree/Building Collision)
+    // We call the external function from VMapLoader.cpp directly.
+    // It returns true if blocked, false if clear.
+    if (CheckVMapLine(mapId, start.x, start.y, start.z, end.x, end.y, end.z)) {
+        // ADD THIS LINE TO SEE IT WORKING:
+        logFile << "[VMAP] BLOCKED! Building or Tree in the way." << std::endl;
+        return false;
+    }
+
+    // 2. NAVMESH CHECK (Terrain/Ground)
+    // Even if VMap is clear (air is empty), we might be clipping through a hill.
     Vector3 dir = end - start;
     float totalDist = dir.Length();
     if (totalDist < 0.1f) return true;
@@ -684,14 +699,16 @@ inline bool IsFlightLineClear(const Vector3& start, const Vector3& end) {
 }
 
 // --- FLIGHT LOGIC WITH DEBUG ---
-inline std::vector<Vector3> CalculateFlightPath(const Vector3& start, const Vector3& end) {
-    // 1. Direct Line Check
-    if (globalNavMesh.CheckFlightSegment(start, end)) {
+inline std::vector<Vector3> CalculateFlightPath(const Vector3& start, const Vector3& end, int mapId) {
+    // 1. Direct Line Check (Checks BOTH VMaps and NavMesh)
+    if (IsFlightLineClear(start, end, mapId)) {
         std::vector<Vector3> path; path.push_back(start); path.push_back(end); return path;
     }
 
-    // 2. Get Ground Path to navigate around obstacles
+    // 2. Direct path blocked (Tree or Hill).
+    // Calculate a GROUND path to go around it.
     std::vector<Vector3> groundPath = FindPath(start, end);
+
     if (groundPath.empty()) {
         std::vector<Vector3> fallback; fallback.push_back(start);
         float safeZ = start.z + 50.0f;
@@ -812,12 +829,13 @@ inline std::vector<Vector3> SubdivideFlightPath(const std::vector<Vector3>& inpu
 }
 
 inline std::vector<Vector3> CalculatePath(const std::vector<Vector3>& inputPath, const Vector3& startPos, int currentIndex, bool flying, int mapId, bool path_loop = false) {
-    std::string folder = "C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/mmaps/";
-    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
-    // LoadMap handles the "keep loaded" logic internally.
-    // It also clears globalPathCache if mapId changes.
-    if (!globalNavMesh.LoadMap(folder, mapId)) return {};
+    std::string mmapFolder = "C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/mmaps/";
     
+    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+
+    // LOAD NAVMESH
+    if (!globalNavMesh.LoadMap(mmapFolder, mapId)) return {};
+        
     std::vector<Vector3> stitchedPath;
     std::vector<Vector3> modifiedInput;
 
@@ -855,8 +873,8 @@ inline std::vector<Vector3> CalculatePath(const std::vector<Vector3>& inputPath,
     for (int i = 0; i < lookahead; ++i) {
         Vector3 start = modifiedInput[i];
         Vector3 end = modifiedInput[i + 1];
-        logFile << "Start: " << start.x << " " << start.y << " " << start.z << std::endl;
-        logFile << "End: " << end.x << " " << end.y << " " << end.z << std::endl;
+        //logFile << "Start: " << start.x << " " << start.y << " " << start.z << std::endl;
+        //logFile << "End: " << end.x << " " << end.y << " " << end.z << std::endl;
         
         // 1. CHECK CACHE
         PathCacheKey key = { start, end, flying };
@@ -871,7 +889,7 @@ inline std::vector<Vector3> CalculatePath(const std::vector<Vector3>& inputPath,
         else {
             // CACHE MISS: Calculate and store
             if (flying) {
-                segment = CalculateFlightPath(start, end);
+                segment = CalculateFlightPath(start, end, mapId);
             }
             else {
                 segment = FindPath(start, end);

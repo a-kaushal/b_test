@@ -8,7 +8,7 @@
 #include <map>
 #include <mutex>
 
-#include "Memory.h"
+#include "MemoryRead.h"
 
 // --- KEYBOARD SPECIFIC DEFINITIONS ---
 #define KBD_SIGNATURE_MAGIC 0x4B42584D
@@ -419,3 +419,49 @@ public:
         return false;
     }
 };
+
+void SendDataRobust(const std::wstring& command, SimpleKeyboardClient& keyboard) {
+    // 1. PREP: Copy command to Clipboard
+    if (OpenClipboard(NULL)) {
+        EmptyClipboard();
+        size_t size = (command.size() + 1) * sizeof(wchar_t);
+        HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, size);
+        if (hGlobal) {
+            void* pData = GlobalLock(hGlobal);
+            memcpy(pData, command.c_str(), size);
+            GlobalUnlock(hGlobal);
+            SetClipboardData(CF_UNICODETEXT, hGlobal);
+        }
+        CloseClipboard();
+    }
+
+    // 2. OPEN CHAT
+    // We do NOT press Escape here.
+    keyboard.SendKey(VK_RETURN, 0, true);
+    Sleep(30); // Hold for 30ms to register
+    keyboard.SendKey(VK_RETURN, 0, false);
+    
+    // 3. WAIT FOR UI (CRITICAL FIX)
+    // "Chat isn't open yet" happens here. 
+    // We must wait for the input box to appear and focus.
+    // 150ms is safe for most PCs. Increase to 200ms if you have low FPS.
+    Sleep(150); 
+
+    // 4. PASTE (Ctrl + V)
+    keyboard.SendKey(VK_CONTROL, 0, true); 
+    Sleep(20); // Small delay for modifier
+    keyboard.SendKey('V', 0, true);        
+    Sleep(20);                             
+    keyboard.SendKey('V', 0, false);       
+    Sleep(20);
+    keyboard.SendKey(VK_CONTROL, 0, false); 
+
+    // 5. WAIT FOR TEXT PROCESSING
+    // Give the game a split second to recognize the pasted string
+    Sleep(50); 
+
+    // 6. EXECUTE (Final Enter)
+    keyboard.SendKey(VK_RETURN, 0, true);
+    Sleep(30); 
+    keyboard.SendKey(VK_RETURN, 0, false);
+}

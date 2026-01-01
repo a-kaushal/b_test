@@ -1,4 +1,7 @@
+#include <winsock2.h>               // MUST be included before windows.h
+#include <ws2tcpip.h>
 #include <windows.h>
+
 #include <thread>
 #include <iostream>
 #include <iomanip>
@@ -327,6 +330,7 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Y_OFFSET, newPlayer.position.y);
                     analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Z_OFFSET, newPlayer.position.z);
                     analyzer.ReadFloat(procId, entity_ptr + ENTITY_ROTATION_OFFSET, newPlayer.rotation);
+                    analyzer.ReadFloat(procId, entity_ptr + ENTITY_VERTICAL_ROTATION_OFFSET, newPlayer.vertRotation);
                     analyzer.ReadUInt32(procId, entity_ptr + ENTITY_PLAYER_STATE_OFFSET, newPlayer.state);
                     analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_IN_COMBAT_GUID_LOW, newPlayer.inCombatGuidLow);
                     analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_IN_COMBAT_GUID_HIGH, newPlayer.inCombatGuidLow);
@@ -522,10 +526,11 @@ void MainThread(HMODULE hModule) {
         }
         SimpleMouseClient mouse; // Create Mouse
         mouse.Connect();         // Connect Mouse
-        MovementController pilot(kbd);
 
         // Find the Game Window
         HWND hGameWindow = FindWindowA(NULL, "World of Warcraft");
+        MovementController pilot(kbd, mouse, hGameWindow);
+
         if (!hGameWindow) {
             logFile << "Waiting for game window..." << std::endl;
             while (!hGameWindow) {
@@ -557,8 +562,9 @@ void MainThread(HMODULE hModule) {
                 baseAddress = FindMainModuleViaDriver(analyzer, procId);
 
                 // Create Camera Helper
-                Camera cam(analyzer, procId);
+                Camera cam(analyzer, mouse, procId);
                 GoapAgent agent(pilot, mouse, kbd, cam, analyzer, procId, baseAddress, hGameWindow);
+                InteractionController interact(pilot, mouse, kbd, cam, analyzer, procId, baseAddress, hGameWindow);
 
                 if (baseAddress != 0) {
                     // Read Offsets
@@ -602,9 +608,9 @@ void MainThread(HMODULE hModule) {
                     path = CalculatePath(agent.state.pathFollowState.presetPath, agent.state.player.position, agent.state.pathFollowState.presetIndex, true, 530, agent.state.pathFollowState.looping);
                     //pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[2], true, agent.state.player);
 
-                    for (const auto& point : path) {
-                        logFile << "Point: " << point.x << ", " << point.y << ", " << point.z << std::endl;
-                    }
+                    //for (const auto& point : path) {
+                    //    logFile << "Point: " << point.x << ", " << point.y << ", " << point.z << std::endl;
+                    //}
                     logFile << agent.state.player.isMounted << std::endl;
                     
                     agent.state.pathFollowState.path = path;
@@ -619,7 +625,94 @@ void MainThread(HMODULE hModule) {
 
                     logFile << "Underwater Check: " << globalNavMesh.IsUnderwater(Vector3(414.4220886f, 6918.97f, -5.0f)) << std::endl;
 
+                    SendDataRobust(L"/cast", kbd);
+
+                    //RECT rect;
+                    //GetClientRect(hGameWindow, &rect);
+                    //POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+                    //ClientToScreen(hGameWindow, &center);
+                    //mouse.MoveAbsolute(center.x, center.y);
+                    //mouse.PressButton(MOUSE_RIGHT); // Hold
+                    //float targetRot = 0.3;
                     while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
+                        // 2. Get Start Rotation
+                    //    float startRot = agent.state.player.rotation; // Assuming you have access to read this
+
+                    //    float diff = targetRot - startRot;
+                    //    const float PI = 3.14159265f;
+                    //    if (diff > PI) diff -= 2 * PI;
+                    //    if (diff <= -PI) diff += 2 * PI;
+
+                    //    // 3. Perform the Test Move
+                    //    int pixels = 10; // Use a larger number (e.g., 100) for a more accurate reading than 10
+
+                    //    if (diff > 0) {
+                    //        pixels = -20;
+                    //    }
+                    //    else {
+                    //        pixels = 20;
+                    //    }
+
+                    //    if (std::abs(diff) <= 0.01) break;
+                    //    if (std::abs(diff) >= PI/2) pixels*=2;
+                    //    if (std::abs(diff) <= 0.2) pixels /= 2;
+
+                    //    // --- RECENTERING LOGIC START ---
+                    //    // Get current cursor position and window bounds
+                    //    POINT currentPos;
+                    //    GetCursorPos(&currentPos);
+
+                    //    RECT rect;
+                    //    GetClientRect(hGameWindow, &rect);
+                    //    POINT topLeft = { rect.left, rect.top };
+                    //    POINT bottomRight = { rect.right, rect.bottom };
+                    //    ClientToScreen(hGameWindow, &topLeft);
+                    //    ClientToScreen(hGameWindow, &bottomRight);
+
+                    //    // Define boundaries (Screen Coordinates) with a safety margin (e.g., 20 pixels)
+                    //    long minX = topLeft.x + 20;
+                    //    long maxX = bottomRight.x - 20;
+                    //    long minY = topLeft.y + 20;
+                    //    long maxY = bottomRight.y - 20;
+
+                    //    // Check if the intended move will push cursor out of bounds
+                    //    // We check both X (primary movement) and Y (drift safety)
+                    //    if ((currentPos.x + pixels > maxX) || (currentPos.x + pixels < minX) ||
+                    //        (currentPos.y > maxY) || (currentPos.y < minY))
+                    //    {
+                    //        // Calculate Center
+                    //        POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+                    //        ClientToScreen(hGameWindow, &center);
+                    //        mouse.ReleaseButton(MOUSE_RIGHT); // Hold
+
+                    //        // Reset Cursor
+                    //        mouse.MoveAbsolute(center.x, center.y);
+                    //        Sleep(50); // Buffer for cursor to settle
+                    //        mouse.PressButton(MOUSE_RIGHT); // Hold
+                    //        Sleep(10); // Buffer for cursor to settle
+                    //    }
+
+                    //    mouse.Move(pixels, 0);          // Move
+
+                    //    agent.state.entities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent);
+                    //    // 4. Calculate Difference
+                    //    float endRot = agent.state.player.rotation;
+                    //    diff = endRot - startRot;
+
+                    //    // Handle Wrap-around (if rotation goes from 6.28 -> 0 or 0 -> 6.28)
+                    //    if (diff > PI) diff -= 2 * PI;
+                    //    if (diff < -PI) diff += 2 * PI;
+
+                    //    // 5. Log Result
+                    //    if (std::abs(diff) > 0.001f) {
+                    //        float pixelsPerRadian = (float)pixels / std::abs(diff);
+                    //        logFile << "Moved " << pixels << " pixels. Rotation Delta: " << diff
+                    //            << ". Est PixelsPerRadian: " << pixelsPerRadian << ". Player Rotation: " << agent.state.player.rotation << std::endl;
+                    //    }
+
+                    //    Sleep(5); // Wait before next test
+                    //continue;
+
                         if (agent.state.pathFollowState.pathIndexChange == true) {
                             if (agent.state.pathFollowState.path[agent.state.pathFollowState.index - 1].Dist3D(agent.state.pathFollowState.presetPath[agent.state.pathFollowState.presetIndex]) < 5.0) {                                
                                 if ((agent.state.pathFollowState.presetIndex >= agent.state.pathFollowState.presetPath.size() - 1) && (agent.state.pathFollowState.looping == 1)) {
@@ -653,7 +746,7 @@ void MainThread(HMODULE hModule) {
                         for (size_t i = agent.state.globalState.activeIndex; i < agent.state.globalState.activeIndex + 16; ++i) {
                             int screenPosx, screenPosy;
                             if (i >= agent.state.globalState.activePath.size()) break;
-                            if (cam.WorldToScreen(agent.state.globalState.activePath[i], screenPosx, screenPosy, &mouse)) {
+                            if (cam.WorldToScreen(agent.state.globalState.activePath[i], screenPosx, screenPosy)) {
                                 // Draw a line using your overlay's draw list
                                 overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
                             }
@@ -781,7 +874,7 @@ void MainThread(HMODULE hModule) {
 
                         // 4. Calculate Screen Position
                         int sx, sy;
-                        if (cam.WorldToScreen(closest_enemy_pos, sx, sy, &mouse)) {
+                        if (cam.WorldToScreen(closest_enemy_pos, sx, sy)) {
                             // 5. Convert Game Coordinates -> Monitor Coordinates
                             // // Draw RED dot if on screen
                             overlay.DrawFrame(sx, sy, RGB(255, 0, 0));

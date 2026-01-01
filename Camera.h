@@ -1,11 +1,12 @@
 #pragma once
-#include "Memory.h"
+#include "MemoryRead.h"
 #include "Vector.h"
 #include "SimpleMouseClient.h"
 
 class Camera {
 private:
     MemoryAnalyzer& mem;
+    SimpleMouseClient& mouse;
     DWORD procId;
     ULONG_PTR cameraMgr = 0;
     ULONG_PTR cameraPtr = 0;
@@ -26,12 +27,12 @@ private:
     float offsetY = 0.0f;
 
 public:
-    Camera(MemoryAnalyzer& m, DWORD pid) : mem(m), procId(pid) {
+    Camera(MemoryAnalyzer& m, SimpleMouseClient& mouse, DWORD pid) : mem(m), procId(pid), mouse(mouse) {
         screenW = GetSystemMetrics(SM_CXSCREEN);
         screenH = GetSystemMetrics(SM_CYSCREEN);
     }
 
-    bool Update(ULONG_PTR baseAddress, SimpleMouseClient* mouse = nullptr) {
+    bool Update(ULONG_PTR baseAddress) {
 
         // 1. Get CameraPtr (Static Offset)
         if (cameraPtr == 0) {
@@ -80,13 +81,19 @@ public:
     }
     
     // --- Getters for ActionLoot ---
-    Vector3 GetPosition() const { return camPos; }
-    Vector3 GetForward() const { return camForward; }
+    Vector3 GetPosition() {
+        Update(baseAddress);
+        return camPos; 
+    }
+    Vector3 GetForward() {
+        Update(baseAddress);
+        return camForward;
+    }
     int GetScreenWidth() const { return screenW; }
     int GetScreenHeight() const { return screenH; }
 
-    bool WorldToScreen(Vector3 targetPos, int& outX, int& outY, SimpleMouseClient* mouse = nullptr) {
-        Update(baseAddress, mouse);
+    bool WorldToScreen(Vector3 targetPos, int& outX, int& outY) {
+        Update(baseAddress);
         std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
         if (!logFile.is_open()) {
             logFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir

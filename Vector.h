@@ -81,6 +81,13 @@ struct Vector3 {
         float dz = z - other.z;
         return std::sqrt(dx * dx + dy * dy + dz * dz);
     }
+
+    // Distance Helper (for your Pathfinding)
+    float Dist2D(const Vector3& other) const {
+        float dx = x - other.x;
+        float dy = y - other.y;
+        return std::sqrt(dx * dx + dy * dy);
+    }
 };
 
 // --- MATRIX STRUCT (Keep this if you haven't added it yet) ---

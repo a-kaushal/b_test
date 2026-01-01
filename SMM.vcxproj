@@ -126,12 +126,13 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;SMM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;WIN32;SMM_EXPORTS;_WINDOWS;_USRDLL;_CRT_SECURE_NO_WARNINGS;
+_CRT_NONSTDC_NO_DEPRECATE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>C:\Users\A\Downloads\recastnavigation-1.6.0\Detour\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib;C:\Users\A\Downloads\SkyFire_548\Build\src\server\collision;C:\Users\A\Downloads\SkyFire_548\Build;C:\Users\A\Downloads\SkyFire_548\Core\dep\g3dlite\include;C:\Users\A\Downloads\SkyFire_548\Core\src\server\collision\Management;C:\Users\A\Downloads\SkyFire_548\Core\src\server\collision\Maps;C:\Users\A\Downloads\SkyFire_548\Core\src\server\collision\Models;C:\Users\A\Downloads\SkyFire_548\Core\src\server\shared;C:\Users\A\Downloads\SkyFire_548\Core\src\server\shared\Configuration;C:\Users\A\Downloads\SkyFire_548\Core\src\server\shared\Debugging;C:\Users\A\Downloads\SkyFire_548\Core\src\server\shared\Database;C:\Users\A\Downloads\SkyFire_548\Core\src\server\shared\Dynamic;C:\Users\A\Downloads\SkyFire_548\Core\src\server\shared\Dynamic\LinkedReference;C:\Users\A\Downloads\SkyFire_548\Core\src\server\shared\Logging;C:\Users\A\Downloads\SkyFire_548\Core\src\server\shared\Threading;C:\Users\A\Downloads\SkyFire_548\Core\src\server\shared\Packets;C:\Users\A\Downloads\SkyFire_548\Core\src\server\shared\Utilities;C:\Users\A\Downloads\SkyFire_548\Core\src\server\shared\DataStores;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Addons;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Entities\Item;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Entities\GameObject;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Entities\Creature;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Entities\Object;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Entities\Object\Updates;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Entities\Unit;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Combat;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Loot;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Miscellaneous;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Grids;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Grids\Cells;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Grids\Notifiers;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Maps;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\DataStores;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Movement\Waypoints;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Movement\Spline;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Movement;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Server;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Server\Protocol;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\World;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Spells;C:\Users\A\Downloads\SkyFire_548\Core\src\server\game\Spells\Auras;C:\Users\A\Downloads\SkyFire_548\Core\src\server\collision;C:\Users\A\Downloads\SkyFire_548\Core\dep\acelite;C:\Program Files\MySQL\MySQL Server 9.5\include;C:\Users\A\Downloads\recastnavigation-1.6.0\Detour\Include;C:\Users\A\Downloads\SkyFire_548\Core\dep\g3dlite\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -142,11 +143,38 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\adler32.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\compress.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\crc32.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\deflate.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzclose.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzlib.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzread.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzwrite.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\infback.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inffast.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inflate.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inftrees.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\trees.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\uncompr.c" />
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zutil.c" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="GameGui.cpp" />
     <ClCompile Include="Movement.h" />
+    <ClCompile Include="VMapLoader.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\crc32.h" />
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\deflate.h" />
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzguts.h" />
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inffast.h" />
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inffixed.h" />
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inflate.h" />
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inftrees.h" />
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\trees.h" />
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zconf.h" />
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zlib.h" />
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zutil.h" />
     <ClInclude Include="Camera.h" />
     <ClInclude Include="CombatController.h" />
     <ClInclude Include="Database.h" />
@@ -154,7 +182,7 @@
     <ClInclude Include="GameGui.h" />
     <ClInclude Include="Gathering.h" />
     <ClInclude Include="GoapSystem.h" />
-    <ClInclude Include="Memory.h" />
+    <ClInclude Include="MemoryRead.h" />
     <ClInclude Include="MovementController.h" />
     <ClInclude Include="OverlayWindow.h" />
     <ClInclude Include="PathFinding.h" />

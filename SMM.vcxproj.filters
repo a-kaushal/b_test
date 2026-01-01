@@ -13,6 +13,12 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="VMap">
+      <UniqueIdentifier>{305349c8-8278-4c4e-b332-c8a5023c98a8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="VMap\Headers">
+      <UniqueIdentifier>{e925dbbc-4ef6-40df-9808-4abf7cfc0b6b}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
@@ -24,12 +30,60 @@
     <ClCompile Include="Movement.h">
       <Filter>Header Files</Filter>
     </ClCompile>
+    <ClCompile Include="VMapLoader.cpp">
+      <Filter>VMap</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\deflate.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzclose.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzlib.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzread.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzwrite.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\infback.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inffast.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inflate.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inftrees.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\trees.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\uncompr.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zutil.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\adler32.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\compress.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\crc32.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="GameGui.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Memory.h">
+    <ClInclude Include="MemoryRead.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SimpleKeyboardClient.h">
@@ -76,6 +130,39 @@
     </ClInclude>
     <ClInclude Include="Gathering.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\crc32.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\deflate.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzguts.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inffast.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inffixed.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inflate.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inftrees.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\trees.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zconf.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zlib.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zutil.h">
+      <Filter>VMap\Headers</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

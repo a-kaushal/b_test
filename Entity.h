@@ -48,6 +48,7 @@ struct PlayerInfo : EntityInfo {
     ULONG_PTR underAttackGuidLow;
     ULONG_PTR underAttackGuidHigh;
     float rotation;
+    float vertRotation;
     int32_t health;
     float distance;
 };
