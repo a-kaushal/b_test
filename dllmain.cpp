@@ -313,11 +313,15 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_LOW, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidLow);
                     analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_HIGH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidHigh);
                     analyzer.ReadBool(procId, entity_ptr + ENTITY_ENEMY_ATTACKING, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->inCombat);
+                    analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->health);
+                    analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_MAX_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->maxHealth);
                     std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id = id;
+                    creature_db.getCreatureReaction(std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id, true, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->reaction);
                     string rawData = creature_db.getRawLine(id);
 
                     if (!rawData.empty()) {
                         std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->name = creature_db.getColumn(rawData, ENEMY_NAME_COLUMN_INDEX);
+                        std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->npcFlag = std::stoi(creature_db.getColumn(rawData, NPC_FLAG_COLUMN_INDEX));
                         std::cout << "Enemy Name: " << std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->name << std::endl;
                     }
                 }
@@ -346,6 +350,8 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     (newPlayer.mountState == 1) ? newPlayer.isMounted = true : newPlayer.isMounted = false;
 
                     analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_HEALTH, newPlayer.health);
+                    analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_MAX_HEALTH, newPlayer.maxHealth);
+                    analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_LEVEL, newPlayer.level);
                     std::cout << "Player Health: " << std::dec << newPlayer.health << std::fixed << std::setprecision(2) << "  Player Rotation: " << newPlayer.rotation << "  Player Pos: (" 
                         << newPlayer.position.x << ", " << newPlayer.position.y << ", " << newPlayer.position.z << ")" << "  Player Flying: " << std::dec << newPlayer.isFlying << "  Player Water: " 
                         << newPlayer.inWater << "  Player Ground Mount: " << newPlayer.groundMounted << "  Player Flying Mount: " << newPlayer.flyingMounted << std::endl;
@@ -367,7 +373,6 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->id = id;
                     object_db.getGatherInfo(std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->id, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->skillLevel, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->type);
                     string rawData = object_db.getRawLine(id);
-
 
                     if (!rawData.empty()) {
                         std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->name = object_db.getColumn(rawData, OBJ_NAME_COLUMN_INDEX);
@@ -399,6 +404,33 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                 // Use std::dynamic_pointer_cast for shared_ptr
                 if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
                     enemy->distance = enemy->position.Dist3D(newPlayer.position);
+
+                    string rawdata = creature_db.getRawLine(enemy->id);
+                    // Fast Lookup
+                    CreatureTemplateEntry* c = creature_db.getCreatureTemplate(enemy->id);
+                    if (c == nullptr) {
+                        logFile << "Creature Template Entry with ID " << enemy->id << " not found." << std::endl;
+                    }
+                    else {
+                        // 1. Check Reaction
+                        if (enemy->reaction == REACTION_HOSTILE) {
+                            // 3. Calculate Range
+                            float range = 20.0f - (float)(newPlayer.level - enemy->level);
+                            // 2. Check Passive Flag (0x0200 = UNIT_FLAG_PASSIVE)
+                            if (c->UnitFlags & 512) logFile << "Creature Template Entry with ID " << enemy->id << " passive flag." << std::endl;
+                            else {
+                                // 4. Elite/Boss Bonus
+                                if (c->Rank >= 1) range += 10.0f; // Elite
+                                if (c->Rank == 3) range = 100.0f; // Boss
+                                // 5. Clamp
+                                if (range < 5.0f) range = 5.0f;
+                                if (range > 45.0f && c->Rank < 3) range = 45.0f;
+                            }
+                            enemy->agroRange = range;
+                        }
+                        enemy->rank = c->Rank;
+                    }
+
                 }
                 else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(entity.info)) {
                     object->distance = object->position.Dist3D(newPlayer.position);
@@ -470,6 +502,8 @@ inline std::vector<Vector3> ParsePathString(const std::string& input) {
 void MainThread(HMODULE hModule) {
     // Load the database files
     creature_db.loadDatabase("Z:\\WowDB\\creatures.tsv");
+    creature_db.parseCreatureTemplates();
+    creature_db.loadFactions("Z:\\WowDB\\FactionTemplate.csv");
     item_db.loadDatabase("Z:\\WowDB\\items.tsv");
     object_db.loadDatabase("Z:\\WowDB\\objects.tsv");
     object_db.loadLocks("Z:\\WowDB\\Lock.csv");
@@ -524,6 +558,7 @@ void MainThread(HMODULE hModule) {
         else {
             logFile << "[SUCCESS] Connected to driver\n" << std::endl;
         }
+        ConsoleInput console(kbd);
         SimpleMouseClient mouse; // Create Mouse
         mouse.Connect();         // Connect Mouse
 
@@ -625,7 +660,7 @@ void MainThread(HMODULE hModule) {
 
                     logFile << "Underwater Check: " << globalNavMesh.IsUnderwater(Vector3(414.4220886f, 6918.97f, -5.0f)) << std::endl;
 
-                    SendDataRobust(L"/cast", kbd);
+                    //console.SendDataRobust(L"/cast");
 
                     //RECT rect;
                     //GetClientRect(hGameWindow, &rect);
@@ -751,6 +786,38 @@ void MainThread(HMODULE hModule) {
                                 overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
                             }
                         }
+
+                        //float min_distance = 99999.0f;
+                        //Vector3 closest_enemy_pos = {};
+                        //for (auto& entity : agent.state.entities) {
+                        //    // Use std::dynamic_pointer_cast for shared_ptr
+                        //    if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
+                        //        if (npc->name == "Young Sporebat") {
+                        //            if ((min_distance > npc->distance) && (npc->health > 0)) {
+                        //                agent.state.combatState.hasTarget = true;
+                        //                agent.state.combatState.enemyPosition = npc->position;
+                        //                agent.state.combatState.targetGuidLow = entity.guidLow;
+                        //                agent.state.combatState.targetGuidHigh = entity.guidHigh;
+                        //                min_distance = npc->distance;
+                        //            }
+                        //        }
+                        //    }
+                        //}
+                         
+                        //for (auto& entity : agent.state.entities) {
+                        //    // Use std::dynamic_pointer_cast for shared_ptr
+                        //    if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
+                        //        if ((entity.guidLow == agent.state.player.underAttackGuidLow) && (entity.guidHigh == agent.state.player.underAttackGuidHigh)) {
+                        //            if (npc->health > 0) {
+                        //                agent.state.combatState.hasTarget = true;
+                        //                agent.state.combatState.enemyPosition = npc->position;
+                        //                agent.state.combatState.targetGuidLow = entity.guidLow;
+                        //                agent.state.combatState.targetGuidHigh = entity.guidHigh;
+                        //            }
+                        //        }
+                        //    }
+                        //}
+
                         // 1. Extract Data
                         agent.state.entities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent);
 

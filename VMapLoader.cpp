@@ -106,41 +106,111 @@ namespace VMParser {
         bool readFile(const std::string& filename) {
             FILE* rf = fopen(filename.c_str(), "rb");
             if (!rf) {
-                LogDebug("FAILED to open file: " + filename);
                 return false;
             }
 
-            char magic[8];
-            if (fread(magic, 1, 8, rf) != 8 || strncmp(magic, "VMAP003", 7) != 0) {
-                LogDebug("Invalid Magic Header in: " + filename);
+            // 1. Read the first 16 bytes to detect the header type
+            char header[16];
+            if (fread(header, 1, 16, rf) != 16) { fclose(rf); return false; }
+
+            // 2. Check for VMAP signature
+            if (strncmp(header, "VMAP", 4) != 0) {
+                // LogDebug("Invalid Header: " + filename);
                 fclose(rf); return false;
             }
 
+            // 3. Handle Variations
+            bool isV4 = false;
+
+            // Check for SkyFire "VMAP_5.3f"
+            if (strncmp(header, "VMAP_5.3f", 9) == 0) {
+                // This header is usually padded. The snippet shows "VMAP_5.3f" + spaces.
+                // We need to verify where the data actually starts. 
+                // Based on your file snippet, the header is likely null/space padded to 16 or 20 bytes.
+                // We've read 16 bytes. Let's peek at the next 4 to see if they look like a size int.
+                // However, a safe bet for this specific format is simply to skip the text.
+                // The snippet shows 'VMAP_5.3f' (9) + 8 bytes of padding = 17 bytes?
+                // Let's reset and seek past the "VMAP_5.3f" string + padding.
+
+                // REWIND and look for the specific format
+                fseek(rf, 0, SEEK_SET);
+                char longHeader[20];
+                fread(longHeader, 1, 20, rf);
+
+                // SkyFire usually pads to 17 or 20 bytes?
+                // Let's assume standard V4 logic: Strings first.
+                // The 'firstVal' after the string is the StringTableSize.
+
+                // HACK: Scan for the first non-zero/non-space byte after "VMAP"
+                // The snippet shows "A8 57" (22440) shortly after header.
+                // That looks like a String Table Size.
+
+                // We will assume the header is exactly 17 bytes (VMAP_5.3f + nulls) based on common custom formats
+                // OR we can just scan for the alignment.
+                fseek(rf, 17, SEEK_SET);
+                isV4 = true;
+            }
+            else if (strncmp(header, "VMAP004", 7) == 0) {
+                // Standard V4: 8 byte header
+                fseek(rf, 8, SEEK_SET);
+                isV4 = true;
+            }
+            else {
+                // Standard V3: 8 byte header
+                fseek(rf, 8, SEEK_SET);
+                isV4 = false;
+            }
+
+            // 4. Read First Value (Count or Table Size)
+            uint32_t firstVal = 0;
+            if (fread(&firstVal, sizeof(uint32_t), 1, rf) != 1) { fclose(rf); return false; }
+
             uint32_t count = 0;
-            if (fread(&count, sizeof(uint32_t), 1, rf) != 1) { fclose(rf); return false; }
+
+            if (isV4) {
+                // firstVal is StringTableSize
+                // Skip the String Table
+                fseek(rf, firstVal, SEEK_CUR);
+
+                // Read the actual Instance Count
+                if (fread(&count, sizeof(uint32_t), 1, rf) != 1) { fclose(rf); return false; }
+            }
+            else {
+                // V3: firstVal is the Instance Count
+                count = firstVal;
+            }
+
+            // Safety check: If count is insanely huge (e.g. > 100,000), we misaligned the header.
+            if (count > 50000) {
+                // LogDebug("Read Error: Abnormal instance count " + std::to_string(count) + " in " + filename);
+                fclose(rf); return false;
+            }
 
             instances.resize(count);
             for (uint32_t i = 0; i < count; ++i) {
                 ModelInstance& inst = instances[i];
-                uint32_t wmoId;
-                if (fread(&inst.id, 4, 1, rf) != 1) break;
-                if (fread(&wmoId, 4, 1, rf) != 1) break;
-                if (fread(&inst.adtId, 4, 1, rf) != 1) break;
+
                 if (fread(&inst.flags, 4, 1, rf) != 1) break;
+                if (fread(&inst.adtId, 4, 1, rf) != 1) break;
+                if (fread(&inst.id, 4, 1, rf) != 1) break;
 
                 fread(&inst.pos, sizeof(float), 3, rf);
-                fread(inst.rot, sizeof(float), 4, rf);
-                float s;
-                fread(&s, sizeof(float), 1, rf);
-                inst.scale = Vector3(s, s, s);
+                fread(inst.rot, sizeof(float), 3, rf); // V4 uses 3 floats for rotation
+                float scale;
+                fread(&scale, sizeof(float), 1, rf);
+                inst.scale = Vector3(scale, scale, scale);
 
                 float min[3], max[3];
                 fread(min, sizeof(float), 3, rf);
                 fread(max, sizeof(float), 3, rf);
                 inst.bound = AABox(Vector3(min[0], min[1], min[2]), Vector3(max[0], max[1], max[2]));
+
+                if (isV4) {
+                    uint32_t nameId;
+                    fread(&nameId, 4, 1, rf); // Skip name index
+                }
             }
 
-            // LogDebug("Successfully loaded " + std::to_string(count) + " models from " + filename);
             fclose(rf);
             return true;
         }
@@ -188,7 +258,7 @@ public:
         // Load if missing
         if (loadedTiles.find(tid) == loadedTiles.end()) {
             char buf[64];
-            sprintf(buf, "%03u_%d_%d.vmtile", mapId, tx, ty);
+            sprintf(buf, "%04u_%02d_%02d.vmtile", mapId, ty, tx);
 
             // Log attempt
             // LogDebug("Attempting to load: " + basePath + buf);

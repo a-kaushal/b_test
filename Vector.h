@@ -88,6 +88,18 @@ struct Vector3 {
         float dy = y - other.y;
         return std::sqrt(dx * dx + dy * dy);
     }
+
+    // Sphere Scan (checks if 'other' is inside a sphere of 'radius' centered at this vector)
+    bool SphereSearch(float radius, const Vector3& other) const {
+        float dx = x - other.x;
+        float dy = y - other.y;
+        float dz = z - other.z;
+
+        float distSqr = dx * dx + dy * dy + dz * dz;
+
+        // Optimization: Compare against squared radius to avoid expensive std::sqrt()
+        return distSqr <= (radius * radius);
+    }
 };
 
 // --- MATRIX STRUCT (Keep this if you haven't added it yet) ---

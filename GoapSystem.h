@@ -79,10 +79,10 @@ struct Combat : public ActionState {
     bool enabled = true;
     std::vector<Vector3> path;
     int32_t targetHealth;
-    bool inCombat;
+    bool inCombat = false; // True when bot is within range of enemy to perform rotation
     int index;
-    bool underAttack;
-    bool hasTarget = false;
+    bool underAttack = false; // True when bot is under attack from a enemy
+    bool hasTarget = false; // True when the bot selects a target to attack, but has not reached within range yet
     Vector3 enemyPosition;
     ULONG_PTR targetGuidLow;
     ULONG_PTR targetGuidHigh;
@@ -151,6 +151,7 @@ public:
         STATE_WAIT_HOVER,    // Wait for tooltip/GUID
         STATE_CLICK,
         STATE_POST_INTERACT_WAIT, // Wait for cast bar or loot window
+        STATE_APPROACH_POST_INTERACT,
         STATE_COMPLETE
     };
 
@@ -169,6 +170,7 @@ private:
 
     // Internal State Variables
     DWORD stateTimer = 0;
+    DWORD pathCalcTimer = 0;
     int pathIndex = 0;
     std::vector<Vector3> currentPath;
 
@@ -187,6 +189,7 @@ public:
     void Reset() {
         currentState = STATE_IDLE;
         stateTimer = 0;
+        pathCalcTimer = 0;
         offsetIndex = 0;
         pathIndex = 0;
         currentPath.clear();
@@ -196,9 +199,31 @@ public:
         currentState = newState;
     }
 
+    string GetState() {
+        switch (currentState) {
+        case STATE_IDLE: return "STATE_IDLE";
+        case STATE_CREATE_PATH: return "STATE_CREATE_PATH";
+        case STATE_APPROACH: return "STATE_APPROACH";
+        case STATE_STABILIZE: return "STATE_STABILIZE";
+        case STATE_ALIGN_CAMERA: return "STATE_ALIGN_CAMERA";
+        case STATE_SCAN_MOUSE: return "STATE_SCAN_MOUSE";
+        case STATE_WAIT_HOVER: return "STATE_WAIT_HOVER";
+        case STATE_CLICK: return "STATE_CLICK";
+        case STATE_POST_INTERACT_WAIT: return "STATE_POST_INTERACT_WAIT";
+        case STATE_APPROACH_POST_INTERACT: return "STATE_APPROACH_POST_INTERACT";
+        case STATE_COMPLETE: return "STATE_COMPLETE";
+        }
+    }
+
     // Main Entry Point
     // returns TRUE if interaction sequence is complete
-    bool EngageTarget(Vector3 targetPos, ULONG_PTR targetGuidLow, ULONG_PTR targetGuidHigh, PlayerInfo& player, std::vector<Vector3>& currentPath, int& pathIndex, float approachDist, bool fly, int postClickWaitMs, MouseButton click) {
+    bool EngageTarget(Vector3 targetPos, ULONG_PTR targetGuidLow, ULONG_PTR targetGuidHigh, PlayerInfo& player, std::vector<Vector3>& currentPath, int& pathIndex, float approachDist, float interactDist, bool checkTarget, bool targetGuid,
+        bool fly, int postClickWaitMs, MouseButton click, bool movingTarget) {
+        if ((currentState != STATE_CREATE_PATH) && (movingTarget == true) && (pathCalcTimer != 0) && (GetTickCount() - pathCalcTimer > 200)) {
+            currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530);
+            pathIndex = 0;
+            pathCalcTimer = GetTickCount();
+        }
 
         switch (currentState) {
         case STATE_IDLE:
@@ -209,19 +234,20 @@ public:
             // Assuming CalculatePath is available globally or via included header
             currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530);
             pathIndex = 0;
+            pathCalcTimer = GetTickCount();
             currentState = STATE_APPROACH;
             return false;
 
         case STATE_APPROACH:
-            if (MoveToTargetLogic(targetPos, currentPath, pathIndex, player, stateTimer, approachDist, fly)) {
+            if (MoveToTargetLogic(targetPos, currentPath, pathIndex, player, stateTimer, interactDist, fly)) {
                 stateTimer = GetTickCount(); // Start stabilization timer
                 currentState = STATE_STABILIZE;
             }
             return false;
 
         case STATE_STABILIZE:
-            // Wait 1s after arriving/dismounting before moving mouse
-            if (GetTickCount() - stateTimer > 1000) {
+            // Wait 300ms after arriving/dismounting before moving mouse
+            if (GetTickCount() - stateTimer > 300) {
                 currentState = STATE_ALIGN_CAMERA;
             }
             return false;
@@ -288,6 +314,14 @@ public:
 
         case STATE_POST_INTERACT_WAIT:
             if (GetTickCount() - stateTimer >= postClickWaitMs) {
+                if (approachDist == interactDist) currentState = STATE_COMPLETE;
+                else currentState = STATE_APPROACH_POST_INTERACT;
+            }
+            return false;
+
+        case STATE_APPROACH_POST_INTERACT:
+            if (MoveToTargetLogic(targetPos, currentPath, pathIndex, player, stateTimer, approachDist, fly)) {
+                stateTimer = GetTickCount();
                 currentState = STATE_COMPLETE;
             }
             return false;
@@ -307,7 +341,7 @@ public:
             // Dismount Logic
             if (player.flyingMounted || player.groundMounted) {
                 if (player.position.Dist3D(path[index - 1]) < 10.0f) {
-                    if (inputCommand.SendData(std::wstring(L"run if IsMounted() then Dismount()end"))) {
+                    if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"))) {
                         inputCommand.Reset();
                         return true;
                     }
@@ -317,7 +351,7 @@ public:
                     if (GetTickCount() - timer > 1000) {
                         keyboard.SendKey('X', 0, false);
                         if (GetTickCount() - timer > 1200) {
-                            if (inputCommand.SendData(std::wstring(L"run if IsMounted() then Dismount()end"))) {
+                            if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"))) {
                                 inputCommand.Reset();
                                 return true;
                             }
@@ -373,7 +407,7 @@ public:
         // 3. Convert Radian Delta to Mouse Pixels
         // Heuristic: ~800 pixels per radian (Adjust this based on mouse sensitivity)
         // Negative sign because dragging Mouse Left (Negative X) usually turns Camera Left (Positive Yaw)
-        int pixels = (int)(diff * -800.0f);
+        int pixels = (int)(diff * -50.0f);
         if (pixels > 100) pixels = 100;
         if (pixels < -100) pixels = -100;
 
@@ -382,7 +416,7 @@ public:
         if (pixels < -100) pixels = -100;
 
         // 5. If we are close enough, stop rotating
-        if (std::abs(pixels) < 5) return true;
+        if (std::abs(pixels) < 50) return true;
 
         // Reset Cursor to center to avoid hitting edge
         RECT rect;
@@ -571,7 +605,7 @@ public:
 
     bool CanExecute(const WorldState& ws) override {
         // Execute if the feature is enabled AND we are either in combat or being attacked
-        return ws.combatState.enabled && (ws.combatState.inCombat || ws.combatState.underAttack);
+        return ws.combatState.enabled && (ws.combatState.inCombat || ws.combatState.underAttack || ws.combatState.hasTarget);
     }
 
     // Priority 200: Higher than Loot(60)/Gather(100), but Lower than EscapeDanger(500)
@@ -590,24 +624,53 @@ public:
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
+        std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+
+        bool lowHp = false;
+
+        if ((ws.player.position.Dist3D(ws.combatState.enemyPosition) > 4.0f) && (ws.combatState.inCombat)){
+            ws.combatState.inCombat = false;
+            interact.Reset();
+        }
+        // Logic to check target health
+        for (auto& entity : ws.entities) {
+            // Use std::dynamic_pointer_cast for shared_ptr
+            if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
+                if ((ws.combatState.targetGuidLow == entity.guidLow) && (ws.combatState.targetGuidHigh == entity.guidHigh)) {
+                    logFile << npc->health << std::endl;
+                    if (npc->health == 0) {
+                        ResetState();
+                        ws.combatState.hasTarget = false;
+                        ws.combatState.underAttack = false;
+                        ws.combatState.inCombat = false;
+                        return true;
+                    }
+                    if ((static_cast<float>(npc->health) / npc->maxHealth) < 0.2f) {
+                        lowHp = true;
+                    }
+                }
+            }
+        }
+        
+        // 1. Target Selection Phase
+        if ((!targetSelected) && (!ws.combatState.inCombat)) {
+            // Range 4.0f (Melee), No Flying, 100ms wait after click
+            logFile << ws.player.isFlying << " " << interact.GetState() << std::endl;
+            if (interact.EngageTarget(ws.combatState.enemyPosition, ws.combatState.targetGuidLow, ws.combatState.targetGuidHigh, ws.player, ws.combatState.path, ws.combatState.index, 2.0f, 10.0f, true, true, ws.player.isFlying, 100, MOUSE_RIGHT, true)) {
+                targetSelected = true;
+                ws.combatState.inCombat = true;
+            }
+        }
         ws.globalState.activePath = ws.combatState.path;
         ws.globalState.activeIndex = ws.combatState.index;
-        // 1. Target Selection Phase
-        if (!targetSelected) {
-            // Range 4.0f (Melee), No Flying, 0ms wait after click (start fighting immediately)
-            if (interact.EngageTarget(ws.combatState.enemyPosition, ws.combatState.targetGuidLow, ws.combatState.targetGuidHigh, ws.player, ws.combatState.path, ws.combatState.index, 4.0f, false, 0, MOUSE_RIGHT)) {
-                targetSelected = true;
-            }
-            return false;
-        }
 
         // 2. Combat Phase (Rotation)
         // Ensure we stay facing the target while fighting
         // Note: We might want a dedicated 'FaceTarget' method in InteractController that doesn't click
         // But for now, just running rotation:
-
-        bool lowHp = false; // Logic to check target health
-        combatController.UpdateRotation(lowHp);
+        if (ws.combatState.inCombat) {
+            combatController.UpdateRotation(lowHp);
+        }
 
         // If mob dies (check logic not shown), return true
         return false;
@@ -719,9 +782,13 @@ public:
             ws.lootState.path,
             ws.lootState.index,
             3.0f,
+            3.0f,
+            false,
+            false,
             true,
             1500,
-            MOUSE_RIGHT
+            MOUSE_RIGHT,
+            false
         );
         ws.globalState.activePath = ws.lootState.path;
         ws.globalState.activeIndex = ws.lootState.index;
@@ -777,9 +844,13 @@ public:
             ws.gatherState.path,
             ws.gatherState.index,
             3.0f,
+            3.0f,
+            false,
+            false,
             true,
             4500,
-            MOUSE_RIGHT
+            MOUSE_RIGHT,
+            false
         );
         ws.globalState.activePath = ws.gatherState.path;
         ws.globalState.activeIndex = ws.gatherState.index;

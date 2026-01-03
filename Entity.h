@@ -38,6 +38,9 @@ struct PlayerInfo : EntityInfo {
     Vector3 position;
     uint32_t state;
     uint32_t mountState;
+    int32_t health;
+    int32_t maxHealth;
+    int32_t level;
     bool isFlying;
     bool inWater;
 	bool groundMounted;
@@ -49,7 +52,6 @@ struct PlayerInfo : EntityInfo {
     ULONG_PTR underAttackGuidHigh;
     float rotation;
     float vertRotation;
-    int32_t health;
     float distance;
 };
 
@@ -58,10 +60,16 @@ struct EnemyInfo : EntityInfo {
     Vector3 position;
     float distance;
     int32_t health;
+    int32_t maxHealth;
+    int32_t level;
     uint32_t id;
+    float agroRange = 0;
     bool inCombat = false;
     std::string name;
-    ULONG_PTR targetGuidLow;
+    int reaction;  // 0 = Hostile, 1 = Neutral, 2 = Friendly
+    int rank;  // (0=Normal, 1=Elite, 2=Rare Elite, 3=Boss)
+    int npcFlag;
+    ULONG_PTR targetGuidLow; // GUID for the unit being targetted by the entity
     ULONG_PTR targetGuidHigh;
 };
 

@@ -68,8 +68,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         AddColumn(hListView, 2, "ID", 100);
         AddColumn(hListView, 3, "Name", 100);
         AddColumn(hListView, 4, "Entity Pointer", 100);
-        AddColumn(hListView, 5, "Type ID", 100);
-        AddColumn(hListView, 6, "Distance", 100);
+        AddColumn(hListView, 5, "Reaction", 100);
+        AddColumn(hListView, 6, "Type ID", 100);
+        AddColumn(hListView, 7, "Distance", 100);
+        AddColumn(hListView, 8, "Agro Range", 100);
 
         SetTimer(hwnd, 1, 250, NULL);
     }
@@ -139,26 +141,62 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             sprintf_s(buffer, "%02X", ent.entityPtr);
             SetItemText(hListView, i, 4, buffer);
 
-            // 5. TYPE ID (Column 5)
-            sprintf_s(buffer, "%d", ent.type);
-            SetItemText(hListView, i, 5, buffer);
-
-            // 6. DISTANCE TO PLAYER (Column 6)
+            // 4. Entity Pointer (Column 4)
             if (ent.info) {
                 if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(ent.info)) {
-                    sprintf_s(buffer, sizeof(buffer), "%.2f", enemy->distance);
-                    SetItemText(hListView, i, 6, buffer);
-                }
-                else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(ent.info)) {
-                    sprintf_s(buffer, sizeof(buffer), "%.2f", object->distance);
-                    SetItemText(hListView, i, 6, buffer);
+                    if (enemy->reaction == 0) {
+                        sprintf_s(buffer, sizeof(buffer), "Enemy");
+                    }
+                    if (enemy->reaction == 1) {
+                        sprintf_s(buffer, sizeof(buffer), "Neutral");
+                    }
+                    if (enemy->reaction == 2) {
+                        sprintf_s(buffer, sizeof(buffer), "Friendly");
+                    }
+                    SetItemText(hListView, i, 5, buffer);
                 }
                 else {
-                    SetItemText(hListView, i, 6, "N/A");
+                    SetItemText(hListView, i, 5, "N/A");
                 }
             }
             else {
-                SetItemText(hListView, i, 6, "N/A");
+                SetItemText(hListView, i, 5, "N/A");
+            }
+
+            // 6. TYPE ID (Column 6)
+            sprintf_s(buffer, "%d", ent.type);
+            SetItemText(hListView, i, 6, buffer);
+
+            // 7. DISTANCE TO PLAYER (Column 7)
+            if (ent.info) {
+                if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(ent.info)) {
+                    sprintf_s(buffer, sizeof(buffer), "%.2f", enemy->distance);
+                    SetItemText(hListView, i, 7, buffer);
+                }
+                else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(ent.info)) {
+                    sprintf_s(buffer, sizeof(buffer), "%.2f", object->distance);
+                    SetItemText(hListView, i, 7, buffer);
+                }
+                else {
+                    SetItemText(hListView, i, 7, "N/A");
+                }
+            }
+            else {
+                SetItemText(hListView, i, 7, "N/A");
+            }
+
+            // 8. AGRO RANGE (Column 8)
+            if (ent.info) {
+                if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(ent.info)) {
+                    sprintf_s(buffer, sizeof(buffer), "%.2f", enemy->agroRange);
+                    SetItemText(hListView, i, 8, buffer);
+                }
+                else {
+                    SetItemText(hListView, i, 8, "N/A");
+                }
+            }
+            else {
+                SetItemText(hListView, i, 8, "N/A");
             }
         }
 

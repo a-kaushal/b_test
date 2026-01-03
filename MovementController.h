@@ -29,7 +29,7 @@ private:
     const float PI = 3.14159265f;
     const float TWO_PI = 6.28318530f;
     
-    const float PIXELS_PER_RADIAN_YAW = 10.0f;
+    const float PIXELS_PER_RADIAN_YAW = 25.0f;
     const float PIXELS_PER_RADIAN_PITCH = 10.0f;
 
     // User specified: 1.0 radian per second
@@ -96,7 +96,7 @@ public:
         float dist2D = std::sqrt(dx * dx + dy * dy);
         // Check if mount is currently equipped. If it isn't then equip it
         if ((isFlying == true) && (player.flyingMounted == false)) {
-            inputCommand.SendData(std::wstring(L"run if not(IsFlyableArea()and IsMounted())then CallCompanion(\"Mount\", 1) end "));
+            inputCommand.SendDataRobust(std::wstring(L"/run if not(IsFlyableArea()and IsMounted())then CallCompanion(\"Mount\", 1) end "));
             return;
         }
         if (player.flyingMounted == true) {
@@ -107,99 +107,141 @@ public:
         // --- CHECK IF COASTING ---
         // If we are very close to the waypoint, STOP steering and just drive forward.
         // This prevents the "Jitter" where atan2 flips out at close range.
-        //bool isCoasting = (dist2D < COAST_DISTANCE);
+        bool isCoasting = (dist2D < COAST_DISTANCE);
 
-        //// --- 1. CALCULATE YAW ---
-        //float targetYaw = std::atan2(dy, dx);
-        //float yawDiff = NormalizeAngle(targetYaw - currentRot);
+        // --- 1. CALCULATE YAW ---
+        float targetYaw = std::atan2(dy, dx);
+        float yawDiff = NormalizeAngle(targetYaw - currentRot);
 
-        //// --- 2. CALCULATE PITCH ---
-        //float pitchDiff = 0.0f;
-        //float targetPitch = 0.0f;
-        //bool useElevatorMode = false;
+        // --- 2. CALCULATE PITCH ---
+        float pitchDiff = 0.0f;
+        float targetPitch = 0.0f;
+        bool useElevatorMode = false;
 
-        //if (isFlying && !isCoasting) { // Disable elevator logic if coasting
-        //    targetPitch = std::atan2(dz, dist2D);
+        if (isFlying && !isCoasting) { // Disable elevator logic if coasting
+            targetPitch = std::atan2(dz, dist2D);
 
-        //    if (targetPitch > STEEP_CLIMB_THRESHOLD) {
-        //        useElevatorMode = true;
-        //        kbd.SendKey(KEY_ASCEND, 0, true);
-        //        kbd.SendKey(KEY_DESCEND, 0, false);
-        //    }
-        //    else if (targetPitch < -STEEP_CLIMB_THRESHOLD) {
-        //        useElevatorMode = true;
-        //        kbd.SendKey(KEY_DESCEND, 0, true);
-        //        kbd.SendKey(KEY_ASCEND, 0, false);
-        //    }
-        //    else {
-        //        kbd.SendKey(KEY_ASCEND, 0, false);
-        //        kbd.SendKey(KEY_DESCEND, 0, false);
-        //        pitchDiff = targetPitch - player.vertRotation;
-        //    }
-        //}
-        //else {
-        //    kbd.SendKey(KEY_ASCEND, 0, false);
-        //    kbd.SendKey(KEY_DESCEND, 0, false);
-        //}
+            if (targetPitch > STEEP_CLIMB_THRESHOLD) {
+                useElevatorMode = true;
+                kbd.SendKey(KEY_ASCEND, 0, true);
+                kbd.SendKey(KEY_DESCEND, 0, false);
+            }
+            else if (targetPitch < -STEEP_CLIMB_THRESHOLD) {
+                useElevatorMode = true;
+                kbd.SendKey(KEY_DESCEND, 0, true);
+                kbd.SendKey(KEY_ASCEND, 0, false);
+            }
+            else {
+                kbd.SendKey(KEY_ASCEND, 0, false);
+                kbd.SendKey(KEY_DESCEND, 0, false);
+                pitchDiff = targetPitch - player.vertRotation;
+            }
+        }
+        else {
+            kbd.SendKey(KEY_ASCEND, 0, false);
+            kbd.SendKey(KEY_DESCEND, 0, false);
+        }
 
-        //// --- 3. MOUSE STEERING ---
-        //if (!isSteering) {
-        //    mouse.PressButton(MOUSE_RIGHT);
-        //    isSteering = true;
-        //    Sleep(10);
-        //}
+        // --- 3. MOUSE STEERING ---
+        if (!isSteering) {
+            mouse.PressButton(MOUSE_RIGHT);
+            isSteering = true;
+            Sleep(10);
+        }
 
-        //int pixelsYaw = 0;
-        //int pixelsPitch = 0;
+        int pixelsYaw = 0;
+        int pixelsPitch = 0;
 
-        //if (!isCoasting) {
-        //    // Yaw
-        //    if (std::abs(yawDiff) > TURN_THRESHOLD) {
-        //        pixelsYaw = (int)(yawDiff * -PIXELS_PER_RADIAN_YAW);
-        //    }
+        if (!isCoasting) {
+            // Yaw
+            if (std::abs(yawDiff) > TURN_THRESHOLD) {
+                pixelsYaw = (int)(yawDiff * -PIXELS_PER_RADIAN_YAW);
+            }
 
-        //    // Pitch (Only if not using elevator keys)
-        //    if (isFlying && !useElevatorMode) {
-        //        if (std::abs(pitchDiff) > PITCH_DEADZONE) {
-        //            pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
-        //        }
-        //    }
+            // Pitch (Only if not using elevator keys)
+            if (isFlying && !useElevatorMode) {
+                if (std::abs(pitchDiff) > PITCH_DEADZONE) {
+                    pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
+                }
+            }
 
-        //    // Clamp
-        //    pixelsYaw = std::clamp(pixelsYaw, -60, 60);
-        //    pixelsPitch = std::clamp(pixelsPitch, -30, 30);
-        //}
-        //else {
-        //    // FORCE STRAIGHT: We are coasting through the waypoint
-        //    pixelsYaw = 0;
-        //    pixelsPitch = 0;
-        //}
+            // Clamp
+            pixelsYaw = std::clamp(pixelsYaw, -60, 60);
+            pixelsPitch = std::clamp(pixelsPitch, -30, 30);
+        }
+        else {
+            // FORCE STRAIGHT: We are coasting through the waypoint
+            pixelsYaw = 0;
+            pixelsPitch = 0;
+        }
 
-        //// Execute Mouse Move
-        //if (pixelsYaw != 0 || pixelsPitch != 0) {
-        //    // Smart Recenter
-        //    POINT cursor; GetCursorPos(&cursor);
-        //    RECT rect; GetClientRect(hGameWindow, &rect);
-        //    POINT topLeft = { rect.left, rect.top };
-        //    POINT bottomRight = { rect.right, rect.bottom };
-        //    ClientToScreen(hGameWindow, &topLeft);
-        //    ClientToScreen(hGameWindow, &bottomRight);
+        // Execute Mouse Move
+        if (pixelsYaw != 0 || pixelsPitch != 0) {
+            // Smart Recenter
+            POINT cursor; GetCursorPos(&cursor);
+            RECT rect; GetClientRect(hGameWindow, &rect);
+            POINT topLeft = { rect.left, rect.top };
+            POINT bottomRight = { rect.right, rect.bottom };
+            ClientToScreen(hGameWindow, &topLeft);
+            ClientToScreen(hGameWindow, &bottomRight);
 
-        //    long minX = topLeft.x + 20; long maxX = bottomRight.x - 20;
-        //    long minY = topLeft.y + 20; long maxY = bottomRight.y - 20;
+            long minX = topLeft.x + 20; long maxX = bottomRight.x - 20;
+            long minY = topLeft.y + 20; long maxY = bottomRight.y - 20;
 
-        //    if ((cursor.x + pixelsYaw > maxX) || (cursor.x + pixelsYaw < minX) ||
-        //        (cursor.y + pixelsPitch > maxY) || (cursor.y + pixelsPitch < minY))
-        //    {
-        //        POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
-        //        ClientToScreen(hGameWindow, &center);
-        //        mouse.MoveAbsolute(center.x, center.y);
-        //    }
-        //    mouse.Move(pixelsYaw, pixelsPitch);
-        //}
+            if ((cursor.x + pixelsYaw > maxX) || (cursor.x + pixelsYaw < minX) ||
+                (cursor.y + pixelsPitch > maxY) || (cursor.y + pixelsPitch < minY))
+            {
+                POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+                ClientToScreen(hGameWindow, &center);
+                mouse.MoveAbsolute(center.x, center.y);
+            }
+            mouse.Move(pixelsYaw, pixelsPitch);
+        }
+
+        // WIP MOUSE MOVEMENT
+        // --- 4. THROTTLE (W) ---
+        if (useElevatorMode) {
+            kbd.SendKey('W', 0, false);
+        }
+        else {
+            // If coasting, ALWAYS drive forward
+            if (isCoasting) {
+                kbd.SendKey('W', 0, true);
+            }
+            else {
+                // Standard Steering Throttle Logic
+                float stopThreshold = isFlying ? FLIGHT_STOP_THRESHOLD : GROUND_STOP_THRESHOLD;
+                bool facingCorrectly = (std::abs(yawDiff) < stopThreshold);
+
+                if (facingCorrectly) {
+                    kbd.SendKey('W', 0, true);
+                }
+                else {
+                    kbd.SendKey('W', 0, false);
+                }
+            }
+        }
+
+        // --- 5. OBSTACLE JUMP LOGIC (Ground Only) ---
+        if (!isFlying && !player.flyingMounted && !useElevatorMode && !isCoasting) {
+            DWORD now = GetTickCount();
+            if (now - lastPosTime > 500) {
+                if (currentPos.Dist2D(lastPosCheck) < 1.0f) {
+                    // Check throttle state via loose logic
+                    float stopThreshold = GROUND_STOP_THRESHOLD;
+                    if (std::abs(yawDiff) < stopThreshold) {
+                        kbd.SendKey(VK_SPACE, 0, true);
+                        Sleep(20);
+                        kbd.SendKey(VK_SPACE, 0, false);
+                    }
+                }
+                lastPosCheck = currentPos;
+                lastPosTime = now;
+            }
+        }
         
         // --- 1. Horizontal Steering (Yaw) --- (A and D old)
-        float targetAngle = std::atan2(dy, dx);        
+        /*float targetAngle = std::atan2(dy, dx);
         float angleDiff = NormalizeAngle(targetAngle - currentRot);
 
         bool isTurningLeft = kbd.IsHolding('A');
@@ -216,7 +258,7 @@ public:
                 // Time = Distance / Speed
                 float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
                 int durationMs = static_cast<int>(durationSeconds * 1000.0f);
-                durationMs -= 20;
+                durationMs *= 0.5;
 
                 // Min duration to avoid micro-presses
                 if (durationMs > 20) {
@@ -231,7 +273,7 @@ public:
             if (!isTurningRight) {
                 float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
                 int durationMs = static_cast<int>(durationSeconds * 1000.0f);
-				durationMs -= 20;
+				durationMs *= 0.5;
 
                 if (durationMs > 20) {
                     kbd.HoldKeyAsync('D', durationMs);
@@ -295,50 +337,6 @@ public:
         }
         else {
             kbd.SendKey('W', 0, false);
-        }
-
-
-
-        // WIP MOUSE MOVEMENT
-       // --- 4. THROTTLE (W) ---
-        /*if (useElevatorMode) {
-            kbd.SendKey('W', 0, false);
-        }
-        else {
-            // If coasting, ALWAYS drive forward
-            if (isCoasting) {
-                kbd.SendKey('W', 0, true);
-            }
-            else {
-                // Standard Steering Throttle Logic
-                float stopThreshold = isFlying ? FLIGHT_STOP_THRESHOLD : GROUND_STOP_THRESHOLD;
-                bool facingCorrectly = (std::abs(yawDiff) < stopThreshold);
-
-                if (facingCorrectly) {
-                    kbd.SendKey('W', 0, true);
-                }
-                else {
-                    kbd.SendKey('W', 0, false);
-                }
-            }
-        }
-
-        // --- 5. OBSTACLE JUMP LOGIC (Ground Only) ---
-        if (!isFlying && !player.flyingMounted && !useElevatorMode && !isCoasting) {
-            DWORD now = GetTickCount();
-            if (now - lastPosTime > 500) {
-                if (currentPos.Dist2D(lastPosCheck) < 1.0f) {
-                    // Check throttle state via loose logic
-                    float stopThreshold = GROUND_STOP_THRESHOLD;
-                    if (std::abs(yawDiff) < stopThreshold) {
-                        kbd.SendKey(VK_SPACE, 0, true);
-                        Sleep(20);
-                        kbd.SendKey(VK_SPACE, 0, false);
-                    }
-                }
-                lastPosCheck = currentPos;
-                lastPosTime = now;
-            }
         }*/
     }
 };

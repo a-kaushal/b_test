@@ -18,6 +18,8 @@ void UpdateGatherTarget(WorldState& ws) {
     // Loop through all entities updated by the Memory Reader
     for (size_t i = 0; i < ws.entities.size(); ++i) {
         const auto& entity = ws.entities[i];
+        int nearbyEnemyCount = 0;
+        //int nearbyStrongEnemyCount = 0;
 
         // 1. Check basic object type (Must be GameObject)
         if (entity.objType != "Object") continue;
@@ -41,12 +43,21 @@ void UpdateGatherTarget(WorldState& ws) {
                 d = object->distance;
                 if (d <= 5.0f) {
                     continue;
-                }
-                if (d < bestDist) {
-                    bestDist = d;
-                    bestIndex = i;
+                }                
+                for (auto& entity : ws.entities) {
+                    // Use std::dynamic_pointer_cast for shared_ptr
+                    if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
+                        if ((npc->reaction == 0) && (npc->position.Dist3D(object->position)) < (npc->agroRange + 5.0f)) {
+                            nearbyEnemyCount++;
+                        }
+                    }
                 }
             }
+        }
+
+        if ((d < bestDist) && (nearbyEnemyCount < 3)) {
+            bestDist = d;
+            bestIndex = i;
         }
     }
 
