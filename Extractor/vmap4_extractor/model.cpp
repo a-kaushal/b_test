@@ -11,6 +11,9 @@
 #include <algorithm>
 #include <cstdio>
 
+#include <cerrno>
+#include <cstring>
+
 extern HANDLE WorldMpq;
 
 Model::Model(std::string &filename) : filename(filename), vertices(0), indices(0)
@@ -131,7 +134,7 @@ Vec3D fixCoordSystem2(Vec3D v)
     return Vec3D(v.x, v.z, v.y);
 }
 
-ModelInstance::ModelInstance(MPQFile& f, char const* ModelInstName, uint32 mapID, uint32 tileX, uint32 tileY, FILE *pDirfile) : id(0), scale(0), flags(0)
+ModelInstance::ModelInstance(MPQFile& f, char const* ModelInstName, uint32 mapID, uint32 tileX, uint32 tileY, FILE* pDirfile) : id(0), scale(0), flags(0)
 {
     float ff[3];
     f.read(&id, 4);
@@ -141,33 +144,72 @@ ModelInstance::ModelInstance(MPQFile& f, char const* ModelInstName, uint32 mapID
     rot = Vec3D(ff[0], ff[1], ff[2]);
     f.read(&scale, 2);
     f.read(&flags, 2);
-    // scale factor - divide by 1024. blizzard devs must be on crack, why not just use a float?
     sc = scale / 1024.0f;
 
     char tempname[512];
+    // Construct the path relative to the working directory
     snprintf(tempname, sizeof(tempname), "%s/%s", szWorkDirWmo, ModelInstName);
-    FILE* input = fopen(tempname, "r+b");
+
+    // Try to open in Read-Only Binary mode
+    FILE* input = fopen(tempname, "rb");
 
     if (!input)
     {
-        //printf("ModelInstance::ModelInstance couldn't open %s\n", tempname);
-        return;
+        int originalErr = errno; // Capture error immediately
+
+        // 1. Check for .mdx -> .m2 mismatch
+        std::string fixName = tempname;
+        bool triedFix = false;
+
+        if (fixName.length() > 4 && fixName.substr(fixName.length() - 4) == ".mdx")
+        {
+            fixName.replace(fixName.length() - 4, 4, ".m2");
+            input = fopen(fixName.c_str(), "rb");
+            triedFix = true;
+
+            if (input) {
+                // printf("[Fixed] Found model after renaming: %s\n", fixName.c_str());
+            }
+        }
+
+        // 2. If still not found, print DETAILED error
+        if (!input)
+        {
+            if (!input && mapID == 530 && strstr(ModelInstName, "mushroom"))
+            {
+                printf("\n--- MUSHROOM LOAD FAILURE ---\n");
+                printf("Model Name: %s\n", ModelInstName);
+                printf("Attempt 1 (Raw path): %s\n", tempname);
+                printf("Error 1: %s\n", strerror(originalErr));
+
+                if (triedFix) {
+                    printf("Attempt 2 (Fix path): %s\n", fixName.c_str());
+                    printf("Error 2: %s\n", strerror(errno));
+                }
+                printf("-----------------------------\n");
+            }
+        }
     }
 
-    fseek(input, 8, SEEK_SET); // get the correct no of vertices
+    if (!input)
+        return;
+
+    fseek(input, 8, SEEK_SET);
     int nVertices;
-    int count = fread(&nVertices, sizeof (int), 1, input);
+    int count = fread(&nVertices, sizeof(int), 1, input);
     fclose(input);
 
     if (count != 1 || nVertices == 0)
+    {
+        printf("[ERROR] Model %s exists but is invalid (Vertices: %d)\n", tempname, nVertices);
         return;
+    }
 
-    uint16 adtId = 0;// not used for models
+    uint16 adtId = 0;
     uint32 flags = MOD_M2;
     if (tileX == 65 && tileY == 65)
         flags |= MOD_WORLDSPAWN;
 
-    //write mapID, tileX, tileY, Flags, ID, Pos, Rot, Scale, name
     fwrite(&mapID, sizeof(uint32), 1, pDirfile);
     fwrite(&tileX, sizeof(uint32), 1, pDirfile);
     fwrite(&tileY, sizeof(uint32), 1, pDirfile);
@@ -177,7 +219,7 @@ ModelInstance::ModelInstance(MPQFile& f, char const* ModelInstName, uint32 mapID
     fwrite(&pos, sizeof(float), 3, pDirfile);
     fwrite(&rot, sizeof(float), 3, pDirfile);
     fwrite(&sc, sizeof(float), 1, pDirfile);
-    uint32 nlen=strlen(ModelInstName);
+    uint32 nlen = strlen(ModelInstName);
     fwrite(&nlen, sizeof(uint32), 1, pDirfile);
     fwrite(ModelInstName, sizeof(char), nlen, pDirfile);
 

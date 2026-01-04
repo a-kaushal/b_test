@@ -15,19 +15,30 @@
 
 char const* GetPlainName(char const* FileName)
 {
-    const char * szTemp;
+    const char* szTemp;
 
-    if((szTemp = strrchr(FileName, '\\')) != NULL)
+    if ((szTemp = strrchr(FileName, '\\')) != NULL)
         FileName = szTemp + 1;
+
+    // ADD THIS BLOCK
+    if ((szTemp = strrchr(FileName, '/')) != NULL)
+        FileName = szTemp + 1;
+
     return FileName;
 }
 
+// You should also update the char* overload if it exists in the file (implied by usage)
 char* GetPlainName(char* FileName)
 {
-    char * szTemp;
+    char* szTemp;
 
-    if((szTemp = strrchr(FileName, '\\')) != NULL)
+    if ((szTemp = strrchr(FileName, '\\')) != NULL)
         FileName = szTemp + 1;
+
+    // ADD THIS BLOCK
+    if ((szTemp = strrchr(FileName, '/')) != NULL)
+        FileName = szTemp + 1;
+
     return FileName;
 }
 
@@ -73,7 +84,7 @@ ADTFile::ADTFile(char* filename) : ADT(WorldMpq, filename, false), nWMO(0), nMDX
 
 bool ADTFile::init(uint32 map_num, uint32 tileX, uint32 tileY)
 {
-    if(ADT.isEof ())
+    if (ADT.isEof())
         return false;
 
     uint32 size;
@@ -81,12 +92,12 @@ bool ADTFile::init(uint32 map_num, uint32 tileX, uint32 tileY)
     string xMap;
     string yMap;
 
-    Adtfilename.erase(Adtfilename.find(".adt"),4);
+    Adtfilename.erase(Adtfilename.find(".adt"), 4);
     string TempMapNumber;
-    TempMapNumber = Adtfilename.substr(Adtfilename.length()-6,6);
-    xMap = TempMapNumber.substr(TempMapNumber.find("_")+1,(TempMapNumber.find_last_of("_")-1) - (TempMapNumber.find("_")));
-    yMap = TempMapNumber.substr(TempMapNumber.find_last_of("_")+1,(TempMapNumber.length()) - (TempMapNumber.find_last_of("_")));
-    Adtfilename.erase((Adtfilename.length()-xMap.length()-yMap.length()-2), (xMap.length()+yMap.length()+2));
+    TempMapNumber = Adtfilename.substr(Adtfilename.length() - 6, 6);
+    xMap = TempMapNumber.substr(TempMapNumber.find("_") + 1, (TempMapNumber.find_last_of("_") - 1) - (TempMapNumber.find("_")));
+    yMap = TempMapNumber.substr(TempMapNumber.find_last_of("_") + 1, (TempMapNumber.length()) - (TempMapNumber.find_last_of("_")));
+    Adtfilename.erase((Adtfilename.length() - xMap.length() - yMap.length() - 2), (xMap.length() + yMap.length() + 2));
     //string AdtMapNumber = xMap + ' ' + yMap + ' ' + GetPlainName((char*)Adtfilename.c_str());
     //printf("Processing map %s...\n", AdtMapNumber.c_str());
     //printf("MapNumber = %s\n", TempMapNumber.c_str());
@@ -94,37 +105,47 @@ bool ADTFile::init(uint32 map_num, uint32 tileX, uint32 tileY)
     //printf("yMap = %s\n", yMap.c_str());
 
     std::string dirname = std::string(szWorkDirWmo) + "/dir_bin";
-    FILE *dirfile;
+    FILE* dirfile;
     dirfile = fopen(dirname.c_str(), "ab");
-    if(!dirfile)
+    if (!dirfile)
     {
         printf("Can't open dirfile!'%s'\n", dirname.c_str());
         return false;
     }
 
+    //printf("Processing Tile [%u, %u]\n", tileX, tileY); // DEBUG 1
+
     while (!ADT.isEof())
     {
         char fourcc[5];
-        ADT.read(&fourcc,4);
+        ADT.read(&fourcc, 4);
         ADT.read(&size, 4);
         flipcc(fourcc);
         fourcc[4] = 0;
 
+        // DEBUG 2: Trace every chunk found
+        // Only print relevant chunks to avoid spamming too much, or print all if desperate
+        /*if (!strcmp(fourcc, "MMDX") || !strcmp(fourcc, "MDDF") || !strcmp(fourcc, "MWMO") || !strcmp(fourcc, "MODF"))
+        {
+            printf("Found Chunk: %s (Size: %u)\n", fourcc, size);
+        }*/
+
         size_t nextpos = ADT.getPos() + size;
 
-        if (!strcmp(fourcc,"MCIN"))
+        if (!strcmp(fourcc, "MCIN"))
         {
         }
-        else if (!strcmp(fourcc,"MTEX"))
+        else if (!strcmp(fourcc, "MTEX"))
         {
         }
-        else if (!strcmp(fourcc,"MMDX"))
+        else if (!strcmp(fourcc, "MMDX"))
         {
             if (size)
             {
                 char* buf = new char[size];
                 ADT.read(buf, size);
                 char* p = buf;
+                int count = 0; // DEBUG Counter
                 while (p < buf + size)
                 {
                     std::string path(p);
@@ -134,15 +155,16 @@ bool ADTFile::init(uint32 map_num, uint32 tileX, uint32 tileY)
                     FixNameSpaces(s, strlen(s));
 
                     ModelInstanceNames.push_back(s);
-
                     ExtractSingleModel(path);
 
                     p += strlen(p) + 1;
+                    count++;
                 }
+                //printf("  -> MMDX Loaded %d model names.\n", count); // DEBUG 3
                 delete[] buf;
             }
         }
-        else if (!strcmp(fourcc,"MWMO"))
+        else if (!strcmp(fourcc, "MWMO"))
         {
             if (size)
             {
@@ -163,26 +185,37 @@ bool ADTFile::init(uint32 map_num, uint32 tileX, uint32 tileY)
             }
         }
         //======================
-        else if (!strcmp(fourcc,"MDDF"))
+        else if (!strcmp(fourcc, "MDDF"))
         {
             if (size)
             {
                 nMDX = (int)size / 36;
-                for (int i=0; i<nMDX; ++i)
+                //printf("  -> Processing MDDF: %d model instances.\n", nMDX); // DEBUG 4
+
+                for (int i = 0; i < nMDX; ++i)
                 {
                     uint32 id;
                     ADT.read(&id, 4);
-                    ModelInstance inst(ADT, ModelInstanceNames[id].c_str(), map_num, tileX, tileY, dirfile);
+
+                    // Safety check preventing crash if MMDX failed
+                    if (id < ModelInstanceNames.size())
+                    {
+                        ModelInstance inst(ADT, ModelInstanceNames[id].c_str(), map_num, tileX, tileY, dirfile);
+                    }
+                    else
+                    {
+                        printf("  -> ERROR: MDDF references invalid model ID: %u (Total Models: %zu)\n", id, ModelInstanceNames.size());
+                    }
                 }
                 ModelInstanceNames.clear();
             }
         }
-        else if (!strcmp(fourcc,"MODF"))
+        else if (!strcmp(fourcc, "MODF"))
         {
             if (size)
             {
                 nWMO = (int)size / 64;
-                for (int i=0; i<nWMO; ++i)
+                for (int i = 0; i < nWMO; ++i)
                 {
                     uint32 id;
                     ADT.read(&id, 4);
