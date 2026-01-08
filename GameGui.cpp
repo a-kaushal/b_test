@@ -187,8 +187,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
             // 8. AGRO RANGE (Column 8)
             if (ent.info) {
-                if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(ent.info)) {
-                    sprintf_s(buffer, sizeof(buffer), "%.2f", enemy->agroRange);
+                if (auto object = std::dynamic_pointer_cast<ObjectInfo>(ent.info)) {
+                    sprintf_s(buffer, sizeof(buffer), "%d", object->nodeActive);
                     SetItemText(hListView, i, 8, buffer);
                 }
                 else {

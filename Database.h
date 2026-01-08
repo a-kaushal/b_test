@@ -38,8 +38,6 @@ const int CSV_COL_LOCK_REQ_TYPE = 1; // 2 = Skill
 const int CSV_COL_LOCK_TYPE = 9;  // 2=Herb, 3=Mine
 const int CSV_COL_SKILL_REQ = 17; // Skill Level
 
-
-
 using namespace std;
 
 enum GatherType {
@@ -52,6 +50,13 @@ enum GatherType {
 struct LockInfo {
     int typeIndex; // 2 for Herb, 3 for Mine
     int skillLevel;
+};
+
+// Creature spawn locations
+struct CreatureSpawn {
+    uint32_t entry;
+    uint32_t mapId;
+    Vector3 position;
 };
 
 // Represents one row from FactionTemplate.dbc
@@ -109,6 +114,9 @@ private:
 
     // Faction info (Only for entities)
     unordered_map<uint32_t, FactionTemplateEntry> sFactionTemplateStore;
+
+    // Map: NPC ID -> List of Spawn Locations
+    std::unordered_map<uint32_t, std::vector<CreatureSpawn>> creatureSpawnStore;
 
     // Helper to parse a specific column from a delimiter-separated string
     string getColumnInternal(const string& line, int index, char delimiter) {
@@ -175,6 +183,147 @@ public:
             return nullptr;
         }
         return &sCreatureTemplateStore[id];
+    }
+
+    // ---------------------------------------------------------
+    // NEW: LOAD CREATURE SPAWN LOCATIONS
+    // Parses the TSV file and groups spawns by NPC ID
+    // ---------------------------------------------------------
+    void loadCreatureSpawnLocations(const string& filename) {
+        ifstream file(filename);
+        if (!file.is_open()) {
+            cerr << "[Error] Could not open Spawn DB: " << filename << endl;
+            return;
+        }
+        cout << "Loading Creature Spawns... ";
+
+        string line;
+        getline(file, line); // Skip header row if present
+
+        int count = 0;
+        while (getline(file, line)) {
+            try {
+                // Columns based on your TSV export: 
+                // 0:ID, 1:Map, 2:X, 3:Y, 4:Z
+                string sID = getColumnInternal(line, 0, '\t');
+                string sMap = getColumnInternal(line, 1, '\t');
+                string sX = getColumnInternal(line, 2, '\t');
+                string sY = getColumnInternal(line, 3, '\t');
+                string sZ = getColumnInternal(line, 4, '\t');
+
+                if (!sID.empty() && !sX.empty()) {
+                    uint32_t id = stoi(sID);
+
+                    CreatureSpawn spawn;
+                    spawn.mapId = stoi(sMap);
+                    spawn.position = Vector3(stof(sX), stof(sY), stof(sZ));
+
+                    // Add to the vector for this specific ID
+                    creatureSpawnStore[id].push_back(spawn);
+                    count++;
+                }
+            }
+            catch (...) { continue; }
+        }
+        cout << "Done. (" << count << " spawns loaded for " << creatureSpawnStore.size() << " unique IDs)" << endl;
+    }
+
+    // ---------------------------------------------------------
+    // GET CANDIDATE REPAIR VENDORS (Sorted by Distance)
+    // Returns a list of the 'maxCount' closest vendors.
+    // ---------------------------------------------------------
+    struct VendorCandidate {
+        uint32_t id;
+        Vector3 position;
+        float distance;
+    };
+
+    std::vector<VendorCandidate> getRepairVendorsByDistance(const Vector3& playerPos, uint32_t mapId, bool isHorde, int maxCount = 5) {
+        std::vector<VendorCandidate> candidates;
+
+        // 1. Collect all valid candidates
+        for (const auto& [id, spawnList] : creatureSpawnStore) {
+
+            // Validation Checks (Template, Flag, Reaction)
+            if (sCreatureTemplateStore.find(id) == sCreatureTemplateStore.end()) continue;
+            const CreatureTemplateEntry& entry = sCreatureTemplateStore[id];
+
+            if (!(entry.NpcFlags & 4096)) continue; // Must have Repair Flag
+
+            // Faction/Reaction Check
+            uint32_t mobFactionId = isHorde ? entry.FactionH : entry.FactionA;
+            uint32_t playerFactionId = isHorde ? FACTION_TEMPLATE_HORDE_PLAYER : FACTION_TEMPLATE_ALLIANCE_PLAYER;
+            if (calculateReaction(mobFactionId, playerFactionId) == REACTION_HOSTILE) continue;
+
+            // Check Spawns
+            for (const auto& spawn : spawnList) {
+                if (spawn.mapId == mapId) {
+                    float dst = playerPos.Dist3D(spawn.position);
+
+                    // Optimization: Don't add if further than 5000 yards (cross-zone)
+                    if (dst > 5000.0f) continue;
+
+                    candidates.push_back({ id, spawn.position, dst });
+                }
+            }
+        }
+
+        // 2. Sort by Distance (Ascending)
+        std::sort(candidates.begin(), candidates.end(), [](const VendorCandidate& a, const VendorCandidate& b) {
+            return a.distance < b.distance;
+            });
+
+        // 3. Trim to maxCount
+        if (candidates.size() > maxCount) {
+            candidates.resize(maxCount);
+        }
+
+        return candidates;
+    }
+
+    // ---------------------------------------------------------
+    // FIND SPECIFIC REPAIR VENDOR BY ID
+    // Returns the nearest spawn location for a specific NPC ID.
+    // ---------------------------------------------------------
+    bool getSpecificRepairVendor(uint32_t targetId, const Vector3& playerPos, uint32_t mapId, Vector3& outPosition) {
+        // 1. Validate Template exists
+        if (sCreatureTemplateStore.find(targetId) == sCreatureTemplateStore.end()) {
+            std::cout << "[Database] Error: Creature ID " << targetId << " not found in Template DB." << std::endl;
+            return false;
+        }
+
+        // 2. Verify it is actually a Repair Vendor (Flag 4096)
+        if (!(sCreatureTemplateStore[targetId].NpcFlags & 4096)) {
+            std::cout << "[Database] Error: Creature ID " << targetId << " is not a Repair Vendor." << std::endl;
+            return false;
+        }
+
+        // 3. Check if we have any spawn data for this ID
+        if (creatureSpawnStore.find(targetId) == creatureSpawnStore.end()) {
+            std::cout << "[Database] Error: No spawn locations found for Creature ID " << targetId << "." << std::endl;
+            return false;
+        }
+
+        float minDst = 999999.0f;
+        bool found = false;
+
+        // 4. Find the nearest spawn on the CURRENT MAP
+        for (const auto& spawn : creatureSpawnStore[targetId]) {
+            if (spawn.mapId == mapId) {
+                float dst = playerPos.Dist3D(spawn.position);
+                if (dst < minDst) {
+                    minDst = dst;
+                    outPosition = spawn.position;
+                    found = true;
+                }
+            }
+        }
+
+        if (!found) {
+            std::cout << "[Database] Creature ID " << targetId << " has no spawns on Map " << mapId << "." << std::endl;
+        }
+
+        return found;
     }
 
     void loadDatabase(const string& filename) {
@@ -441,3 +590,7 @@ public:
         return "Index Out of Bounds";
     }
 };
+
+bool hasNpcFlag(uint32_t flags, uint32_t flagToCheck) {
+    return (flags & flagToCheck) != 0;
+}

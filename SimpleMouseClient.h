@@ -88,6 +88,9 @@ private:
     HWND m_LockWindow; // The window we are restricted to
     bool m_SafetyEnabled;
 
+    // --- NEW: STORE ORIGINAL WINDOWS SETTINGS ---
+    int m_OriginalMouseParams[3]; // [0]=Threshold1, [1]=Threshold2, [2]=Acceleration
+
     // Helper: Check if it is safe to click right now
     // Returns TRUE if safe, FALSE if blocked
     bool IsSafeToClick() {
@@ -191,6 +194,34 @@ public:
         m_LockWindow = hWindow;
         m_SafetyEnabled = (hWindow != NULL);
     }
+    
+    // --- NEW: ACCELERATION CONTROL ---   
+    void DisableAcceleration() {
+        // 1. Get current settings so we can restore them later
+        // params[2] is the "Enhance Pointer Precision" flag (0=Off, 1=On)
+        if (SystemParametersInfoA(SPI_GETMOUSE, 0, m_OriginalMouseParams, 0)) {
+
+            int newParams[3];
+            newParams[0] = m_OriginalMouseParams[0]; // Keep Threshold1
+            newParams[1] = m_OriginalMouseParams[1]; // Keep Threshold2
+            newParams[2] = 0; // FORCE ACCELERATION OFF
+
+            // 2. Apply new settings immediately (SPIF_SENDCHANGE notifies applications)
+            // We do NOT use SPIF_UPDATEINIFILE because we don't want this to persist if the PC reboots.
+            SystemParametersInfoA(SPI_SETMOUSE, 0, newParams, SPIF_SENDCHANGE);
+
+            std::cout << "[MOUSE] Windows Acceleration Disabled (Enhance Pointer Precision: OFF)" << std::endl;
+        }
+        else {
+            std::cout << "[MOUSE] Failed to read mouse settings. Error: " << GetLastError() << std::endl;
+        }
+    }
+
+    void RestoreAcceleration() {
+        // Restore the exact settings we found when we started
+        SystemParametersInfoA(SPI_SETMOUSE, 0, m_OriginalMouseParams, SPIF_SENDCHANGE);
+        std::cout << "[MOUSE] Windows Acceleration Restored." << std::endl;
+    }
 
     // Connect to driver
     bool Connect() {
@@ -210,12 +241,20 @@ public:
             return false;
         }
 
+        // [NEW] Disable acceleration immediately upon connection
+        DisableAcceleration();
+
         m_Connected = true;
         return Configure(m_Config);
     }
 
     // Disconnect
     void Disconnect() {
+        // [NEW] Be a good citizen: Restore settings when we close
+        if (m_Connected) {
+            RestoreAcceleration();
+        }
+
         if (m_hDevice != INVALID_HANDLE_VALUE) {
             CloseHandle(m_hDevice);
             m_hDevice = INVALID_HANDLE_VALUE;

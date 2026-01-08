@@ -43,14 +43,17 @@ void UpdateGatherTarget(WorldState& ws) {
                 d = object->distance;
                 if (d <= 5.0f) {
                     continue;
-                }                
+                }
+                std::vector<int> enemyIndex = {};
+                int index = 0;
                 for (auto& entity : ws.entities) {
-                    // Use std::dynamic_pointer_cast for shared_ptr
                     if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
                         if ((npc->reaction == 0) && (npc->position.Dist3D(object->position)) < (npc->agroRange + 5.0f)) {
                             nearbyEnemyCount++;
+                            enemyIndex.push_back(index);
                         }
                     }
+                    index++;
                 }
             }
         }

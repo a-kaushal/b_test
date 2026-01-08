@@ -27,6 +27,8 @@
 #include "ScreenRenderer.h"
 #include "OverlayWindow.h"
 #include "Gathering.h"
+#include "Combat.h"
+#include "Repair.h"
 
 // Global Atomic Flag to control all threads
 #include <atomic>
@@ -358,10 +360,13 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
 
                     newPlayer.playerGuidLow = guidLow;
                     newPlayer.playerGuidHigh = guidHigh;
+                    newPlayer.mapId = map_id;
 
                     playerInfo = newPlayer;
                 }
                 if (objType == 257) {
+                    if (id == 0)
+						continue;
                     newEntity.objType = "Object";
                     auto objInfo = std::make_shared<ObjectInfo>();
                     newEntity.info = objInfo;
@@ -417,7 +422,7 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                             // 3. Calculate Range
                             float range = 20.0f - (float)(newPlayer.level - enemy->level);
                             // 2. Check Passive Flag (0x0200 = UNIT_FLAG_PASSIVE)
-                            if (c->UnitFlags & 512) logFile << "Creature Template Entry with ID " << enemy->id << " passive flag." << std::endl;
+                            if (c->UnitFlags & 512); //logFile << "Creature Template Entry with ID " << enemy->id << " passive flag." << std::endl;
                             else {
                                 // 4. Elite/Boss Bonus
                                 if (c->Rank >= 1) range += 10.0f; // Elite
@@ -463,6 +468,21 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
             }
         }
     }
+
+    // Update tunnel detection
+    agent.state.inTunnel = IsInTunnel(agent.state.player.position, agent.state.player.mapId);
+
+    if (agent.state.inTunnel && (agent.state.player.flyingMounted || agent.state.player.groundMounted)) {
+        // We're mounted in a tunnel - game will auto-dismount, but flag it
+        static DWORD lastTunnelLog = 0;
+        if (GetTickCount() - lastTunnelLog > 5000) {
+            std::ofstream log("C:\\Driver\\SMM_Debug.log", std::ios::app);
+            log << "[TUNNEL] Detected: In no-fly zone while mounted (auto-dismount expected)" << std::endl;
+            log.close();
+            lastTunnelLog = GetTickCount();
+        }
+    }
+
     return entityList;
 }
 
@@ -504,6 +524,7 @@ void MainThread(HMODULE hModule) {
     creature_db.loadDatabase("Z:\\WowDB\\creatures.tsv");
     creature_db.parseCreatureTemplates();
     creature_db.loadFactions("Z:\\WowDB\\FactionTemplate.csv");
+    creature_db.loadCreatureSpawnLocations("Z:\\WowDB\\creature_spawns.tsv");
     item_db.loadDatabase("Z:\\WowDB\\items.tsv");
     object_db.loadDatabase("Z:\\WowDB\\objects.tsv");
     object_db.loadLocks("Z:\\WowDB\\Lock.csv");
@@ -653,101 +674,21 @@ void MainThread(HMODULE hModule) {
                     agent.state.pathFollowState.hasPath = true;
 					agent.state.pathFollowState.flyingPath = true;
 
+                    agent.state.globalState.flyingPath = true;
+
                     // Move to first waypoint in path
                     agent.state.waypointReturnState.enabled = true;
                     agent.state.waypointReturnState.savedPath = path;
                     agent.state.waypointReturnState.savedIndex = 0;
 
-                    logFile << "Underwater Check: " << globalNavMesh.IsUnderwater(Vector3(414.4220886f, 6918.97f, -5.0f)) << std::endl;
+                    //logFile << "Underwater Check: " << globalNavMesh.IsUnderwater(Vector3(414.4220886f, 6918.97f, -5.0f)) << std::endl;
 
                     //console.SendDataRobust(L"/cast");
+                    
+                    // Force disable Click-to-Move to prevent accidental movement on mouse clicks
+                    console.SendDataRobust(std::wstring(L"/console autointeract 0"));
 
-                    //RECT rect;
-                    //GetClientRect(hGameWindow, &rect);
-                    //POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
-                    //ClientToScreen(hGameWindow, &center);
-                    //mouse.MoveAbsolute(center.x, center.y);
-                    //mouse.PressButton(MOUSE_RIGHT); // Hold
-                    //float targetRot = 0.3;
-                    while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
-                        // 2. Get Start Rotation
-                    //    float startRot = agent.state.player.rotation; // Assuming you have access to read this
-
-                    //    float diff = targetRot - startRot;
-                    //    const float PI = 3.14159265f;
-                    //    if (diff > PI) diff -= 2 * PI;
-                    //    if (diff <= -PI) diff += 2 * PI;
-
-                    //    // 3. Perform the Test Move
-                    //    int pixels = 10; // Use a larger number (e.g., 100) for a more accurate reading than 10
-
-                    //    if (diff > 0) {
-                    //        pixels = -20;
-                    //    }
-                    //    else {
-                    //        pixels = 20;
-                    //    }
-
-                    //    if (std::abs(diff) <= 0.01) break;
-                    //    if (std::abs(diff) >= PI/2) pixels*=2;
-                    //    if (std::abs(diff) <= 0.2) pixels /= 2;
-
-                    //    // --- RECENTERING LOGIC START ---
-                    //    // Get current cursor position and window bounds
-                    //    POINT currentPos;
-                    //    GetCursorPos(&currentPos);
-
-                    //    RECT rect;
-                    //    GetClientRect(hGameWindow, &rect);
-                    //    POINT topLeft = { rect.left, rect.top };
-                    //    POINT bottomRight = { rect.right, rect.bottom };
-                    //    ClientToScreen(hGameWindow, &topLeft);
-                    //    ClientToScreen(hGameWindow, &bottomRight);
-
-                    //    // Define boundaries (Screen Coordinates) with a safety margin (e.g., 20 pixels)
-                    //    long minX = topLeft.x + 20;
-                    //    long maxX = bottomRight.x - 20;
-                    //    long minY = topLeft.y + 20;
-                    //    long maxY = bottomRight.y - 20;
-
-                    //    // Check if the intended move will push cursor out of bounds
-                    //    // We check both X (primary movement) and Y (drift safety)
-                    //    if ((currentPos.x + pixels > maxX) || (currentPos.x + pixels < minX) ||
-                    //        (currentPos.y > maxY) || (currentPos.y < minY))
-                    //    {
-                    //        // Calculate Center
-                    //        POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
-                    //        ClientToScreen(hGameWindow, &center);
-                    //        mouse.ReleaseButton(MOUSE_RIGHT); // Hold
-
-                    //        // Reset Cursor
-                    //        mouse.MoveAbsolute(center.x, center.y);
-                    //        Sleep(50); // Buffer for cursor to settle
-                    //        mouse.PressButton(MOUSE_RIGHT); // Hold
-                    //        Sleep(10); // Buffer for cursor to settle
-                    //    }
-
-                    //    mouse.Move(pixels, 0);          // Move
-
-                    //    agent.state.entities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent);
-                    //    // 4. Calculate Difference
-                    //    float endRot = agent.state.player.rotation;
-                    //    diff = endRot - startRot;
-
-                    //    // Handle Wrap-around (if rotation goes from 6.28 -> 0 or 0 -> 6.28)
-                    //    if (diff > PI) diff -= 2 * PI;
-                    //    if (diff < -PI) diff += 2 * PI;
-
-                    //    // 5. Log Result
-                    //    if (std::abs(diff) > 0.001f) {
-                    //        float pixelsPerRadian = (float)pixels / std::abs(diff);
-                    //        logFile << "Moved " << pixels << " pixels. Rotation Delta: " << diff
-                    //            << ". Est PixelsPerRadian: " << pixelsPerRadian << ". Player Rotation: " << agent.state.player.rotation << std::endl;
-                    //    }
-
-                    //    Sleep(5); // Wait before next test
-                    //continue;
-
+                    while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {             
                         if (agent.state.pathFollowState.pathIndexChange == true) {
                             if (agent.state.pathFollowState.path[agent.state.pathFollowState.index - 1].Dist3D(agent.state.pathFollowState.presetPath[agent.state.pathFollowState.presetIndex]) < 5.0) {                                
                                 if ((agent.state.pathFollowState.presetIndex >= agent.state.pathFollowState.presetPath.size() - 1) && (agent.state.pathFollowState.looping == 1)) {
@@ -817,37 +758,64 @@ void MainThread(HMODULE hModule) {
                         //        }
                         //    }
                         //}
+						uint32_t repairId = 0;
+                        uint32_t mapId = 0;
+						Vector3 repairPos = {};
+
+                        /*if (agent.state.repairState.npcGuidLow == 0) { // If we haven't selected a vendor yet
+                            // 1. Get Top 10 Closest Candidates
+                            bool isHorde = true; // Determine this dynamically from your player struct if possible
+                            auto candidates = creature_db.getRepairVendorsByDistance(agent.state.player.position, 530, true, 5);
+
+                            bool validTargetFound = false;
+
+                            // 2. Check Reachability (Pathfinding)
+                            for (const auto& candidate : candidates) {
+
+                                // Try to calculate a path to this candidate
+                                // Note: Using your existing CalculatePath signature
+                                std::vector<Vector3> testPath = CalculatePath({ candidate.position }, agent.state.player.position, 0, agent.state.player.isFlying, 530);
+
+                                // 3. Validate Path
+                                // A valid path usually has points, and the end point is close to the target.
+                                // If the pathfinder fails (e.g., inside a mountain), it might return empty or a partial path.
+                                if (!testPath.empty()) {
+
+                                    // Optional: Check if the path actually reaches the destination 
+                                    // (e.g. if partial paths are returned)
+                                    if (testPath.back().Dist3D(candidate.position) < 10.0f) {
+
+                                        // FOUND A VALID ONE!
+                                        agent.state.repairState.npcLocation = candidate.position;
+                                        agent.state.repairState.repairNeeded = true;
+                                        // ws.repairState.targetId = candidate.id; // Store ID if you added that field
+                                        validTargetFound = true;
+
+                                        logFile << "[ActionRepair] Selected reachable vendor ID " << candidate.id
+                                            << " at distance " << candidate.distance << "m" << std::endl;
+                                        break; // Stop looking
+                                    }
+                                }
+                            }
+
+                            if (!validTargetFound) {
+                                logFile << "[ActionRepair] No reachable repair vendors found!" << std::endl;
+                            }
+                        }*/
+
+                        //if (creature_db.getSpecificRepairVendor(19383, agent.state.player.position, 530, repairPos)) {
+                        //    // Found him, set path
+                        //    agent.state.repairState.npcLocation = repairPos;
+                        //    agent.state.repairState.repairNeeded = true;
+                        //}
+
+                        if (UnderAttackCheck(agent.state) == true) {
+                            logFile << "Under Attack Detected!" << std::endl;
+						}
+						//logFile << "Repair NPC Position: " << agent.state.repairState.npcLocation.x << ", " << agent.state.repairState.npcLocation.y << ", " << agent.state.repairState.npcLocation.z << " | Repair ID: " << repairId << " | " << mapId << std::endl;
 
                         // 1. Extract Data
                         agent.state.entities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent);
-
-                        /*for (size_t i = 0; i < agent.state.entities.size(); ++i) {
-							if (auto object = std::dynamic_pointer_cast<ObjectInfo>(agent.state.entities[i].info)) {
-                                logFile << "Object ID: " << object->id << "  Name: " << object->name << "  Skill Level: " << object->skillLevel << "  Type: " << object->type << std::endl;
-							}
-                            if (auto item = std::dynamic_pointer_cast<ItemInfo>(agent.state.entities[i].info)) {
-								logFile << "Item ID: " << item->id << "  Name: " << item->name << "  Stack Count: " << item->stackCount << "  Bag GUID: (" << std::hex << item->bagGuidHigh << ", " << item->bagGuidLow << std::dec << ")" << std::endl;
-                            }
-                            if (auto bag = std::dynamic_pointer_cast<BagInfo>(agent.state.entities[i].info)) {
-								logFile << "Bag ID: " << bag->id << "  Slots: " << bag->bagSlots << "  Free Slots: " << bag->freeSlots << std::endl;
-                            }
-						}*/
-                        //logFile << playerInfo.rotation << std::endl;
-
-                        //while (playerInfo.position.Dist3D(tempPos) > 5) {
-                        //    std::cout << std::fixed << std::setprecision(2) << "Player Pos: (" << playerInfo.position.x << ", " << playerInfo.position.y << ", " << playerInfo.position.z << ")" << "  Player Rotation: " << playerInfo.rotation << std::endl;
-                        //    if (playerInfo.position.Dist3D(tempPos) > 20) {
-                        //        keyDuration = Char_Rotate_To(playerInfo.rotation, CalculateAngle(playerInfo.position, tempPos), nextKey);
-                        //        if (keyDuration > 0) {
-                        //            kbd.HoldKey(nextKey, keyDuration);
-                        //            Sleep(5000);
-                        //        }
-                        //    }
-                        //    //kbd.HoldKey('W', 500);
-                        //    std::cout << std::fixed << std::setprecision(2) << "Player Pos: (" << playerInfo.position.x << ", " << playerInfo.position.y << ", " << playerInfo.position.z << ")" << "  Player Rotation: " << playerInfo.rotation << std::endl;
-                        //    std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, playerInfo);
-                        //}
-                        //Sleep(10000000);
 
                         // 2. Update GUI
                         UpdateGuiData(agent.state.entities);
@@ -855,8 +823,12 @@ void MainThread(HMODULE hModule) {
                         // 3. Logic (Rotation/Console Print)
                         //logFile << nextKey << std::endl;
 
+                        /*if (pilot.Calibrate(agent.state.player.rotation, agent.state.player.vertRotation) == true) {
+                            break;
+						}*/
+
                         Sleep(10); // Prevent high CPU usage
-                        agent.Tick();
+                        //agent.Tick();
                     }
                     pilot.Stop();
                     g_IsRunning = false;

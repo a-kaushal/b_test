@@ -19,6 +19,18 @@
     <Filter Include="VMap\Headers">
       <UniqueIdentifier>{e925dbbc-4ef6-40df-9808-4abf7cfc0b6b}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Combat">
+      <UniqueIdentifier>{78a0c58d-7a95-4076-9d03-a4fef94389e8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Gathering">
+      <UniqueIdentifier>{ebd706e4-56b9-4444-92ab-30a8b5c47431}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Repair/Restock">
+      <UniqueIdentifier>{30934e21-1887-4dc3-ba52-25f9ad6b2ac4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Memory">
+      <UniqueIdentifier>{9708c2b8-6fbb-43a3-b38e-13e01b84f730}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
@@ -78,12 +90,15 @@
     <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\crc32.c">
       <Filter>VMap\Headers</Filter>
     </ClCompile>
+    <ClCompile Include="Repair.h">
+      <Filter>Repair/Restock</Filter>
+    </ClCompile>
+    <ClCompile Include="FMapLoader.cpp">
+      <Filter>VMap</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="GameGui.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="MemoryRead.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SimpleKeyboardClient.h">
@@ -122,13 +137,7 @@
     <ClInclude Include="Pathfinding2.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="CombatController.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="Profile.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Gathering.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\crc32.h">
@@ -163,6 +172,18 @@
     </ClInclude>
     <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zutil.h">
       <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="CombatController.h">
+      <Filter>Combat</Filter>
+    </ClInclude>
+    <ClInclude Include="Combat.h">
+      <Filter>Combat</Filter>
+    </ClInclude>
+    <ClInclude Include="Gathering.h">
+      <Filter>Gathering</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryRead.h">
+      <Filter>Memory</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

@@ -159,8 +159,10 @@ _CRT_NONSTDC_NO_DEPRECATE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\uncompr.c" />
     <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zutil.c" />
     <ClCompile Include="dllmain.cpp" />
+    <ClCompile Include="FMapLoader.cpp" />
     <ClCompile Include="GameGui.cpp" />
     <ClCompile Include="Movement.h" />
+    <ClCompile Include="Repair.h" />
     <ClCompile Include="VMapLoader.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -176,6 +178,7 @@ _CRT_NONSTDC_NO_DEPRECATE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zlib.h" />
     <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zutil.h" />
     <ClInclude Include="Camera.h" />
+    <ClInclude Include="Combat.h" />
     <ClInclude Include="CombatController.h" />
     <ClInclude Include="Database.h" />
     <ClInclude Include="Entity.h" />
