@@ -343,9 +343,14 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_UNDER_ATTACK_GUID_LOW, newPlayer.underAttackGuidLow);
                     analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_UNDER_ATTACK_GUID_HIGH, newPlayer.underAttackGuidHigh);
 
+                    (((newPlayer.state& (1 << 11)) >> 11) == 1) ? newPlayer.inAir = true : newPlayer.inAir = false;
                     (((newPlayer.state& (1 << 24)) >> 24) == 1) ? newPlayer.isFlying = true : newPlayer.isFlying = false;
                     (((newPlayer.state& (1 << 23)) >> 23) == 1) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
                     (((newPlayer.state& (1 << 20)) >> 20) == 1) ? newPlayer.inWater = true : newPlayer.inWater = false;
+
+                    if (newPlayer.isFlying == false) {
+                        newPlayer.onGround = true;
+                    }
 
                     analyzer.ReadUInt32(procId, entity_ptr + ENTITY_PLAYER_MOUNT_STATE, newPlayer.mountState);
                     //(newPlayer.mountState == 2) ? newPlayer.groundMounted = true : newPlayer.groundMounted = false;
@@ -469,20 +474,6 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
         }
     }
 
-    // Update tunnel detection
-    agent.state.inTunnel = IsInTunnel(agent.state.player.position, agent.state.player.mapId);
-
-    if (agent.state.inTunnel && (agent.state.player.flyingMounted || agent.state.player.groundMounted)) {
-        // We're mounted in a tunnel - game will auto-dismount, but flag it
-        static DWORD lastTunnelLog = 0;
-        if (GetTickCount() - lastTunnelLog > 5000) {
-            std::ofstream log("C:\\Driver\\SMM_Debug.log", std::ios::app);
-            log << "[TUNNEL] Detected: In no-fly zone while mounted (auto-dismount expected)" << std::endl;
-            log.close();
-            lastTunnelLog = GetTickCount();
-        }
-    }
-
     return entityList;
 }
 
@@ -568,7 +559,7 @@ void MainThread(HMODULE hModule) {
         WORD nextKey = 0;
         int keyDuration = 0;
 
-        std::vector<Vector3> path = {};
+        std::vector<PathNode> path = {};
 
         SimpleKeyboardClient kbd;
         if (!kbd.Connect()) {
@@ -690,7 +681,7 @@ void MainThread(HMODULE hModule) {
 
                     while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {             
                         if (agent.state.pathFollowState.pathIndexChange == true) {
-                            if (agent.state.pathFollowState.path[agent.state.pathFollowState.index - 1].Dist3D(agent.state.pathFollowState.presetPath[agent.state.pathFollowState.presetIndex]) < 5.0) {                                
+                            if (agent.state.pathFollowState.path[agent.state.pathFollowState.index - 1].pos.Dist3D(agent.state.pathFollowState.presetPath[agent.state.pathFollowState.presetIndex]) < 5.0) {
                                 if ((agent.state.pathFollowState.presetIndex >= agent.state.pathFollowState.presetPath.size() - 1) && (agent.state.pathFollowState.looping == 1)) {
                                     agent.state.pathFollowState.presetIndex = 0;
                                 }
@@ -722,7 +713,7 @@ void MainThread(HMODULE hModule) {
                         for (size_t i = agent.state.globalState.activeIndex; i < agent.state.globalState.activeIndex + 16; ++i) {
                             int screenPosx, screenPosy;
                             if (i >= agent.state.globalState.activePath.size()) break;
-                            if (cam.WorldToScreen(agent.state.globalState.activePath[i], screenPosx, screenPosy)) {
+                            if (cam.WorldToScreen(agent.state.globalState.activePath[i].pos, screenPosx, screenPosy)) {
                                 // Draw a line using your overlay's draw list
                                 overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
                             }
@@ -828,7 +819,7 @@ void MainThread(HMODULE hModule) {
 						}*/
 
                         Sleep(10); // Prevent high CPU usage
-                        //agent.Tick();
+                        agent.Tick();
                     }
                     pilot.Stop();
                     g_IsRunning = false;

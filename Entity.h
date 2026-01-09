@@ -43,7 +43,9 @@ struct PlayerInfo : EntityInfo {
     int32_t level;
     int32_t mapId;
     bool isFlying;
+    bool onGround;
     bool inWater;
+    bool inAir;
 	bool groundMounted;
 	bool flyingMounted;
     bool isMounted;

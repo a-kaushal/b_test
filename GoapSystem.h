@@ -18,7 +18,7 @@ struct ActionState {
     virtual ~ActionState() = default; // Virtual destructor ensures proper cleanup
 
     // Common variables moved here
-    std::vector<Vector3> activePath;
+    std::vector<PathNode> activePath;
     int activeIndex = 0;
     bool actionChange = 0;
     bool flyingPath = true;
@@ -33,7 +33,7 @@ struct Looting : public ActionState {
     // Looting
     bool enabled = false;
     Vector3 position;
-    std::vector<Vector3> path;
+    std::vector<PathNode> path;
     int index;
     bool hasLoot = false;
     ULONG_PTR guidLow;
@@ -44,7 +44,7 @@ struct Gathering : public ActionState {
     // Gathering (Nodes/Herbs)
     bool enabled = true;
     Vector3 position;
-    std::vector<Vector3> path;
+    std::vector<PathNode> path;
     bool hasNode = false;
     bool nodeActive = false;
     int index;
@@ -57,7 +57,7 @@ struct Gathering : public ActionState {
 struct PathFollowing : public ActionState {
     // Follow a set path
     bool enabled = true;
-    std::vector<Vector3> path;
+    std::vector<PathNode> path;
     std::vector<Vector3> presetPath;
     int index;
     int presetIndex;
@@ -70,8 +70,8 @@ struct PathFollowing : public ActionState {
 struct WaypointReturn : public ActionState {
     // Follow a set path
     bool enabled = true;
-    std::vector<Vector3> path = { { -1000.0f,-1000.0f, -1000.0f } };
-    std::vector<Vector3> savedPath = { { -1000.0f,-1000.0f, -1000.0f } };
+    std::vector<PathNode> path = { PathNode(-1000.0f,-1000.0f, -1000.0f, 0) };
+    std::vector<PathNode> savedPath = { PathNode(-1000.0f,-1000.0f, -1000.0f, 0) };
     int index;
     int savedIndex;
     bool hasTarget = false;
@@ -80,7 +80,7 @@ struct WaypointReturn : public ActionState {
 
 struct Combat : public ActionState {
     bool enabled = true;
-    std::vector<Vector3> path;
+    std::vector<PathNode> path;
     int32_t targetHealth;
     bool inCombat = false; // True when bot is within range of enemy to perform rotation
     int index;
@@ -97,12 +97,15 @@ struct StuckState : public ActionState {
     Vector3 lastPosition;
     DWORD lastCheckTime = 0;
     DWORD stuckStartTime = 0;
-    int attemptCount = 0;
+
+    // --- UPDATED TRACKING ---
+    int attemptCount = 0;           // Tracks which stage (Jump, Strafe L, Strafe R, etc.) we are on
+    DWORD lastUnstuckTime = 0;      // Tracks when we last performed an unstuck action
 };
 
 struct RepairState : public ActionState {
     bool enabled = true;
-    std::vector<Vector3> path;
+    std::vector<PathNode> path;
     int index;
     Vector3 npcLocation;
 	bool repairNeeded = false;
@@ -120,8 +123,6 @@ struct WorldState {
     Combat combatState; 
     StuckState stuckState;
     RepairState repairState;
-    
-    bool inTunnel = false;
 
     std::vector<GameEntity> entities;
     PlayerInfo player;
@@ -191,6 +192,8 @@ private:
     int pathIndex = 0;
     std::vector<Vector3> currentPath;
 
+    bool groundOverride = false;
+
     // Scanning Variables
     int offsetIndex = 0;
     const std::vector<POINT> searchOffsets = {
@@ -209,6 +212,7 @@ public:
         pathCalcTimer = 0;
         offsetIndex = 0;
         pathIndex = 0;
+        groundOverride = false;
         currentPath.clear();
     }
 
@@ -234,13 +238,24 @@ public:
 
     // Main Entry Point
     // returns TRUE if interaction sequence is complete
-    bool EngageTarget(Vector3 targetPos, ULONG_PTR targetGuidLow, ULONG_PTR targetGuidHigh, PlayerInfo& player, std::vector<Vector3>& currentPath, int& pathIndex, float approachDist, float interactDist, bool checkTarget, bool targetGuid,
-        bool fly, int postClickWaitMs, MouseButton click, bool movingTarget, bool inTunnel) {
+    bool EngageTarget(Vector3 targetPos, ULONG_PTR targetGuidLow, ULONG_PTR targetGuidHigh, PlayerInfo & player, std::vector<PathNode>&currentPath, int& pathIndex, float approachDist, float interactDist, float finalDist,
+        bool checkTarget, bool targetGuid, bool fly, int postClickWaitMs, MouseButton click, bool movingTarget) {
         std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+        bool fly_entry_state = fly;
         if ((currentState != STATE_CREATE_PATH) && (movingTarget == true) && (pathCalcTimer != 0) && (GetTickCount() - pathCalcTimer > 200)) {
             currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530);
             pathIndex = 0;
             pathCalcTimer = GetTickCount();
+        }
+
+        if (((GetState() == "STATE_APPROACH") || (GetState() == "STATE_APPROACH_POST_INTERACT")) && (GetTickCount() < pilot.m_MountDisabledUntil) && (groundOverride == false) && (fly == true)) {
+            currentState = STATE_CREATE_PATH;
+            logFile << "Recalculating ground path for tunnel" << std::endl;
+            fly = false;
+            groundOverride = true;
+        }
+        if ((player.flyingMounted) && (pilot.m_IsMounting = false)) {
+            groundOverride = false;
         }
 
         switch (currentState) {
@@ -253,7 +268,7 @@ public:
             currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530);
             logFile << "Target Pos x: " << targetPos.x << " | Target Pos y: " << targetPos.y << " | Target Pos z: " << targetPos.z << std::endl;
             for (int i = 0; i < currentPath.size(); i++) {
-                logFile << "Path: " << i << " | X coord: " << currentPath[i].x << " | Y coord: " << currentPath[i].y << " | Z coord: " << currentPath[i].z << std::endl;
+                logFile << "Path: " << i << " | X coord: " << currentPath[i].pos.x << " | Y coord: " << currentPath[i].pos.y << " | Z coord: " << currentPath[i].pos.z << std::endl;
             }
             pathIndex = 0;
             pathCalcTimer = GetTickCount();
@@ -261,7 +276,7 @@ public:
             return false;
 
         case STATE_APPROACH:
-            if (MoveToTargetLogic(targetPos, currentPath, pathIndex, player, stateTimer, interactDist, fly, inTunnel)) {
+            if (MoveToTargetLogic(targetPos, currentPath, pathIndex, player, stateTimer, approachDist, interactDist, finalDist, fly_entry_state)) {
                 stateTimer = GetTickCount(); // Start stabilization timer
                 currentState = STATE_STABILIZE;
             }
@@ -342,7 +357,7 @@ public:
             return false;
 
         case STATE_APPROACH_POST_INTERACT:
-            if (MoveToTargetLogic(targetPos, currentPath, pathIndex, player, stateTimer, approachDist, fly, inTunnel)) {
+            if (MoveToTargetLogic(targetPos, currentPath, pathIndex, player, stateTimer, approachDist, interactDist, finalDist, fly_entry_state)) {
                 stateTimer = GetTickCount();
                 currentState = STATE_COMPLETE;
             }
@@ -357,13 +372,13 @@ public:
 
 public:
     // Helper: Logic to follow path and dismount
-    bool MoveToTargetLogic(Vector3 targetPos, std::vector<Vector3>& path, int& index, PlayerInfo& player, DWORD& timer, float acceptanceRadius, bool fly, bool inTunnel) {
+    bool MoveToTargetLogic(Vector3 targetPos, std::vector<PathNode>& path, int& index, PlayerInfo& player, DWORD& timer, float approachDist, float interactDist, float finalDist, bool fly) {
         std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
         if (index >= path.size()) {
             pilot.Stop();
             // Dismount Logic
             if (player.flyingMounted || player.groundMounted) {
-                if (player.position.Dist3D(path[index - 1]) < 10.0f) {
+                if (player.position.Dist3D(path[index - 1].pos) < 10.0f) {
                     if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"))) {
                         inputCommand.Reset();
                         return true;
@@ -395,13 +410,19 @@ public:
             return false;
         }
 
-        Vector3 wp = path[index];
+        Vector3 wp = path[index].pos;
         float dist = (fly) ? player.position.Dist3D(wp) : player.position.Dist2D(wp);
-        if (dist < acceptanceRadius) {
+        if (index == (path.size() - 1)) {
+            if (dist < finalDist) {
+                index++;
+                return false;
+            }
+        }
+        else if (dist < approachDist) {
             index++;
             return false;
         }
-        pilot.SteerTowards(player.position, player.rotation, wp, fly, player, inTunnel);
+        pilot.SteerTowards(player.position, player.rotation, wp, fly, player);
         return false;
     }
 
@@ -503,15 +524,15 @@ public:
             ws.player,
             ws.repairState.path,
             ws.repairState.index,
-            3.0f,  // Approach Distance
-            5.0f,  // Interact Distance
+            6.0f,  // Approach Distance
+            4.0f,  // Interact Distance
+            4.0f,  // Final Distance
             true,  // Check Target
             true,  // Check GUID
             true, // Fly if applicable
             2500,  // Wait 2.5s for window to open
             MOUSE_RIGHT,
-            false, // NPC is likely stationary
-            ws.inTunnel
+            false // NPC is likely stationary
         );
 
         // Visualization
@@ -547,16 +568,7 @@ class ActionUnstuck : public GoapAction {
 private:
     SimpleKeyboardClient& keyboard;
     MovementController& pilot;
-    DWORD actionStartTime = 0;
-    bool turnLeft = false; // Random decision for direction
-
-    enum UnstuckStep {
-        STEP_DISENGAGE, // Back + Jump/Ascend
-        STEP_REDIRECT,  // Turn + Strafe (ONE WAY ONLY)
-        STEP_ESCAPE,    // Move Forward in new direction
-        FINISHED
-    };
-    UnstuckStep currentStep = STEP_DISENGAGE;
+    DWORD actionStartTime = 0; // Tracks when the current stage started
 
 public:
     ActionUnstuck(SimpleKeyboardClient& k, MovementController& p)
@@ -572,91 +584,123 @@ public:
     }
 
     void ResetState() override {
-        actionStartTime = GetTickCount();
-        currentStep = STEP_DISENGAGE;
-
-        // Randomly pick Left or Right to avoid predictable loops
-        turnLeft = (GetTickCount() % 2 == 0);
+        actionStartTime = 0;
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
         DWORD now = GetTickCount();
-        DWORD elapsed = now - actionStartTime;
 
-        // Timeout Safety
-        if (elapsed > 6000) {
-            ws.stuckState.isStuck = false;
-            ws.stuckState.lastPosition = ws.player.position;
-            return true;
+        // 1. Initialization (Run once per activation)
+        if (actionStartTime == 0) {
+            actionStartTime = now;
+
+            // Check for 2-minute reset (120,000 ms)
+            if (ws.stuckState.lastUnstuckTime > 0 && (now - ws.stuckState.lastUnstuckTime > 120000)) {
+                std::cout << "[UNSTUCK] 2+ minutes since last stuck. Resetting stages." << std::endl;
+                ws.stuckState.attemptCount = 0;
+            }
+            std::cout << "[UNSTUCK] Starting Stage " << ws.stuckState.attemptCount << std::endl;
         }
 
-        bool isFlying = ws.player.isFlying || ws.player.flyingMounted;
+        DWORD elapsed = now - actionStartTime;
+        bool stageComplete = false;
 
-        switch (currentStep) {
+        switch (ws.stuckState.attemptCount) {
 
-            // 1. DISENGAGE: Back up and gain height
-        case STEP_DISENGAGE:
-            if (elapsed < 1500) {
-                keyboard.SendKey('S', 0, true);
-                // Try to ascend if flying, jump if ground
-                if (isFlying) keyboard.SendKey(VK_SPACE, 0, true);
-                else if (elapsed < 500) keyboard.SendKey(VK_SPACE, 0, true); // Short Jump tap
-                else keyboard.SendKey(VK_SPACE, 0, false);
-            }
-            else {
-                // Stop Moving Back
-                keyboard.SendKey('S', 0, false);
-                keyboard.SendKey(VK_SPACE, 0, false);
-
-                // Reset timer implies 'phase time', but we are using absolute elapsed
-                // simplified: just fall through to next logic based on time
-                currentStep = STEP_REDIRECT;
-            }
-            break;
-
-            // 2. REDIRECT: Turn AND Strafe to the side (One direction only!)
-        case STEP_REDIRECT:
-            // Run this from 1.5s to 2.5s
-            if (elapsed < 2500) {
-                if (turnLeft) {
-                    //keyboard.SendKey('A', 0, true); // Turn Left
-                    keyboard.SendKey('Q', 0, true); // Strafe Left
-                }
-                else {
-                    //keyboard.SendKey('D', 0, true); // Turn Right
-                    keyboard.SendKey('E', 0, true); // Strafe Right
-                }
-            }
-            else {
-                // Release Keys
-                keyboard.SendKey('A', 0, false);
-                keyboard.SendKey('Q', 0, false);
-                keyboard.SendKey('D', 0, false);
-                keyboard.SendKey('E', 0, false);
-                currentStep = STEP_ESCAPE;
-            }
-            break;
-
-            // 3. ESCAPE: Move Forward in the NEW direction
-        case STEP_ESCAPE:
-            // Run this from 2.5s to 4.0s
-            if (elapsed < 4000) {
+            // STAGE 0: JUMP FORWARD
+        case 0:
+            // 0 - 500ms
+            if (elapsed < 500) {
                 keyboard.SendKey('W', 0, true);
+                // Jump between 100ms and 300ms
+                if (elapsed > 100 && elapsed < 300)
+                    keyboard.SendKey(VK_SPACE, 0, true);
+                else
+                    keyboard.SendKey(VK_SPACE, 0, false);
             }
             else {
                 keyboard.SendKey('W', 0, false);
-                currentStep = FINISHED;
+                stageComplete = true;
             }
             break;
 
-        case FINISHED:
-            std::cout << "[GOAP] Unstuck Complete. Resuming." << std::endl;
-            ws.stuckState.isStuck = false;
-            ws.stuckState.lastPosition = ws.player.position;
-            return true;
+            // STAGE 1: STRAFE LEFT (1s)
+        case 1:
+            if (elapsed < 1000) {
+                keyboard.SendKey('Q', 0, true);
+            }
+            else {
+                keyboard.SendKey('Q', 0, false);
+                stageComplete = true;
+            }
+            break;
+
+            // STAGE 2: STRAFE RIGHT (2s)
+        case 2:
+            if (elapsed < 2000) {
+                keyboard.SendKey('E', 0, true);
+            }
+            else {
+                keyboard.SendKey('E', 0, false);
+                stageComplete = true;
+            }
+            break;
+
+            // STAGE 3: BACK + REPATH
+        case 3:
+            if (elapsed < 1000) {
+                keyboard.SendKey('S', 0, true);
+            }
+            else {
+                keyboard.SendKey('S', 0, false);
+                stageComplete = true;
+            }
+            break;
+
+        default:
+            // Fallback: Reset to 0 if something goes wrong
+            ws.stuckState.attemptCount = 0;
+            stageComplete = true;
+            break;
         }
 
-        return false;
+        // 2. Completion Logic
+        if (stageComplete) {
+            // Stop all movement keys to be safe
+            pilot.Stop();
+
+            // Special handling for Repath (end of Stage 3)
+            if (ws.stuckState.attemptCount == 3) {
+                if (!ws.pathFollowState.path.empty()) {
+                    Vector3 dest = ws.pathFollowState.path.back().pos;
+                    std::cout << "[UNSTUCK] Recalculating path..." << std::endl;
+                    ws.pathFollowState.path = CalculatePath(
+                        { dest },
+                        ws.player.position,
+                        0,
+                        ws.player.isFlying,
+                        530,
+                        false
+                    );
+                    ws.pathFollowState.index = 0;
+                    ws.pathFollowState.hasPath = true;
+                }
+            }
+
+            // Increment Stage
+            ws.stuckState.attemptCount++;
+            // If we fail Stage 3, loop back to 0 (Jump) to try brute force again
+            if (ws.stuckState.attemptCount > 3) ws.stuckState.attemptCount = 0;
+
+            // Reset flags
+            ws.stuckState.isStuck = false; // Allow main task to try again
+            ws.stuckState.lastUnstuckTime = now;
+            actionStartTime = 0; // Reset for next time
+
+            return true; // Done!
+        }
+
+        return false; // Still working on this stage
     }
 };
 
@@ -683,7 +727,7 @@ public:
         Vector3 safeSpot = ws.player.position + (dir * 10.0f);
 
         // FIX: Added ws.player.isFlying
-        pilot.SteerTowards(ws.player.position, ws.player.rotation, safeSpot, false, ws.player, ws.inTunnel);
+        pilot.SteerTowards(ws.player.position, ws.player.rotation, safeSpot, false, ws.player);
 
         // If we are far enough away, we consider this action "Complete" (for this tick)
         // But for continuous evasion, return false so we keep running until state changes.
@@ -696,9 +740,6 @@ private:
     InteractionController& interact;
     CombatController& combatController;
     bool targetSelected = false;
-    //SimpleKeyboardClient& keyboard;
-    //SimpleMouseClient& mouse;
-    //Camera& camera;
 
     const float MELEE_RANGE = 3.5f; // Adjust based on class (e.g., 30.0f for casters)
 
@@ -758,7 +799,8 @@ public:
         if ((!targetSelected) && (!ws.combatState.inCombat)) {
             // Range 4.0f (Melee), No Flying, 100ms wait after click
             logFile << ws.player.isFlying << " " << interact.GetState() << std::endl;
-            if (interact.EngageTarget(ws.combatState.enemyPosition, ws.combatState.targetGuidLow, ws.combatState.targetGuidHigh, ws.player, ws.combatState.path, ws.combatState.index, 2.0f, 10.0f, true, true, ws.player.isFlying, 100, MOUSE_RIGHT, true, ws.inTunnel)) {
+            if (interact.EngageTarget(ws.combatState.enemyPosition, ws.combatState.targetGuidLow, ws.combatState.targetGuidHigh, ws.player, ws.combatState.path,
+                ws.combatState.index, 4.0f, 10.0f, 3.0f, true, true, ws.globalState.flyingPath, 100, MOUSE_RIGHT, true)) {
                 targetSelected = true;
                 ws.combatState.inCombat = true;
             }
@@ -883,15 +925,15 @@ public:
             ws.player,
             ws.lootState.path,
             ws.lootState.index,
-            6.0f,
-            6.0f,
+            3.5f,
+            2.8f,
+            2.8f,
             false,
             false,
-            true,
+            ws.globalState.flyingPath,
             1500,
             MOUSE_RIGHT,
-            false,
-            ws.inTunnel
+            false
         );
         ws.globalState.activePath = ws.lootState.path;
         ws.globalState.activeIndex = ws.lootState.index;
@@ -946,15 +988,15 @@ public:
             ws.player,
             ws.gatherState.path,
             ws.gatherState.index,
+            3.5f,
             2.8f,
             2.8f,
             false,
             false,
-            true,
+            ws.globalState.flyingPath,
             4500,
             MOUSE_RIGHT,
-            false,
-            ws.inTunnel
+            false
         );
         ws.globalState.activePath = ws.gatherState.path;
         ws.globalState.activeIndex = ws.gatherState.index;
@@ -1030,7 +1072,7 @@ public:
             }
 
             checkedDirect = true;
-            Vector3 returnTarget = ws.waypointReturnState.savedPath[ws.waypointReturnState.savedIndex];
+            Vector3 returnTarget = ws.waypointReturnState.savedPath[ws.waypointReturnState.savedIndex].pos;
 
             logFile << "[RETURN] Checking for direct path..." << std::endl;
             logFile << "  From: (" << ws.player.position.x << "," << ws.player.position.y << "," << ws.player.position.z << ")" << std::endl;
@@ -1067,7 +1109,11 @@ public:
 
             if (directClear) {
                 logFile << "  ✓ Direct path is clear! Using simple 2-point path." << std::endl;
-                ws.waypointReturnState.path = { ws.player.position, returnTarget };
+                // Store PathNodes
+                ws.waypointReturnState.path = {
+                    PathNode(ws.player.position, ws.player.onGround),
+                    PathNode(returnTarget, targetOnGround ? PATH_GROUND : PATH_AIR)
+                };
                 ws.waypointReturnState.hasPath = true;
                 ws.waypointReturnState.index = 0;
 
@@ -1094,18 +1140,11 @@ public:
 
         case PHASE_MOUNT:
         {
-            // CRITICAL: Check if we're in a no-fly zone (tunnel/indoor)
-            bool inNoFlyZone = !CanFlyAt(530, ws.player.position.x, ws.player.position.y, ws.player.position.z);
-            if (ws.inTunnel) {
-                logFile << "[RETURN] In no-fly zone (tunnel/indoor), cannot mount - using ground pathfinding" << std::endl;
-                ws.waypointReturnState.flyingPath = false;
-                currentPhase = PHASE_NAVIGATE;
-                break;
-            }
-
-            Vector3 returnTarget = ws.waypointReturnState.savedPath[ws.waypointReturnState.savedIndex];
+            Vector3 returnTarget = ws.waypointReturnState.savedPath[ws.waypointReturnState.savedIndex].pos;
             float targetGroundZ = globalNavMesh.GetLocalGroundHeight(returnTarget);
             bool targetOnGround = (targetGroundZ > -90000.0f && std::abs(returnTarget.z - targetGroundZ) < GROUND_HEIGHT_THRESHOLD);
+
+            bool isFlying = true;
 
             // If target is on ground, use ground pathfinding
             if (targetOnGround) {
@@ -1123,8 +1162,69 @@ public:
                 break;
             }
 
+            DWORD now = GetTickCount();
+
+            // --- 0. MOUNTING LOGIC REPLACEMENT ---
+            // Verify state: If we are mounted, reset our internal flags
+            if (ws.player.flyingMounted) {
+                pilot.m_IsMounting = false;
+            }
+
+            // Attempt to mount if: Requested (isFlying), Not Mounted
+            if (isFlying && !ws.player.flyingMounted) {
+
+                // Check 1: Are we on a cooldown from a previous failure?
+                if (now < pilot.m_MountDisabledUntil) {
+                    // If disabled, switch to ground path
+                    logFile << "[RETURN] Mount disabled (cooldown). Switching to ground path." << std::endl;
+                    ws.waypointReturnState.flyingPath = false;
+                    currentPhase = PHASE_NAVIGATE;
+                    break;
+                }
+
+                // Check 2: Are we currently waiting for a mount attempt to finish?
+                else if (pilot.m_IsMounting) {
+                    // Wait for 1.8 seconds (1800ms) before verifying
+                    if (now - pilot.m_MountAttemptStart > 1800) {
+                        // Check if it succeeded
+                        if (ws.player.flyingMounted) {
+                            pilot.m_IsMounting = false; // Success, proceed to fly
+                        }
+                        else {
+                            // FAILED: Set cooldown for 2 minutes (120,000 ms)
+                            logFile << "[Movement] Mount failed (Tunnel/Indoor?). Disabling mounting for 2 minutes." << std::endl;
+                            pilot.m_MountDisabledUntil = now + 120000;
+                            pilot.m_IsMounting = false;
+
+                            // Switch to ground path
+                            logFile << "[RETURN] Switching to ground path." << std::endl;
+                            ws.waypointReturnState.flyingPath = false;
+                            currentPhase = PHASE_NAVIGATE;
+                            break;
+                        }
+                    }
+                    else {
+                        // Still waiting (Casting time / Latency). Stop moving.
+                        return false;
+                    }
+                }
+                // Check 3: Start a new attempt
+                else {
+                    // Send command
+                    consoleInput->SendDataRobust(std::wstring(L"/run if not(IsFlyableArea()and IsMounted())then CallCompanion(\"Mount\", 1) end "));
+                    pilot.m_MountAttemptStart = now;
+                    pilot.m_IsMounting = true;
+                    return false; // Stop moving to allow cast
+                }
+            }
+
+            // --- 0b. Reset Input if mounted ---
+            if (ws.player.flyingMounted == true) {
+                consoleInput->Reset();
+            }
+
             // Mount up
-            if ((mountTimer == 0) && (!ws.inTunnel)) {
+            /*if (mountTimer == 0) {
                 logFile << "[RETURN] Mounting for flight..." << std::endl;
                 if (keyboard && consoleInput) {
                     consoleInput->SendDataRobust(std::wstring(L"/run if not(IsFlyableArea()and IsMounted())then CallCompanion(\"Mount\", 1) end "));
@@ -1143,7 +1243,7 @@ public:
                     logFile << "[RETURN] Mount failed, retrying..." << std::endl;
                     mountTimer = 0;
                 }
-            }
+            }*/
 
             return false;
         }
@@ -1191,7 +1291,7 @@ public:
                     const int MAX_ESCAPE_ITERATIONS = 150;
                     const float MAX_ESCAPE_RADIUS = 60.0f;
 
-                    Vector3 returnTarget = ws.waypointReturnState.savedPath[ws.waypointReturnState.savedIndex];
+                    Vector3 returnTarget = ws.waypointReturnState.savedPath[ws.waypointReturnState.savedIndex].pos;
                     Vector3 searchCenter = ws.player.position;
 
                     int startIdx = 0;
@@ -1278,10 +1378,10 @@ public:
                     }
 
                     if (goalIdx >= 0) {
-                        std::vector<Vector3> escapePath;
+                        std::vector<PathNode> escapePath;
                         int idx = goalIdx;
                         while (idx >= 0) {
-                            escapePath.push_back(escapeNodes[idx].pos);
+                            escapePath.push_back(PathNode(escapeNodes[idx].pos, PATH_AIR));
                             idx = escapeNodes[idx].parentIdx;
                         }
                         std::reverse(escapePath.begin(), escapePath.end());
@@ -1290,7 +1390,7 @@ public:
                         ascentTarget = Vector3(escapePoint.x, escapePoint.y, targetZ);
                         ascentTargetSet = true;
 
-                        escapePath.push_back(ascentTarget);
+                        escapePath.push_back(PathNode(ascentTarget, PATH_AIR));
                         ws.globalState.activePath = escapePath;
                         ws.globalState.activeIndex = 0;
                     }
@@ -1304,7 +1404,7 @@ public:
 
             // Navigate escape path
             if (!ws.globalState.activePath.empty() && ws.globalState.activeIndex < ws.globalState.activePath.size()) {
-                Vector3 nextWP = ws.globalState.activePath[ws.globalState.activeIndex];
+                Vector3 nextWP = ws.globalState.activePath[ws.globalState.activeIndex].pos;
                 float dist = ws.player.position.Dist3D(nextWP);
 
                 if (dist < ACCEPTANCE_RADIUS) {
@@ -1318,7 +1418,7 @@ public:
                     break;
                 }
 
-                pilot.SteerTowards(ws.player.position, ws.player.rotation, nextWP, true, ws.player, ws.inTunnel);
+                pilot.SteerTowards(ws.player.position, ws.player.rotation, nextWP, true, ws.player);
             }
             else {
                 float dist = ws.player.position.Dist3D(ascentTarget);
@@ -1328,7 +1428,7 @@ public:
                     break;
                 }
 
-                pilot.SteerTowards(ws.player.position, ws.player.rotation, ascentTarget, true, ws.player, ws.inTunnel);
+                pilot.SteerTowards(ws.player.position, ws.player.rotation, ascentTarget, true, ws.player);
             }
 
             return false;
@@ -1337,7 +1437,7 @@ public:
         case PHASE_NAVIGATE:
         {
             if (!ws.waypointReturnState.hasPath) {
-                Vector3 returnTarget = ws.waypointReturnState.savedPath[ws.waypointReturnState.savedIndex];
+                Vector3 returnTarget = ws.waypointReturnState.savedPath[ws.waypointReturnState.savedIndex].pos;
 
                 logFile << "[RETURN] Calculating " << (ws.waypointReturnState.flyingPath ? "FLIGHT" : "GROUND") << " path" << std::endl;
                 logFile << "  From: (" << ws.player.position.x << "," << ws.player.position.y << "," << ws.player.position.z << ")" << std::endl;
@@ -1372,7 +1472,7 @@ public:
                 break;
             }
 
-            Vector3 target = ws.waypointReturnState.path[ws.waypointReturnState.index];
+            Vector3 target = ws.waypointReturnState.path[ws.waypointReturnState.index].pos;
             float dist = ws.waypointReturnState.flyingPath
                 ? ws.player.position.Dist3D(target)
                 : ws.player.position.Dist2D(target);
@@ -1382,15 +1482,15 @@ public:
                 return false;
             }
 
-            pilot.SteerTowards(ws.player.position, ws.player.rotation, target, ws.waypointReturnState.flyingPath, ws.player, ws.inTunnel);
+            pilot.SteerTowards(ws.player.position, ws.player.rotation, target, ws.waypointReturnState.flyingPath, ws.player);
             return false;
         }
 
         case PHASE_COMPLETE:
         {
             pilot.Stop();
-            ws.waypointReturnState.path = { { -1000.0f, -1000.0f, -1000.0f } };
-            ws.waypointReturnState.savedPath = { { -1000.0f, -1000.0f, -1000.0f } };
+            ws.waypointReturnState.path = { PathNode(-1000.0f, -1000.0f, -1000.0f, 0) };
+            ws.waypointReturnState.savedPath = { PathNode(-1000.0f, -1000.0f, -1000.0f, 0) };
             ws.waypointReturnState.hasTarget = false;
             ws.waypointReturnState.hasPath = false;
             ResetState();
@@ -1438,7 +1538,7 @@ public:
         }
 
         // 2. Get current waypoint
-        Vector3 target = ws.pathFollowState.path[ws.pathFollowState.index];
+        Vector3 target = ws.pathFollowState.path[ws.pathFollowState.index].pos;
         float dist;
         // 3. Check distance
         float dx = target.x - ws.player.position.x;
@@ -1459,8 +1559,8 @@ public:
         }
 
         // 4. Steer
-        bool canFly = (ws.player.isFlying || ws.player.flyingMounted);
-        pilot.SteerTowards(ws.player.position, ws.player.rotation, target, ws.pathFollowState.flyingPath, ws.player, ws.inTunnel);
+        bool canFly = (ws.globalState.flyingPath);
+        pilot.SteerTowards(ws.player.position, ws.player.rotation, target, ws.globalState.flyingPath, ws.player);
         return false; // Still running
     }
 };
@@ -1535,7 +1635,7 @@ public:
                         << " of " << state.pathFollowState.path.size() << std::endl;
 
                     // Enable return after interruption
-                    Vector3 temp = { -1000.0f, -1000.0f, -1000.0f };
+                    PathNode temp = PathNode(-1000.0f, -1000.0f, -1000.0f, 0);
                     if (state.pathFollowState.path.size() > 0 && state.pathFollowState.path[0] != temp) {
                         state.waypointReturnState.hasTarget = true;
                     }
@@ -1548,6 +1648,7 @@ public:
             if (bestAction) {
                 logFile << "[GOAP] Starting action: " << bestAction->GetName() << std::endl;
             }
+
             currentAction = bestAction;
         }
 
@@ -1575,9 +1676,7 @@ public:
 
 private:
     bool CheckIfStuck() {
-        // 1. CRITICAL: If we are already flagged as stuck, DO NOT check position.
-        // We must rely on ActionUnstuck to clear this flag when it is finished.
-        return false;
+        // 1. Check if we are already stuck (ActionUnstuck handles the clearing)
         if (state.stuckState.isStuck) {
             return false;
         }
@@ -1591,8 +1690,8 @@ private:
         if (now - state.stuckState.lastCheckTime > 1000) { // Check every 1 second
             float distMoved = state.player.position.Dist3D(state.stuckState.lastPosition);
 
-            // 3. Distance Check
-            if (distMoved < 1.0f) {
+            // 3. Distance Check (Threshold: 5.0 units)
+            if (distMoved < 5.0f) {
                 // We haven't moved enough
                 if (state.stuckState.stuckStartTime == 0) {
                     state.stuckState.stuckStartTime = now;
@@ -1608,13 +1707,12 @@ private:
             }
             else {
                 // We are moving fine. Reset the detection timer.
-                // NOTE: We do NOT set isStuck = false here. 
-                // Only ActionUnstuck clears the flag.
                 state.stuckState.stuckStartTime = 0;
             }
 
             state.stuckState.lastPosition = state.player.position;
             state.stuckState.lastCheckTime = now;
         }
+        return false;
     }
 };

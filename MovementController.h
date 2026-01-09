@@ -73,6 +73,13 @@ private:
     float m_PixelsPerRadianYaw = 0.0f;
     float m_PixelsPerRadianPitch = 0.0f;
 
+public:
+    // --- MOUNTING LOGIC VARIABLES ---
+    DWORD m_MountAttemptStart = 0;
+    bool m_IsMounting = false;
+    DWORD m_MountDisabledUntil = 0; // Timestamp when mounting is re-enabled
+
+private:
     float NormalizeAngle(float angle) {
         while (angle <= -PI) angle += TWO_PI;
         while (angle > PI) angle -= TWO_PI;
@@ -300,18 +307,62 @@ public:
         return false;
     }
 
-    void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool isFlying, PlayerInfo& player, bool inTunnel) {
+    void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool isFlying, PlayerInfo& player) {
         std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
         float dx = targetPos.x - currentPos.x;
         float dy = targetPos.y - currentPos.y;
         float dz = targetPos.z - currentPos.z;
         float dist2D = std::sqrt(dx * dx + dy * dy); 
         float dist3D = std::sqrt(dx * dx + dy * dy + dz * dz);
-        // Check if mount is currently equipped. If it isn't then equip it
-        if ((isFlying == true) && (player.flyingMounted == false) && (inTunnel == false)) {
-            inputCommand.SendDataRobust(std::wstring(L"/run if not(IsFlyableArea()and IsMounted())then CallCompanion(\"Mount\", 1) end "));
-            return;
+
+        DWORD now = GetTickCount();
+
+        // --- 0. MOUNTING LOGIC REPLACEMENT ---
+        // Verify state: If we are mounted, reset our internal flags
+        if (player.flyingMounted) {
+            m_IsMounting = false;
         }
+
+        // Attempt to mount if: Requested (isFlying), Not Mounted, Not In Tunnel
+        if (isFlying && !player.flyingMounted) {
+
+            // Check 1: Are we on a cooldown from a previous failure?
+            if (now < m_MountDisabledUntil) {
+                // If disabled, we do nothing here and fall through to standard movement (walking).
+                // Effectively ignoring the "isFlying" request for the purpose of mounting.
+            }
+            // Check 2: Are we currently waiting for a mount attempt to finish?
+            else if (m_IsMounting) {
+                // Wait for 1.8 seconds (1800ms) before verifying
+                if (now - m_MountAttemptStart > 1800) {
+                    // Check if it succeeded
+                    if (player.flyingMounted) {
+                        m_IsMounting = false; // Success, proceed to fly
+                    }
+                    else {
+                        // FAILED: Set cooldown for 2 minutes (120,000 ms)
+                        logFile << "[Movement] Mount failed (Tunnel/Indoor?). Disabling mounting for 2 minutes." << std::endl;
+                        m_MountDisabledUntil = now + 120000;
+                        m_IsMounting = false;
+                        // Fall through to walk logic
+                    }
+                }
+                else {
+                    // Still waiting (Casting time / Latency). Stop moving.
+                    return;
+                }
+            }
+            // Check 3: Start a new attempt
+            else {
+                // Send command
+                inputCommand.SendDataRobust(std::wstring(L"/run if not(IsFlyableArea()and IsMounted())then CallCompanion(\"Mount\", 1) end "));
+                m_MountAttemptStart = now;
+                m_IsMounting = true;
+                return; // Stop moving to allow cast
+            }
+        }
+
+        // --- 0b. Reset Input if mounted ---
         if (player.flyingMounted == true) {
             inputCommand.Reset();
         }

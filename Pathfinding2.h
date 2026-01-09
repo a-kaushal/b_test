@@ -46,6 +46,27 @@ const size_t CACHE_CLEANUP_THRESHOLD = 120;
 
 const bool DEBUG_PATHFINDING = true;  // Enable for flight debugging
 
+enum PathType {
+    PATH_GROUND = 0,
+    PATH_AIR = 1
+};
+
+struct PathNode {
+    Vector3 pos;
+    int type; // PathType
+
+    PathNode() : pos(0, 0, 0), type(PATH_GROUND) {}
+    PathNode(Vector3 p, int t) : pos(p), type(t) {}
+    PathNode(float x, float y, float z, int t) : pos(x, y, z), type(t) {}
+
+    bool operator==(const PathNode& other) const {
+        return pos == other.pos && type == other.type;
+    }
+    bool operator!=(const PathNode& other) const {
+        return !(*this == other);
+    }
+};
+
 #pragma pack(push, 1)
 struct MmapTileHeader {
     uint32_t mmapMagic;
@@ -140,12 +161,12 @@ struct PathCacheKey {
 
 class PathCache {
 private:
-    std::map<PathCacheKey, std::vector<Vector3>> cache;
+    std::map<PathCacheKey, std::vector<PathNode>> cache;
     std::list<PathCacheKey> lruList;
     std::map<PathCacheKey, std::list<PathCacheKey>::iterator> lruMap;
 
 public:
-    std::vector<Vector3>* Get(const PathCacheKey& key) {
+    std::vector<PathNode>* Get(const PathCacheKey& key) {
         auto it = cache.find(key);
         if (it == cache.end()) return nullptr;
 
@@ -156,7 +177,7 @@ public:
         return &it->second;
     }
 
-    void Put(const PathCacheKey& key, const std::vector<Vector3>& path) {
+    void Put(const PathCacheKey& key, const std::vector<PathNode>& path) {
         if (cache.size() >= CACHE_CLEANUP_THRESHOLD) {
             while (cache.size() >= MAX_CACHE_SIZE && !lruList.empty()) {
                 PathCacheKey oldest = lruList.back();
@@ -421,25 +442,25 @@ public:
         return true;
     }
 
-    std::vector<Vector3> SubdivideOnMesh(const std::vector<Vector3>& input) {
+    std::vector<PathNode> SubdivideOnMesh(const std::vector<PathNode>& input) {
         if (input.empty()) return {};
         if (!query || !mesh) return input;
 
-        std::vector<Vector3> output;
+        std::vector<PathNode> output;
         output.push_back(input[0]);
         dtQueryFilter filter;
         filter.setIncludeFlags(0xFFFF);
         filter.setExcludeFlags(0);
 
         for (size_t i = 0; i < input.size() - 1; ++i) {
-            Vector3 start = input[i];
-            Vector3 end = input[i + 1];
+            Vector3 start = input[i].pos;
+            Vector3 end = input[i + 1].pos;
             float dist = start.Dist3D(end);
             if (dist < 0.1f) continue;
 
             int steps = (int)(dist / WAYPOINT_STEP_SIZE);
             if (steps == 0) {
-                output.push_back(end);
+                output.push_back(input[i + 1]);
                 continue;
             }
 
@@ -466,11 +487,13 @@ public:
                     safePoint.z = fmapFloor;
                 }
 
-                output.push_back(safePoint);
+                // Subdivided points on mesh are GROUND points
+                output.push_back(PathNode(safePoint, PATH_GROUND));
+
                 if (visitedCount > 0) startPoly = visited[visitedCount - 1];
                 dtVcopy(startPt, resultPt);
             }
-            if (output.back().Dist3D(end) > 0.5f) output.push_back(end);
+            if (output.back().pos.Dist3D(end) > 0.5f) output.push_back(input[i + 1]);
         }
         return output;
     }
@@ -478,7 +501,7 @@ public:
 
 static NavMesh globalNavMesh;
 
-inline std::vector<Vector3> FindPath(const Vector3& start, const Vector3& end) {
+inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end) {
     if (!globalNavMesh.query || !globalNavMesh.mesh) return {};
 
     dtQueryFilter filter;
@@ -507,17 +530,18 @@ inline std::vector<Vector3> FindPath(const Vector3& start, const Vector3& end) {
     globalNavMesh.query->findStraightPath(startPt, endPt, pathPolys, pathCount,
         straightPath, 0, 0, &straightPathCount, MAX_POLYS);
 
-    std::vector<Vector3> result;
+    std::vector<PathNode> result;
     for (int i = 0; i < straightPathCount; ++i) {
-        result.push_back(Vector3(straightPath[i * 3 + 2],
-            straightPath[i * 3 + 0],
-            straightPath[i * 3 + 1]));
+        result.push_back(PathNode(
+            Vector3(straightPath[i * 3 + 2], straightPath[i * 3 + 0], straightPath[i * 3 + 1]),
+            PATH_GROUND // NavMesh paths are always GROUND
+        ));
     }
     return result;
 }
 
 // ANGLED FLIGHT PATHFINDING - Natural diagonal ascent/descent
-inline std::vector<Vector3> Calculate3DFlightPath(const Vector3& start, const Vector3& end, int mapId) {
+inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const Vector3& end, int mapId) {
     std::ofstream logFile;
     if (DEBUG_PATHFINDING) {
         logFile.open("C:\\Driver\\SMM_Debug.log", std::ios::app);
@@ -547,7 +571,7 @@ inline std::vector<Vector3> Calculate3DFlightPath(const Vector3& start, const Ve
             logFile << "✓ Direct path clear!\n";
             logFile.close();
         }
-        return { start, actualEnd };
+        return { PathNode(start, PATH_AIR), PathNode(actualEnd, PATH_AIR) };
     }
 
     // 3. CALCULATE SAFE FLIGHT HEIGHT
@@ -572,8 +596,8 @@ inline std::vector<Vector3> Calculate3DFlightPath(const Vector3& start, const Ve
         // Create waypoints that gain altitude while moving horizontally
         // Divide the journey into segments
         const int NUM_SEGMENTS = 4;
-        std::vector<Vector3> angledPath;
-        angledPath.push_back(start);
+        std::vector<PathNode> angledPath;
+        angledPath.push_back(PathNode(start, PATH_AIR));
 
         // Start altitude check
         float currentZ = start.z;
@@ -593,18 +617,18 @@ inline std::vector<Vector3> Calculate3DFlightPath(const Vector3& start, const Ve
             }
 
             // Validate segment to this waypoint
-            if (!globalNavMesh.CheckFlightSegment(angledPath.back(), waypoint, mapId, true)) {
+            if (!globalNavMesh.CheckFlightSegment(angledPath.back().pos, waypoint, mapId, true)) {
                 angledPathClear = false;
                 break;
             }
 
-            angledPath.push_back(waypoint);
+            angledPath.push_back(PathNode(waypoint, PATH_AIR));
         }
 
         // Add final descent to actual end if needed
-        if (angledPathClear && angledPath.back() != actualEnd) {
-            if (globalNavMesh.CheckFlightSegment(angledPath.back(), actualEnd, mapId, true)) {
-                angledPath.push_back(actualEnd);
+        if (angledPathClear && angledPath.back().pos != actualEnd) {
+            if (globalNavMesh.CheckFlightSegment(angledPath.back().pos, actualEnd, mapId, true)) {
+                angledPath.push_back(PathNode(actualEnd, PATH_AIR));
 
                 if (DEBUG_PATHFINDING) {
                     logFile << "✓ Angled ascent path clear (" << angledPath.size() << " waypoints)\n";
@@ -751,19 +775,19 @@ inline std::vector<Vector3> Calculate3DFlightPath(const Vector3& start, const Ve
     }
 
     // 6. RECONSTRUCT AND SMOOTH PATH
-    std::vector<Vector3> path;
+    std::vector<PathNode> path;
 
     if (goalIdx >= 0) {
         int currIdx = goalIdx;
         while (currIdx >= 0) {
-            path.push_back(nodes[currIdx].pos);
+            path.push_back(PathNode(nodes[currIdx].pos, PATH_AIR));
             currIdx = nodes[currIdx].parentIdx;
         }
         std::reverse(path.begin(), path.end());
 
         // AGGRESSIVE SMOOTHING
         if (path.size() > 2) {
-            std::vector<Vector3> smoothed;
+            std::vector<PathNode> smoothed;
             smoothed.push_back(path[0]);
 
             size_t current = 0;
@@ -771,7 +795,7 @@ inline std::vector<Vector3> Calculate3DFlightPath(const Vector3& start, const Ve
                 size_t farthest = current + 1;
 
                 for (size_t next = path.size() - 1; next > current + 1; --next) {
-                    if (globalNavMesh.CheckFlightSegment(path[current], path[next], mapId, true)) {
+                    if (globalNavMesh.CheckFlightSegment(path[current].pos, path[next].pos, mapId, true)) {
                         farthest = next;
                         break;
                     }
@@ -786,13 +810,13 @@ inline std::vector<Vector3> Calculate3DFlightPath(const Vector3& start, const Ve
 
         // FINAL VALIDATION
         for (size_t i = 0; i < path.size(); ++i) {
-            if (!globalNavMesh.CheckFlightPoint(path[i], mapId)) {
-                Vector3 adjusted = path[i];
+            if (!globalNavMesh.CheckFlightPoint(path[i].pos, mapId)) {
+                Vector3 adjusted = path[i].pos;
                 bool foundSafe = false;
                 for (int attempt = 0; attempt < 5; ++attempt) {
                     adjusted.z += 5.0f;
                     if (globalNavMesh.CheckFlightPoint(adjusted, mapId)) {
-                        path[i] = adjusted;
+                        path[i].pos = adjusted;
                         foundSafe = true;
                         break;
                     }
@@ -814,16 +838,16 @@ inline std::vector<Vector3> Calculate3DFlightPath(const Vector3& start, const Ve
         float extremeZ = (std::max)(
             (std::max)(start.z, actualEnd.z) + 100.0f,
             (maxGroundZ > -90000.0f ? maxGroundZ + 120.0f : start.z + 100.0f)
-        );
+            );
 
         // Create angled ascent instead of vertical
         Vector3 midAscent = start + ((actualEnd - start) * 0.5f);
         midAscent.z = extremeZ;
 
         path = {
-            start,
-            midAscent,
-            actualEnd
+            PathNode(start, PATH_AIR),
+            PathNode(midAscent, PATH_AIR),
+            PathNode(actualEnd, PATH_AIR)
         };
 
         if (DEBUG_PATHFINDING) {
@@ -834,15 +858,19 @@ inline std::vector<Vector3> Calculate3DFlightPath(const Vector3& start, const Ve
     return path;
 }
 
-inline std::vector<Vector3> SubdivideFlightPath(const std::vector<Vector3>& input, int mapId) {
+inline std::vector<PathNode> SubdivideFlightPath(const std::vector<PathNode>& input, int mapId) {
     if (input.empty()) return {};
-    std::vector<Vector3> output;
+    std::vector<PathNode> output;
     output.reserve(input.size() * 4);
     output.push_back(input[0]);
 
     for (size_t i = 0; i < input.size() - 1; ++i) {
-        Vector3 start = input[i];
-        Vector3 end = input[i + 1];
+        Vector3 start = input[i].pos;
+        Vector3 end = input[i + 1].pos;
+        
+        // Preserve type from the starting node of the segment
+        int segmentType = input[i].type;
+
         float dist3D = start.Dist3D(end);
 
         bool isFinalApproach = (i == input.size() - 2);
@@ -856,7 +884,7 @@ inline std::vector<Vector3> SubdivideFlightPath(const std::vector<Vector3>& inpu
         for (int j = 1; j <= count; ++j) {
             Vector3 pt = start + (dir * (float)j);
 
-            if (!isFinalApproach) {
+            if (!isFinalApproach && segmentType == PATH_AIR) {
                 // Use FMap for precise floor snapping
                 float gZ = GetFMapFloorHeight(mapId, pt.x, pt.y, pt.z);
                 if (gZ > -90000.0f && pt.z < gZ + MIN_CLEARANCE) {
@@ -864,7 +892,7 @@ inline std::vector<Vector3> SubdivideFlightPath(const std::vector<Vector3>& inpu
                 }
             }
 
-            output.push_back(pt);
+            output.push_back(PathNode(pt, segmentType));
         }
     }
     return output;
@@ -915,7 +943,7 @@ inline bool DetectNoFlyZone(const Vector3& start, const Vector3& end, int mapId,
 }
 
 // Create a hybrid path that handles tunnels
-inline std::vector<Vector3> CreateHybridPath(const Vector3& start, const Vector3& end,
+inline std::vector<PathNode> CreateHybridPath(const Vector3& start, const Vector3& end,
     int mapId, bool flying) {
     std::ofstream logFile;
     if (DEBUG_PATHFINDING) {
@@ -940,11 +968,11 @@ inline std::vector<Vector3> CreateHybridPath(const Vector3& start, const Vector3
         logFile << "  Exit:  (" << tunnelExit.x << "," << tunnelExit.y << "," << tunnelExit.z << ")\n";
     }
 
-    std::vector<Vector3> hybridPath;
+    std::vector<PathNode> hybridPath;
 
     // SEGMENT 1: Fly to tunnel entrance
     if (start.Dist3D(tunnelEntry) > 5.0f) {
-        std::vector<Vector3> approachPath = Calculate3DFlightPath(start, tunnelEntry, mapId);
+        std::vector<PathNode> approachPath = Calculate3DFlightPath(start, tunnelEntry, mapId);
         if (!approachPath.empty()) {
             hybridPath.insert(hybridPath.end(), approachPath.begin(), approachPath.end());
             if (DEBUG_PATHFINDING) {
@@ -960,7 +988,7 @@ inline std::vector<Vector3> CreateHybridPath(const Vector3& start, const Vector3
         }
     }
     else {
-        hybridPath.push_back(start);
+        hybridPath.push_back(PathNode(start, PATH_AIR));
     }
 
     // SEGMENT 2: Walk through tunnel (GROUND PATHFINDING)
@@ -968,10 +996,10 @@ inline std::vector<Vector3> CreateHybridPath(const Vector3& start, const Vector3
         logFile << "[HYBRID] Computing ground path through tunnel...\n";
     }
 
-    std::vector<Vector3> tunnelPath = FindPath(tunnelEntry, tunnelExit);
+    std::vector<PathNode> tunnelPath = FindPath(tunnelEntry, tunnelExit);
     if (!tunnelPath.empty()) {
         // Add tunnel waypoints (skip first if it overlaps with approach end)
-        if (!hybridPath.empty() && hybridPath.back().Dist3D(tunnelPath[0]) < 3.0f) {
+        if (!hybridPath.empty() && hybridPath.back().pos.Dist3D(tunnelPath[0].pos) < 3.0f) {
             hybridPath.insert(hybridPath.end(), tunnelPath.begin() + 1, tunnelPath.end());
         }
         else {
@@ -986,16 +1014,16 @@ inline std::vector<Vector3> CreateHybridPath(const Vector3& start, const Vector3
         if (DEBUG_PATHFINDING) {
             logFile << "[HYBRID] ⚠ NavMesh failed, using straight line through tunnel\n";
         }
-        hybridPath.push_back(tunnelEntry);
-        hybridPath.push_back(tunnelExit);
+        hybridPath.push_back(PathNode(tunnelEntry, PATH_GROUND));
+        hybridPath.push_back(PathNode(tunnelExit, PATH_GROUND));
     }
 
     // SEGMENT 3: Fly from tunnel exit to final destination
     if (tunnelExit.Dist3D(end) > 5.0f) {
-        std::vector<Vector3> exitPath = Calculate3DFlightPath(tunnelExit, end, mapId);
+        std::vector<PathNode> exitPath = Calculate3DFlightPath(tunnelExit, end, mapId);
         if (!exitPath.empty()) {
             // Skip first waypoint if it overlaps
-            if (!hybridPath.empty() && hybridPath.back().Dist3D(exitPath[0]) < 3.0f) {
+            if (!hybridPath.empty() && hybridPath.back().pos.Dist3D(exitPath[0].pos) < 3.0f) {
                 hybridPath.insert(hybridPath.end(), exitPath.begin() + 1, exitPath.end());
             }
             else {
@@ -1007,9 +1035,9 @@ inline std::vector<Vector3> CreateHybridPath(const Vector3& start, const Vector3
         }
     }
     else {
-        hybridPath.push_back(end);
+        hybridPath.push_back(PathNode(end, PATH_AIR));
     }
-
+    
     if (DEBUG_PATHFINDING) {
         logFile << "[HYBRID] ✓ Complete hybrid path: " << hybridPath.size() << " total waypoints\n";
         logFile << "  Structure: Fly(" << (start.Dist3D(tunnelEntry) > 5.0f ? "yes" : "no")
@@ -1021,12 +1049,12 @@ inline std::vector<Vector3> CreateHybridPath(const Vector3& start, const Vector3
 }
 
 // MODIFY CalculatePath to use hybrid pathfinding
-inline std::vector<Vector3> CalculatePath(const std::vector<Vector3>& inputPath, const Vector3& startPos,
+inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath, const Vector3& startPos,
     int currentIndex, bool flying, int mapId, bool path_loop = false) {
     std::string mmapFolder = "C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/mmaps/";
     if (!globalNavMesh.LoadMap(mmapFolder, mapId)) return {};
 
-    std::vector<Vector3> stitchedPath;
+    std::vector<PathNode> stitchedPath;
     std::vector<Vector3> modifiedInput;
 
     if (inputPath.empty() || currentIndex < 0 || currentIndex >= inputPath.size()) return {};
@@ -1047,16 +1075,16 @@ inline std::vector<Vector3> CalculatePath(const std::vector<Vector3>& inputPath,
         Vector3 end = modifiedInput[i + 1];
         PathCacheKey key(start, end, flying);
 
-        std::vector<Vector3>* cached = globalPathCache.Get(key);
+        std::vector<PathNode>* cached = globalPathCache.Get(key);
         if (!cached) {
-            std::vector<Vector3> segment;
+            std::vector<PathNode> segment;
 
             // SMART PATHFINDING LOGIC
             bool shouldTryGroundFirst = false;
 
             if (flying) {
                 // First check for tunnels/no-fly zones
-                std::vector<Vector3> hybridPath = CreateHybridPath(start, end, mapId, flying);
+                std::vector<PathNode> hybridPath = CreateHybridPath(start, end, mapId, flying);
                 if (!hybridPath.empty()) {
                     // Found a tunnel, use the hybrid path
                     globalPathCache.Put(key, hybridPath);
@@ -1150,11 +1178,11 @@ inline std::vector<Vector3> CalculatePath(const std::vector<Vector3>& inputPath,
         // Check if this is a hybrid path (has both high and low altitude sections)
         bool isHybrid = false;
         if (stitchedPath.size() > 5) {
-            float minZ = stitchedPath[0].z;
-            float maxZ = stitchedPath[0].z;
+            float minZ = stitchedPath[0].pos.z;
+            float maxZ = stitchedPath[0].pos.z;
             for (const auto& wp : stitchedPath) {
-                minZ = (std::min)(minZ, wp.z);
-                maxZ = (std::max)(maxZ, wp.z);
+                minZ = (std::min)(minZ, wp.pos.z);
+                maxZ = (std::max)(maxZ, wp.pos.z);
             }
             // If altitude varies significantly, it might be a hybrid path
             isHybrid = (maxZ - minZ) > 30.0f && stitchedPath.size() > 20;
