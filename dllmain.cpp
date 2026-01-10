@@ -670,6 +670,7 @@ void MainThread(HMODULE hModule) {
                     // Move to first waypoint in path
                     agent.state.waypointReturnState.enabled = true;
                     agent.state.waypointReturnState.savedPath = path;
+                    agent.state.waypointReturnState.hasTarget = true;
                     agent.state.waypointReturnState.savedIndex = 0;
 
                     //logFile << "Underwater Check: " << globalNavMesh.IsUnderwater(Vector3(414.4220886f, 6918.97f, -5.0f)) << std::endl;

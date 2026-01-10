@@ -410,8 +410,19 @@ public:
             return false;
         }
 
-        Vector3 wp = path[index].pos;
-        float dist = (fly) ? player.position.Dist3D(wp) : player.position.Dist2D(wp);
+        PathNode& node = path[index];
+        Vector3 wp = node.pos;
+
+        float dist;
+        // Ground Nodes: 2D Check (Ignore Z) to prevent getting stuck on points slightly below ground
+        // Air Nodes: 3D Check
+        if (node.type == PATH_GROUND) {
+            dist = player.position.Dist2D(wp);
+        }
+        else {
+            dist = player.position.Dist3D(wp);
+        }
+
         if (index == (path.size() - 1)) {
             if (dist < finalDist) {
                 index++;
@@ -606,13 +617,10 @@ public:
         bool stageComplete = false;
 
         switch (ws.stuckState.attemptCount) {
-
             // STAGE 0: JUMP FORWARD
         case 0:
-            // 0 - 500ms
             if (elapsed < 500) {
                 keyboard.SendKey('W', 0, true);
-                // Jump between 100ms and 300ms
                 if (elapsed > 100 && elapsed < 300)
                     keyboard.SendKey(VK_SPACE, 0, true);
                 else
@@ -657,16 +665,74 @@ public:
             }
             break;
 
+            // NEW STAGES: More aggressive escape attempts
+        case 4: // Jump backward
+            if (elapsed < 800) {
+                keyboard.SendKey('S', 0, true);
+                if (elapsed > 200 && elapsed < 600)
+                    keyboard.SendKey(VK_SPACE, 0, true);
+                else
+                    keyboard.SendKey(VK_SPACE, 0, false);
+            }
+            else {
+                keyboard.SendKey('S', 0, false);
+                stageComplete = true;
+            }
+            break;
+
+        case 5: // Strafe left + jump
+            if (elapsed < 1000) {
+                keyboard.SendKey('Q', 0, true);
+                if (elapsed > 300 && elapsed < 600)
+                    keyboard.SendKey(VK_SPACE, 0, true);
+                else
+                    keyboard.SendKey(VK_SPACE, 0, false);
+            }
+            else {
+                keyboard.SendKey('Q', 0, false);
+                stageComplete = true;
+            }
+            break;
+
+        case 6: // Strafe right + jump
+            if (elapsed < 1000) {
+                keyboard.SendKey('E', 0, true);
+                if (elapsed > 300 && elapsed < 600)
+                    keyboard.SendKey(VK_SPACE, 0, true);
+                else
+                    keyboard.SendKey(VK_SPACE, 0, false);
+            }
+            else {
+                keyboard.SendKey('E', 0, false);
+                stageComplete = true;
+            }
+            break;
+
+        case 7: // Fly straight up (if can fly)
+            if (ws.player.isFlying || ws.player.flyingMounted) {
+                if (elapsed < 2000) {
+                    keyboard.SendKey(VK_SPACE, 0, true); // Ascend
+                }
+                else {
+                    keyboard.SendKey(VK_SPACE, 0, false);
+                    stageComplete = true;
+                }
+            }
+            else {
+                // Can't fly, skip this stage
+                stageComplete = true;
+            }
+            break;
+
         default:
-            // Fallback: Reset to 0 if something goes wrong
-            ws.stuckState.attemptCount = 0;
+            // Exhausted all attempts - will be caught by CheckIfStuck
+            ws.stuckState.attemptCount = 8; // Set to failure threshold
             stageComplete = true;
             break;
         }
 
         // 2. Completion Logic
         if (stageComplete) {
-            // Stop all movement keys to be safe
             pilot.Stop();
 
             // Special handling for Repath (end of Stage 3)
@@ -678,7 +744,7 @@ public:
                         { dest },
                         ws.player.position,
                         0,
-                        ws.player.isFlying,
+                        ws.player.isFlying || ws.player.flyingMounted,
                         530,
                         false
                     );
@@ -689,15 +755,13 @@ public:
 
             // Increment Stage
             ws.stuckState.attemptCount++;
-            // If we fail Stage 3, loop back to 0 (Jump) to try brute force again
-            if (ws.stuckState.attemptCount > 3) ws.stuckState.attemptCount = 0;
 
             // Reset flags
-            ws.stuckState.isStuck = false; // Allow main task to try again
+            ws.stuckState.isStuck = false;
             ws.stuckState.lastUnstuckTime = now;
-            actionStartTime = 0; // Reset for next time
+            actionStartTime = 0;
 
-            return true; // Done!
+            return true;
         }
 
         return false; // Still working on this stage
@@ -1090,7 +1154,16 @@ public:
             logFile << "  Current on ground: " << currentOnGround << " (Z=" << ws.player.position.z << ", groundZ=" << currentGroundZ << ")" << std::endl;
             logFile << "  Target on ground: " << targetOnGround << " (Z=" << returnTarget.z << ", groundZ=" << targetGroundZ << ")" << std::endl;
 
-            // Try direct path check
+            float horizontalDist = ws.player.position.Dist2D(returnTarget);
+            float verticalDist = std::abs(ws.player.position.z - returnTarget.z);
+
+            if (horizontalDist > 100.0f || verticalDist > 50.0f) {
+                logFile << "  ✗ Distance too great for direct path (hDist=" << horizontalDist << ", vDist=" << verticalDist << ")" << std::endl;
+                currentPhase = PHASE_MOUNT;
+                break;
+            }
+
+            // Try direct path check - ONLY for short distances
             bool directClear = false;
             if (currentOnGround && targetOnGround) {
                 // Both on ground - check 2D ground path
@@ -1099,12 +1172,48 @@ public:
                 testStart.z = currentGroundZ + 1.0f;
                 Vector3 testEnd = returnTarget;
                 testEnd.z = targetGroundZ + 1.0f;
-                directClear = globalNavMesh.CheckFlightSegment(testStart, testEnd, 530, false);
+                directClear = globalNavMesh.CheckFlightSegment(testStart, testEnd, 530, true);
+                // Additional validation: sample midpoint
+                if (directClear) {
+                    Vector3 midpoint = (testStart + testEnd) * 0.5f;
+                    float midGroundZ = globalNavMesh.GetLocalGroundHeight(midpoint);
+                    if (midGroundZ > -90000.0f && midpoint.z < midGroundZ + MIN_CLEARANCE) {
+                        logFile << "  ✗ Midpoint too close to ground" << std::endl;
+                        directClear = false;
+                    }
+                }
             }
             else {
                 // At least one is in air - check 3D flight path
                 logFile << "  Checking flight direct path (3D)..." << std::endl;
                 directClear = globalNavMesh.CheckFlightSegment(ws.player.position, returnTarget, 530, true);
+                // NEW: Additional validation for flight paths
+                if (directClear) {
+                    // Check multiple points along the path
+                    Vector3 dir = returnTarget - ws.player.position;
+                    float dist = dir.Length();
+                    dir = dir / dist;
+
+                    for (int sample = 1; sample <= 3; sample++) {
+                        float t = (float)sample / 1.0f;
+                        Vector3 testPoint = ws.player.position + (dir * (dist * t));
+
+                        // Verify flyability
+                        if (!CanFlyAt(530, testPoint.x, testPoint.y, testPoint.z)) {
+                            logFile << "  ✗ Sample point " << sample << " not flyable" << std::endl;
+                            directClear = false;
+                            break;
+                        }
+
+                        // Verify clearance
+                        float sampleGroundZ = globalNavMesh.GetLocalGroundHeight(testPoint);
+                        if (sampleGroundZ > -90000.0f && testPoint.z < sampleGroundZ + MIN_CLEARANCE + 5.0f) {
+                            logFile << "  ✗ Sample point " << sample << " too close to ground" << std::endl;
+                            directClear = false;
+                            break;
+                        }
+                    }
+                }
             }
 
             if (directClear) {
@@ -1184,8 +1293,8 @@ public:
 
                 // Check 2: Are we currently waiting for a mount attempt to finish?
                 else if (pilot.m_IsMounting) {
-                    // Wait for 1.8 seconds (1800ms) before verifying
-                    if (now - pilot.m_MountAttemptStart > 1800) {
+                    // Wait for 3.8 seconds (3800ms) before verifying
+                    if (now - pilot.m_MountAttemptStart > 3800) {
                         // Check if it succeeded
                         if (ws.player.flyingMounted) {
                             pilot.m_IsMounting = false; // Success, proceed to fly
@@ -1396,8 +1505,10 @@ public:
                     }
                     else {
                         logFile << "[RETURN] Mini A* failed, extreme height" << std::endl;
-                        ascentTarget = Vector3(ws.player.position.x, ws.player.position.y, targetZ + 60.0f);
-                        ascentTargetSet = true;
+
+                        logFile << "[RETURN] Skipping ascent, will use full pathfinding" << std::endl;
+                        currentPhase = PHASE_NAVIGATE;
+                        ascentTargetSet = false; // Reset for potential retry
                     }
                 }
             }
@@ -1472,10 +1583,16 @@ public:
                 break;
             }
 
-            Vector3 target = ws.waypointReturnState.path[ws.waypointReturnState.index].pos;
-            float dist = ws.waypointReturnState.flyingPath
-                ? ws.player.position.Dist3D(target)
-                : ws.player.position.Dist2D(target);
+            PathNode& targetNode = ws.waypointReturnState.path[ws.waypointReturnState.index];
+            Vector3 target = targetNode.pos;
+
+            float dist;
+            if (targetNode.type == PATH_GROUND) {
+                dist = ws.player.position.Dist2D(target);
+            }
+            else {
+                dist = ws.player.position.Dist3D(target);
+            }
 
             if (dist < ACCEPTANCE_RADIUS) {
                 ws.waypointReturnState.index++;
@@ -1538,17 +1655,16 @@ public:
         }
 
         // 2. Get current waypoint
-        Vector3 target = ws.pathFollowState.path[ws.pathFollowState.index].pos;
+        PathNode& targetNode = ws.pathFollowState.path[ws.pathFollowState.index];
+        Vector3 target = targetNode.pos;
+
         float dist;
-        // 3. Check distance
-        float dx = target.x - ws.player.position.x;
-        float dy = target.y - ws.player.position.y;
-        float dz = target.z - ws.player.position.z;
-        if (ws.pathFollowState.flyingPath == true) {
-            dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+        // Check based on the specific node type, not just the global state
+        if (targetNode.type == PATH_GROUND) {
+            dist = ws.player.position.Dist2D(target);
         }
         else {
-            dist = std::sqrt(dx * dx + dy * dy);
+            dist = ws.player.position.Dist3D(target);
         }
 
         if (dist < ACCEPTANCE_RADIUS) {
@@ -1676,6 +1792,7 @@ public:
 
 private:
     bool CheckIfStuck() {
+        std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
         // 1. Check if we are already stuck (ActionUnstuck handles the clearing)
         if (state.stuckState.isStuck) {
             return false;
@@ -1683,6 +1800,9 @@ private:
 
         // 2. Only check if we are actually trying to go somewhere (active path)
         if (state.globalState.activePath.empty()) {
+            // NEW: Reset stuck state when idle
+            state.stuckState.stuckStartTime = 0;
+            state.stuckState.lastCheckTime = 0;
             return false;
         }
 
@@ -1699,7 +1819,31 @@ private:
 
                 // If stuck for > 2 seconds, SET the flag
                 if (now - state.stuckState.stuckStartTime > 2000) {
-                    std::cout << "[GOAP] Stuck Detected! Engaging Unstuck Maneuver." << std::endl;
+                    logFile << "[GOAP] Stuck Detected! Engaging Unstuck Maneuver (Attempt "
+                        << (state.stuckState.attemptCount + 1) << ")" << std::endl;
+
+                    // NEW: Check if we've been stuck too long (failure condition)
+                    if (state.stuckState.attemptCount >= 8) {
+                        logFile << "[GOAP] ⚠ Unstuck attempts exhausted! Clearing path and restarting." << std::endl;
+
+                        // Clear all paths and reset to idle
+                        state.pathFollowState.hasPath = false;
+                        state.pathFollowState.path.clear();
+                        state.pathFollowState.index = 0;
+                        state.waypointReturnState.hasPath = false;
+                        state.waypointReturnState.hasTarget = false;
+                        state.globalState.activePath.clear();
+
+                        // Reset stuck state completely
+                        state.stuckState.isStuck = false;
+                        state.stuckState.attemptCount = 0;
+                        state.stuckState.stuckStartTime = 0;
+                        state.stuckState.lastUnstuckTime = 0;
+
+                        pilot.Stop();
+                        return false;
+                    }
+
                     state.stuckState.isStuck = true;
                     state.stuckState.stuckStartTime = 0;
                     return true;

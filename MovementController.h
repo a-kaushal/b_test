@@ -20,7 +20,7 @@ private:
     // --- FLIGHT CONTROL CONSTANTS ---
     const float ALIGNMENT_DEADZONE = 0.05f;      // ~3 degrees: Considered "Facing Target"
     const float BANKING_ANGLE = 0.78f;           // ~45 degrees: Max angle to hold 'W' while turning (Prevents wide drifting)
-    const float STEEP_CLIMB_THRESHOLD = 0.9f;    // ~57 degrees: Use Jump/Sit keys for vertical limits
+    const float STEEP_CLIMB_THRESHOLD = 1.3f;    //  degrees: Use Jump/Sit keys for vertical limits
 
     // Distances
     const float PRECISION_DIST = 5.0f;           // Yards: Below this, we prioritize aiming over moving
@@ -333,8 +333,8 @@ public:
             }
             // Check 2: Are we currently waiting for a mount attempt to finish?
             else if (m_IsMounting) {
-                // Wait for 1.8 seconds (1800ms) before verifying
-                if (now - m_MountAttemptStart > 1800) {
+                // Wait for 3.8 seconds (3800ms) before verifying
+                if (now - m_MountAttemptStart > 3800) {
                     // Check if it succeeded
                     if (player.flyingMounted) {
                         m_IsMounting = false; // Success, proceed to fly
@@ -389,6 +389,9 @@ public:
         // Coasting Logic: If very close, stop twitching the mouse to avoid 180 spins
         bool isCoasting = (dist3D < COAST_DISTANCE);
 
+        // Determine if we need "Elevator Mode" (Space/X) for extreme verticality
+        bool useElevator = (std::abs(targetPitch) > STEEP_CLIMB_THRESHOLD);
+
         if (!isCoasting) {
             // YAW
             if (std::abs(yawDiff) > ALIGNMENT_DEADZONE) {
@@ -397,11 +400,21 @@ public:
 
             // PITCH (Only if flying)
             if (isFlying) {
-                // Determine if we need "Elevator Mode" (Space/X) for extreme verticality
-                bool useElevator = (std::abs(targetPitch) > STEEP_CLIMB_THRESHOLD);
 
-                if (!useElevator) {
-                    // Use Mouse Pitch
+                // TAKEOFF LOGIC: If we want to fly, are mounted, but currently grounded -> Press Space
+                bool needTakeoff = (player.flyingMounted && !player.isFlying);
+
+                if (needTakeoff) {
+                    kbd.SendKey(KEY_ASCEND, 0, true);   // Force Jump/Ascend
+                    kbd.SendKey(KEY_DESCEND, 0, false);
+
+                    // Still allow mouse pitch alignment so we look where we are going
+                    if (std::abs(pitchDiff) > ALIGNMENT_DEADZONE) {
+                        pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
+                    }
+                }
+                else if (!useElevator) {
+                    // Standard Flight
                     if (std::abs(pitchDiff) > ALIGNMENT_DEADZONE) {
                         pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
                     }
@@ -411,7 +424,7 @@ public:
                     kbd.SendKey(KEY_DESCEND, 0, false);
                 }
                 else {
-                    // Use Keys for steep vertical (Hovering up/down)
+                    // Steep Vertical (Hovering up/down)
                     if (targetPitch > 0) {
                         kbd.SendKey(KEY_ASCEND, 0, true);
                         kbd.SendKey(KEY_DESCEND, 0, false);
@@ -422,6 +435,7 @@ public:
                     }
                     // Don't fight the keys with mouse pitch
                     pixelsPitch = 0;
+                    pixelsYaw = 0;
                 }
             }
         }
@@ -470,7 +484,7 @@ public:
         }
 
         // Apply Throttle
-        if (shouldMoveForward) {
+        if ((shouldMoveForward) && (!useElevator)) {
             kbd.SendKey('W', 0, true);
         }
         else {
