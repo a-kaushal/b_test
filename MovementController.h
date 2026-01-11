@@ -1,12 +1,16 @@
 #pragma once
-#include "Vector.h"
-#include "SimpleKeyboardClient.h"
-#include "SimpleMouseClient.h"
-#include "Profile.h"
 #include <cmath>
 #include <string>
 #include <locale>
 #include <codecvt>
+
+#include "Vector.h"
+#include "SimpleKeyboardClient.h"
+#include "SimpleMouseClient.h"
+#include "Profile.h"
+#include "WorldState.h"
+
+extern WorldState* g_GameState;
 
 class MovementController {
 private:
@@ -121,6 +125,13 @@ public:
             mouse.ReleaseButton(MOUSE_RIGHT);
             isSteering = false;
         }
+    }
+
+    // Check if any movement keys are currently being pressed
+    bool IsMoving() {
+        return kbd.IsHolding('W') || kbd.IsHolding('S') ||
+            kbd.IsHolding('Q') || kbd.IsHolding('E') ||
+            kbd.IsHolding(KEY_ASCEND) || kbd.IsHolding(KEY_DESCEND);
     }
 
     // --- NEW: CALIBRATION FUNCTION ---
@@ -307,7 +318,7 @@ public:
         return false;
     }
 
-    void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool isFlying, PlayerInfo& player) {
+    void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool flyingPath, PlayerInfo& player) {
         std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
         float dx = targetPos.x - currentPos.x;
         float dy = targetPos.y - currentPos.y;
@@ -324,7 +335,7 @@ public:
         }
 
         // Attempt to mount if: Requested (isFlying), Not Mounted, Not In Tunnel
-        if (isFlying && !player.flyingMounted) {
+        if (flyingPath && !player.flyingMounted && !player.inWater) {
 
             // Check 1: Are we on a cooldown from a previous failure?
             if (now < m_MountDisabledUntil) {
@@ -335,8 +346,8 @@ public:
             else if (m_IsMounting) {
                 // Wait for 3.8 seconds (3800ms) before verifying
                 if (now - m_MountAttemptStart > 3800) {
-                    // Check if it succeeded
-                    if (player.flyingMounted) {
+                    // Check if it succeeded or if failed due to being under attack
+                    if ((player.flyingMounted) || (g_GameState->combatState.underAttack)) {
                         m_IsMounting = false; // Success, proceed to fly
                     }
                     else {
@@ -399,43 +410,45 @@ public:
             }
 
             // PITCH (Only if flying)
-            if (isFlying) {
+            if (flyingPath) {
 
                 // TAKEOFF LOGIC: If we want to fly, are mounted, but currently grounded -> Press Space
-                bool needTakeoff = (player.flyingMounted && !player.isFlying);
+                bool needTakeoff = (player.flyingMounted && !player.isFlying && !player.inWater);
 
-                if (needTakeoff) {
-                    kbd.SendKey(KEY_ASCEND, 0, true);   // Force Jump/Ascend
-                    kbd.SendKey(KEY_DESCEND, 0, false);
+                if (player.flyingMounted) {
+                    if (needTakeoff) {
+                        kbd.SendKey(KEY_ASCEND, 0, true);   // Force Jump/Ascend
+                        kbd.SendKey(KEY_DESCEND, 0, false);
 
-                    // Still allow mouse pitch alignment so we look where we are going
-                    if (std::abs(pitchDiff) > ALIGNMENT_DEADZONE) {
-                        pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
+                        // Still allow mouse pitch alignment so we look where we are going
+                        if (std::abs(pitchDiff) > ALIGNMENT_DEADZONE) {
+                            pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
+                        }
                     }
-                }
-                else if (!useElevator) {
-                    // Standard Flight
-                    if (std::abs(pitchDiff) > ALIGNMENT_DEADZONE) {
-                        pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
-                    }
+                    else if (!useElevator) {
+                        // Standard Flight
+                        if (std::abs(pitchDiff) > ALIGNMENT_DEADZONE) {
+                            pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
+                        }
 
-                    // Release Elevator Keys if we aren't using them
-                    kbd.SendKey(KEY_ASCEND, 0, false);
-                    kbd.SendKey(KEY_DESCEND, 0, false);
-                }
-                else {
-                    // Steep Vertical (Hovering up/down)
-                    if (targetPitch > 0) {
-                        kbd.SendKey(KEY_ASCEND, 0, true);
+                        // Release Elevator Keys if we aren't using them
+                        kbd.SendKey(KEY_ASCEND, 0, false);
                         kbd.SendKey(KEY_DESCEND, 0, false);
                     }
                     else {
-                        kbd.SendKey(KEY_DESCEND, 0, true);
-                        kbd.SendKey(KEY_ASCEND, 0, false);
+                        // Steep Vertical (Hovering up/down)
+                        if (targetPitch > 0) {
+                            kbd.SendKey(KEY_ASCEND, 0, true);
+                            kbd.SendKey(KEY_DESCEND, 0, false);
+                        }
+                        else {
+                            kbd.SendKey(KEY_DESCEND, 0, true);
+                            kbd.SendKey(KEY_ASCEND, 0, false);
+                        }
+                        // Don't fight the keys with mouse pitch
+                        pixelsPitch = 0;
+                        pixelsYaw = 0;
                     }
-                    // Don't fight the keys with mouse pitch
-                    pixelsPitch = 0;
-                    pixelsYaw = 0;
                 }
             }
         }
@@ -492,7 +505,7 @@ public:
         }
 
         // --- 5. GROUND UNSTUCK (Spacebar Tap) ---
-        if (!isFlying && !player.flyingMounted && !isCoasting) {
+        if (!flyingPath && !player.flyingMounted && !isCoasting) {
             DWORD now = GetTickCount();
             if (now - lastPosTime > 1000) {
                 if (currentPos.Dist2D(lastPosCheck) < 0.5f && shouldMoveForward) {

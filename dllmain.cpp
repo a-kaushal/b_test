@@ -64,6 +64,10 @@ DWORD GetProcId(const wchar_t* procName) {
     CloseHandle(hSnap);
     return 0;
 }
+struct WorldState;
+
+WorldState g_GameStateInstance;
+WorldState* g_GameState = nullptr;
 
 // ---------------------------------------------------------
 // Heuristic: Brute Force Scan of ASLR Range (Bypasses Enumeration)
@@ -408,7 +412,7 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
         analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x30, guidLowBag4);
         analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x38, guidHighBag4);
 
-        agent.state.globalState.bagFreeSlots = 0;
+        g_GameState->globalState.bagFreeSlots = 0;
         for (auto& entity : entityList) {
             if (entity.entityPtr != newPlayer.playerPtr && entity.info) {
                 // Use std::dynamic_pointer_cast for shared_ptr
@@ -468,7 +472,7 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                             }
                         }
                     }
-					agent.state.globalState.bagFreeSlots += bag->freeSlots;
+                    g_GameState->globalState.bagFreeSlots += bag->freeSlots;
                 }
             }
         }
@@ -519,6 +523,8 @@ void MainThread(HMODULE hModule) {
     item_db.loadDatabase("Z:\\WowDB\\items.tsv");
     object_db.loadDatabase("Z:\\WowDB\\objects.tsv");
     object_db.loadLocks("Z:\\WowDB\\Lock.csv");
+
+    g_GameState = &g_GameStateInstance;
 
     // Create log file early
     std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
@@ -589,6 +595,12 @@ void MainThread(HMODULE hModule) {
         mouse.SetLockWindow(hGameWindow); // Update lock window
         logFile << "Found Window: " << std::hex << hGameWindow << std::dec << std::endl;
 
+        // Bring Window to Foreground & Center Cursor ---
+        if (IsIconic(hGameWindow)) {
+            ShowWindow(hGameWindow, SW_RESTORE);
+        }
+        SetForegroundWindow(hGameWindow);
+
         if (!analyzer.Connect()) {
             logFile << "Failed to connect to driver!" << std::endl;
             // Don't return, let user see error
@@ -610,7 +622,7 @@ void MainThread(HMODULE hModule) {
 
                 // Create Camera Helper
                 Camera cam(analyzer, mouse, procId);
-                GoapAgent agent(pilot, mouse, kbd, cam, analyzer, procId, baseAddress, hGameWindow);
+                GoapAgent agent(g_GameStateInstance, pilot, mouse, kbd, cam, analyzer, procId, baseAddress, hGameWindow);
                 InteractionController interact(pilot, mouse, kbd, cam, analyzer, procId, baseAddress, hGameWindow);
 
                 if (baseAddress != 0) {
@@ -642,36 +654,56 @@ void MainThread(HMODULE hModule) {
                     bool isPaused = false;
                     bool lastF3State = false;
 
-                    agent.state.entities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent);
+                    g_GameState->entities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, g_GameState->player, agent);
 
                     std::string temp = "(-358.46, 6509.65, 116.46), (-395.20, 6475.67, 116.46), (-438.96, 6449.58, 116.46), (-482.82, 6425.01, 116.46), (-508.78, 6381.19, 116.46), (-529.89, 6335.85, 116.46), (-547.69, 6288.27, 116.46), (-568.29, 6241.66, 116.46), (-591.41, 6196.38, 116.46), (-630.93, 6164.87, 116.46), (-679.63, 6150.37, 116.46), (-728.66, 6137.20, 116.46), (-777.38, 6122.58, 116.46), (-826.50, 6112.96, 116.46), (-876.56, 6103.19, 116.46), (-926.79, 6102.21, 116.46), (-974.92, 6115.97, 116.46), (-1021.64, 6135.66, 116.46), (-1070.59, 6147.56, 116.46), (-1108.42, 6114.36, 116.46), (-1116.81, 6064.22, 116.46), (-1112.63, 6023.29, 145.06), (-1083.49, 5987.18, 164.99), (-1046.92, 5952.05, 164.99), (-1006.52, 5922.57, 164.99), (-965.26, 5892.46, 164.99), (-924.46, 5861.86, 164.99), (-915.96, 5812.52, 164.99), (-916.19, 5761.44, 164.99), (-908.62, 5711.04, 164.99), (-899.11, 5661.90, 164.99), (-855.82, 5636.18, 164.99), (-806.45, 5628.13, 164.99), (-756.05, 5619.92, 164.96), (-721.15, 5614.23, 129.60), (-682.91, 5608.00, 97.27), (-632.02, 5605.64, 97.27), (-583.31, 5593.95, 97.27), (-533.39, 5584.45, 97.27), (-483.33, 5592.52, 97.27), (-436.47, 5611.26, 97.27), (-389.20, 5630.16, 97.27), (-342.72, 5648.75, 97.27), (-295.78, 5667.52, 97.27), (-251.82, 5692.99, 97.27), (-213.12, 5725.18, 97.27), (-174.67, 5757.16, 97.27), (-125.34, 5769.89, 97.27), (-74.43, 5771.82, 97.27), (-23.49, 5774.45, 97.27), (6.49, 5734.40, 97.27), (21.24, 5686.60, 97.27), (36.31, 5637.81, 97.27), (45.13, 5588.17, 97.27), (53.44, 5538.02, 97.27), (56.05, 5487.54, 97.27), (41.91, 5438.62, 97.27), (19.79, 5392.02, 97.27), (-16.80, 5356.57, 97.27), (-51.41, 5319.75, 97.27), (-67.72, 5271.60, 97.30), (-54.05, 5223.70, 107.79), (-25.12, 5182.87, 107.79), (12.66, 5148.95, 107.79), (49.14, 5113.51, 107.79), (99.49, 5106.84, 107.79), (150.01, 5100.33, 107.79), (200.39, 5094.32, 107.79), (251.19, 5090.80, 107.79), (302.10, 5089.47, 107.79), (351.49, 5080.94, 107.79), (400.78, 5072.43, 107.79), (450.40, 5063.53, 107.79), (497.86, 5047.46, 107.79), (546.30, 5031.06, 107.79), (593.44, 5014.39, 107.79), (643.58, 5005.99, 107.79), (693.62, 5015.84, 107.79), (742.61, 5026.80, 107.79), (791.43, 5037.73, 107.79), (841.04, 5041.72, 98.02), (866.62, 5066.11, 62.65), (894.69, 5093.29, 31.05), (928.30, 5131.29, 31.05), (948.19, 5177.60, 31.05), (959.67, 5226.44, 31.05), (960.40, 5276.46, 31.05), (949.54, 5325.44, 31.05), (915.60, 5363.38, 31.05), (870.56, 5386.79, 31.05), (820.35, 5393.04, 31.05), (770.97, 5405.88, 31.05), (726.76, 5429.27, 31.05), (677.55, 5442.15, 31.05), (627.63, 5438.95, 31.05), (577.35, 5430.87, 31.05), (527.26, 5425.94, 31.05), (495.91, 5466.19, 31.05), (463.93, 5505.60, 31.05), (433.48, 5538.86, 53.98), (398.98, 5569.29, 75.79), (364.08, 5605.63, 75.79), (354.80, 5655.29, 75.79), (346.35, 5705.41, 75.79), (335.31, 5754.00, 69.02), (326.02, 5803.92, 69.02), (354.10, 5845.89, 69.02), (392.51, 5879.17, 69.02), (432.32, 5909.69, 73.53), (466.07, 5947.63, 73.53), (496.15, 5988.32, 73.53), (533.36, 6022.97, 73.53), (572.06, 6055.46, 73.53), (610.36, 6087.62, 73.53), (649.48, 6120.47, 73.53), (688.10, 6152.90, 73.53), (726.40, 6185.06, 73.53), (761.76, 6220.58, 73.53), (758.20, 6270.69, 73.53), (742.82, 6319.40, 73.53), (738.70, 6369.91, 73.53), (739.20, 6419.92, 73.53), (739.70, 6469.94, 73.53), (740.20, 6519.95, 73.53), (740.70, 6570.99, 73.53), (749.73, 6620.66, 73.53), (770.46, 6666.99, 73.53), (776.16, 6717.08, 73.53), (788.34, 6766.65, 73.53), (800.30, 6815.34, 73.53), (813.85, 6864.03, 73.53), (844.40, 6904.35, 73.53), (878.85, 6941.42, 73.53), (913.24, 6978.05, 73.53), (927.41, 7026.19, 73.53), (923.96, 7077.05, 73.53), (882.31, 7105.08, 73.53), (832.27, 7114.13, 73.53), (783.90, 7100.69, 73.53), (733.14, 7095.72, 73.53), (682.66, 7089.52, 73.53), (634.71, 7074.09, 73.53), (584.68, 7066.22, 73.53), (536.03, 7050.79, 73.53), (492.98, 7024.58, 73.53), (450.26, 6998.57, 73.53), (402.57, 6980.30, 73.53), (352.86, 6968.60, 73.53), (302.46, 6962.74, 73.53), (252.19, 6962.96, 73.53), (202.11, 6963.19, 73.53), (151.04, 6963.41, 73.53), (100.86, 6963.64, 73.53), (49.79, 6963.87, 73.53), (-0.26, 6972.52, 73.53), (-50.24, 6976.64, 73.53), (-100.09, 6980.74, 73.53), (-150.18, 6988.99, 73.53), (-198.67, 7004.94, 73.53), (-247.72, 7018.33, 73.53), (-298.02, 7014.87, 73.53), (-320.93, 6970.22, 73.53), (-334.14, 6921.07, 73.53)";
                     std::vector<Vector3> myPath = ParsePathString(temp);
-                    agent.state.pathFollowState.presetPath = myPath;
-                    agent.state.pathFollowState.presetIndex = FindClosestWaypoint(myPath, agent.state.player.position);
-                    agent.state.pathFollowState.looping = true;
+
+                    /*for (const auto& point : myPath) {
+                        logFile << "Pre-Points: " << point.x << ", " << point.y << ", " << point.z << std::endl;
+                    }*/
+                    // --- Pre-validate path for No-Fly Zones ---
+                    if (globalNavMesh.LoadMap("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/mmaps/", g_GameState->player.mapId)) {
+                        for (auto& pt : myPath) {
+                            // If this point is in a No-Fly Zone (CanFlyAt returns false), fix it
+                            if (!CanFlyAt(g_GameState->player.mapId, pt.x, pt.y, pt.z)) {
+                                Vector3 fixedPt = globalNavMesh.FindNearestFlyablePoint(pt, g_GameState->player.mapId);
+                                if (fixedPt.x != 0.0f || fixedPt.y != 0.0f || fixedPt.z != 0.0f) {
+                                    pt = fixedPt;
+                                }
+                            }
+                        }
+                    }
+                    /*for (const auto& point : myPath) {
+                        logFile << "Points: " << point.x << ", " << point.y << ", " << point.z << std::endl;
+                    }*/
+
+                    g_GameState->pathFollowState.presetPath = myPath;
+                    g_GameState->pathFollowState.presetIndex = FindClosestWaypoint(myPath, g_GameState->player.position);
+                    g_GameState->pathFollowState.looping = true;
 
                     //std::vector<Vector3> path = { Vector3{7.07241, 7449.82, 17.3746}, Vector3{15.2708, 7443.25, 113.991} };
                     //pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[0], false);
-                    path = CalculatePath(agent.state.pathFollowState.presetPath, agent.state.player.position, agent.state.pathFollowState.presetIndex, true, 530, agent.state.pathFollowState.looping);
+                    path = CalculatePath(g_GameState->pathFollowState.presetPath, g_GameState->player.position, g_GameState->pathFollowState.presetIndex, true, 530, g_GameState->player.isFlying, g_GameState->pathFollowState.looping);
                     //pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[2], true, agent.state.player);
 
-                    //for (const auto& point : path) {
-                    //    logFile << "Point: " << point.x << ", " << point.y << ", " << point.z << std::endl;
-                    //}
-                    logFile << agent.state.player.isMounted << std::endl;
+                    /*for (const auto& point : path) {
+                        logFile << "Point: " << point.x << ", " << point.y << ", " << point.z << std::endl;
+                    }*/
+                    logFile << g_GameState->player.isMounted << std::endl;
                     
-                    agent.state.pathFollowState.path = path;
-                    agent.state.pathFollowState.index = 0;
-                    agent.state.pathFollowState.hasPath = true;
-					agent.state.pathFollowState.flyingPath = true;
+                    g_GameState->pathFollowState.path = path;
+                    g_GameState->pathFollowState.index = 0;
+                    g_GameState->pathFollowState.hasPath = true;
+                    g_GameState->pathFollowState.flyingPath = true;
 
-                    agent.state.globalState.flyingPath = true;
+                    g_GameState->globalState.flyingPath = true;
 
                     // Move to first waypoint in path
-                    agent.state.waypointReturnState.enabled = true;
-                    agent.state.waypointReturnState.savedPath = path;
-                    agent.state.waypointReturnState.hasTarget = true;
-                    agent.state.waypointReturnState.savedIndex = 0;
+                    g_GameState->waypointReturnState.enabled = true;
+                    g_GameState->waypointReturnState.savedPath = path;
+                    g_GameState->waypointReturnState.hasTarget = true;
+                    g_GameState->waypointReturnState.savedIndex = 0;
 
                     //logFile << "Underwater Check: " << globalNavMesh.IsUnderwater(Vector3(414.4220886f, 6918.97f, -5.0f)) << std::endl;
 
@@ -680,22 +712,45 @@ void MainThread(HMODULE hModule) {
                     // Force disable Click-to-Move to prevent accidental movement on mouse clicks
                     console.SendDataRobust(std::wstring(L"/console autointeract 0"));
 
-                    while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {             
-                        if (agent.state.pathFollowState.pathIndexChange == true) {
-                            if (agent.state.pathFollowState.path[agent.state.pathFollowState.index - 1].pos.Dist3D(agent.state.pathFollowState.presetPath[agent.state.pathFollowState.presetIndex]) < 5.0) {
-                                if ((agent.state.pathFollowState.presetIndex >= agent.state.pathFollowState.presetPath.size() - 1) && (agent.state.pathFollowState.looping == 1)) {
-                                    agent.state.pathFollowState.presetIndex = 0;
+                    RECT rect;
+                    GetClientRect(hGameWindow, &rect);
+                    POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+                    ClientToScreen(hGameWindow, &center);
+                    SetCursorPos(center.x, center.y);
+
+                    while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
+                        // HANDLE F3 (PAUSE TOGGLE)
+                        bool currentF3State = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
+
+                        // If key was just pressed down (Edge Detection)
+                        if (currentF3State && !lastF3State) {
+                            isPaused = !isPaused; // Toggle State
+
+                            if (isPaused) {
+                                std::cout << ">>> PAUSED <<<" << std::endl;
+                                pilot.Stop(); // CRITICAL: Stop moving immediately when paused
+                            }
+                            else {
+                                std::cout << ">>> RESUMED <<<" << std::endl;
+                            }
+                        }
+                        lastF3State = currentF3State;
+
+                        if (g_GameState->pathFollowState.pathIndexChange == true) {
+                            if (g_GameState->pathFollowState.path[g_GameState->pathFollowState.index - 1].pos.Dist3D(g_GameState->pathFollowState.presetPath[g_GameState->pathFollowState.presetIndex]) < 5.0) {
+                                if ((g_GameState->pathFollowState.presetIndex >= g_GameState->pathFollowState.presetPath.size() - 1) && (g_GameState->pathFollowState.looping == 1)) {
+                                    g_GameState->pathFollowState.presetIndex = 0;
                                 }
-                                else if (agent.state.pathFollowState.presetIndex < agent.state.pathFollowState.presetPath.size() - 1) {
-                                    agent.state.pathFollowState.presetIndex++;
+                                else if (g_GameState->pathFollowState.presetIndex < g_GameState->pathFollowState.presetPath.size() - 1) {
+                                    g_GameState->pathFollowState.presetIndex++;
                                 }
                                 //path = CalculatePath(agent.state.presetPath, agent.state.player.position, agent.state.presetPathIndex, true, 530);
                             }
-                            agent.state.pathFollowState.pathIndexChange = false;
+                            g_GameState->pathFollowState.pathIndexChange = false;
                         }
 
-                        if (agent.state.gatherState.enabled == true) {
-                            UpdateGatherTarget(agent.state);
+                        if (g_GameState->gatherState.enabled == true) {
+                            UpdateGatherTarget(g_GameStateInstance);
                         }
 
                         // Sync Overlay Position
@@ -711,10 +766,10 @@ void MainThread(HMODULE hModule) {
                         cam.UpdateScreenSize(width, height);
 
                         overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
-                        for (size_t i = agent.state.globalState.activeIndex; i < agent.state.globalState.activeIndex + 16; ++i) {
+                        for (size_t i = g_GameState->globalState.activeIndex; i < g_GameState->globalState.activeIndex + 16; ++i) {
                             int screenPosx, screenPosy;
-                            if (i >= agent.state.globalState.activePath.size()) break;
-                            if (cam.WorldToScreen(agent.state.globalState.activePath[i].pos, screenPosx, screenPosy)) {
+                            if (i >= g_GameState->globalState.activePath.size()) break;
+                            if (cam.WorldToScreen(g_GameState->globalState.activePath[i].pos, screenPosx, screenPosy)) {
                                 // Draw a line using your overlay's draw list
                                 overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
                             }
@@ -801,16 +856,16 @@ void MainThread(HMODULE hModule) {
                         //    agent.state.repairState.repairNeeded = true;
                         //}
 
-                        if (UnderAttackCheck(agent.state) == true) {
+                        if (UnderAttackCheck(g_GameStateInstance) == true) {
                             logFile << "Under Attack Detected!" << std::endl;
 						}
 						//logFile << "Repair NPC Position: " << agent.state.repairState.npcLocation.x << ", " << agent.state.repairState.npcLocation.y << ", " << agent.state.repairState.npcLocation.z << " | Repair ID: " << repairId << " | " << mapId << std::endl;
 
                         // 1. Extract Data
-                        agent.state.entities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent);
+                        g_GameState->entities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, g_GameState->player, agent);
 
                         // 2. Update GUI
-                        UpdateGuiData(agent.state.entities);
+                        UpdateGuiData(g_GameState->entities);
 
                         // 3. Logic (Rotation/Console Print)
                         //logFile << nextKey << std::endl;
@@ -882,7 +937,7 @@ void MainThread(HMODULE hModule) {
                         // 2. Update Camera with ACTUAL window size
                         cam.UpdateScreenSize(width, height);
 
-                        std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent);
+                        std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, g_GameState->player, agent);
                         SortEntitiesByDistance(currentEntities);
 						float min_distance = 99999.0f;
 						Vector3 closest_enemy_pos = {};
@@ -893,10 +948,10 @@ void MainThread(HMODULE hModule) {
                                     if (object->name == "Felweed") {
                                         min_distance = object->distance;
                                         closest_enemy_pos = object->position;
-                                        agent.state.lootState.guidLow = entity.guidLow;
-                                        agent.state.lootState.guidHigh = entity.guidHigh;
-                                        agent.state.lootState.hasLoot = true;
-                                        agent.state.lootState.position = object->position;
+                                        g_GameState->lootState.guidLow = entity.guidLow;
+                                        g_GameState->lootState.guidHigh = entity.guidHigh;
+                                        g_GameState->lootState.hasLoot = true;
+                                        g_GameState->lootState.position = object->position;
                                     }
                                 }
                             }
@@ -917,7 +972,7 @@ void MainThread(HMODULE hModule) {
 
                         // Fast update to reduce flickering
                         Sleep(10);
-                        agent.Tick();
+                        //agent.Tick();
                     }
                     g_IsRunning = false;
                     RaiseException(0xDEADBEEF, 0, 0, nullptr); // Forcibly exit all threads (including GUI)
@@ -931,18 +986,18 @@ void MainThread(HMODULE hModule) {
                     // We use GetAsyncKeyState(VK_END) to allow unloading the DLL safely
                     while (!GetAsyncKeyState(VK_END)) {
 
-                        agent.state.lootState.hasLoot = true;
+                        g_GameState->lootState.hasLoot = true;
 
                         // --- 1. SENSOR UPDATE (Update World State) ---
 						// Only update player every tick
                         static DWORD lastTick = 0;
                         if (GetTickCount() - lastTick < 100) {
-                            std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent, true);
+                            std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, g_GameState->player, agent, true);
                         }
                         // --- 2. ENTITY UPDATE (GUI) ---
                         // Update all entities every 100ms
                         else {
-                            std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player, agent);
+                            std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, g_GameState->player, agent);
                             UpdateGuiData(currentEntities);
                             lastTick = GetTickCount();
                         }

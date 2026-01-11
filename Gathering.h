@@ -7,13 +7,41 @@
 #include "Entity.h"
 #include "GoapSystem.h"
 
+const int BLACKLIST_TIMEOUT = 300000;
+
+void BlacklistClear(WorldState& ws) {
+    DWORD now = GetTickCount();
+    if (ws.gatherState.blacklistTime.size() > 0) {
+        for (int i = ws.gatherState.blacklistTime.size() - 1; i >= 0; i--) {
+            if (now - ws.gatherState.blacklistTime[i] > BLACKLIST_TIMEOUT) {
+                ws.gatherState.blacklistTime.erase(ws.gatherState.blacklistTime.begin(), ws.gatherState.blacklistTime.begin() + i);
+                ws.gatherState.blacklistNodesGuidHigh.erase(ws.gatherState.blacklistNodesGuidHigh.begin(), ws.gatherState.blacklistNodesGuidHigh.begin() + i);
+                ws.gatherState.blacklistNodesGuidLow.erase(ws.gatherState.blacklistNodesGuidLow.begin(), ws.gatherState.blacklistNodesGuidLow.begin() + i);
+                break;
+            }
+        }
+    }
+}
+
+bool BlacklistCheck(WorldState& ws, ULONG_PTR guidLow, ULONG_PTR guidHigh) {
+    for (int i = 0; i < ws.gatherState.blacklistTime.size(); i++) {
+        if ((ws.gatherState.blacklistNodesGuidLow[i] == guidLow) && (ws.gatherState.blacklistNodesGuidHigh[i] == guidHigh)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // Helper to find nodes in the entity list
 void UpdateGatherTarget(WorldState& ws) {
     std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
 
     float bestDist = GATHERING_RANGE; // Max scan range (yards)
+    float secondBestDist = GATHERING_RANGE; // Max scan range (yards)
     int bestIndex = -1;
+    int secondBestIndex = -1;
+
+    BlacklistClear(ws);
 
     // Loop through all entities updated by the Memory Reader
     for (size_t i = 0; i < ws.entities.size(); ++i) {
@@ -44,6 +72,9 @@ void UpdateGatherTarget(WorldState& ws) {
                 if (d <= 5.0f) {
                     continue;
                 }
+                if (BlacklistCheck(ws, entity.guidLow, entity.guidHigh)) {
+                    continue;
+                }
                 std::vector<int> enemyIndex = {};
                 int index = 0;
                 for (auto& entity : ws.entities) {
@@ -62,11 +93,22 @@ void UpdateGatherTarget(WorldState& ws) {
             bestDist = d;
             bestIndex = i;
         }
+        else if ((d < secondBestDist) && (nearbyEnemyCount < 3)) {
+            secondBestDist = d;
+            secondBestIndex = i;
+        }
     }
 
     // Found a valid target
     if (bestIndex != -1) {
         const auto& target = ws.entities[bestIndex];
+        // Add node to blocklist if in water and try second best
+        /*if (ws.player.inWater) {
+            ws.gatherState.blacklistNodesGuidLow.push_back(ws.gatherState.guidLow);
+            ws.gatherState.blacklistNodesGuidHigh.push_back(ws.gatherState.guidHigh);
+            ws.gatherState.blacklistTime.push_back(GetTickCount());
+            const auto& target = ws.entities[secondBestIndex];
+        }*/
         if (auto objInfo = std::dynamic_pointer_cast<ObjectInfo>(target.info)) {
             ws.gatherState.position = objInfo->position;
             ws.gatherState.guidLow = target.guidLow;

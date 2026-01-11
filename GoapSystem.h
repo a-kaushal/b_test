@@ -12,125 +12,7 @@
 #include "Profile.h"
 #include "SimpleKeyboardClient.h"
 #include "CombatController.h"
-
-// This allows us to return a pointer to ANY state type
-struct ActionState {
-    virtual ~ActionState() = default; // Virtual destructor ensures proper cleanup
-
-    // Common variables moved here
-    std::vector<PathNode> activePath;
-    int activeIndex = 0;
-    bool actionChange = 0;
-    bool flyingPath = true;
-    bool inMotion = false;
-    int bagFreeSlots;
-};
-
-struct GlobalState : public ActionState {
-};
-
-struct Looting : public ActionState {
-    // Looting
-    bool enabled = false;
-    Vector3 position;
-    std::vector<PathNode> path;
-    int index;
-    bool hasLoot = false;
-    ULONG_PTR guidLow;
-    ULONG_PTR guidHigh;
-};
-
-struct Gathering : public ActionState {
-    // Gathering (Nodes/Herbs)
-    bool enabled = true;
-    Vector3 position;
-    std::vector<PathNode> path;
-    bool hasNode = false;
-    bool nodeActive = false;
-    int index;
-    ULONG_PTR guidLow;
-    ULONG_PTR guidHigh;
-    std::vector<ULONG_PTR> gatheredNodesGuidLow = {};
-    std::vector<ULONG_PTR> gatheredNodesGuidHigh = {};
-};
-
-struct PathFollowing : public ActionState {
-    // Follow a set path
-    bool enabled = true;
-    std::vector<PathNode> path;
-    std::vector<Vector3> presetPath;
-    int index;
-    int presetIndex;
-    bool looping = true; // If true the path repeats from the beginning when it finishes
-    bool startNearest = true; // If true starts at the closest waypoint to player
-    bool hasPath = false;
-    bool pathIndexChange = false;
-};
-
-struct WaypointReturn : public ActionState {
-    // Follow a set path
-    bool enabled = true;
-    std::vector<PathNode> path = { PathNode(-1000.0f,-1000.0f, -1000.0f, 0) };
-    std::vector<PathNode> savedPath = { PathNode(-1000.0f,-1000.0f, -1000.0f, 0) };
-    int index;
-    int savedIndex;
-    bool hasTarget = false;
-    bool hasPath = false;
-};
-
-struct Combat : public ActionState {
-    bool enabled = true;
-    std::vector<PathNode> path;
-    int32_t targetHealth;
-    bool inCombat = false; // True when bot is within range of enemy to perform rotation
-    int index;
-    int entityIndex;
-    bool underAttack = false; // True when bot is under attack from a enemy
-    bool hasTarget = false; // True when the bot selects a target to attack, but has not reached within range yet
-    Vector3 enemyPosition;
-    ULONG_PTR targetGuidLow;
-    ULONG_PTR targetGuidHigh;
-};
-
-struct StuckState : public ActionState {
-    bool isStuck = false;
-    Vector3 lastPosition;
-    DWORD lastCheckTime = 0;
-    DWORD stuckStartTime = 0;
-
-    // --- UPDATED TRACKING ---
-    int attemptCount = 0;           // Tracks which stage (Jump, Strafe L, Strafe R, etc.) we are on
-    DWORD lastUnstuckTime = 0;      // Tracks when we last performed an unstuck action
-};
-
-struct RepairState : public ActionState {
-    bool enabled = true;
-    std::vector<PathNode> path;
-    int index;
-    Vector3 npcLocation;
-	bool repairNeeded = false;
-	ULONG_PTR npcGuidLow;
-    ULONG_PTR npcGuidHigh;
-};
-
-// --- WORLD STATE (The Knowledge) ---
-struct WorldState {
-    GlobalState globalState;
-    Looting lootState;
-    Gathering gatherState;
-    PathFollowing pathFollowState;
-    WaypointReturn waypointReturnState;
-    Combat combatState; 
-    StuckState stuckState;
-    RepairState repairState;
-
-    std::vector<GameEntity> entities;
-    PlayerInfo player;
-
-    // Danger / Interrupts
-    bool isInDanger = false; // e.g., standing in fire
-    Vector3 dangerPos;       // Where the fire is    
-};
+#include "WorldState.h"
 
 // --- ABSTRACT ACTION ---
 class GoapAction {
@@ -243,7 +125,7 @@ public:
         std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
         bool fly_entry_state = fly;
         if ((currentState != STATE_CREATE_PATH) && (movingTarget == true) && (pathCalcTimer != 0) && (GetTickCount() - pathCalcTimer > 200)) {
-            currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530);
+            currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530, player.isFlying);
             pathIndex = 0;
             pathCalcTimer = GetTickCount();
         }
@@ -265,7 +147,7 @@ public:
 
         case STATE_CREATE_PATH:
             // Assuming CalculatePath is available globally or via included header
-            currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530);
+            currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530, player.isFlying);
             logFile << "Target Pos x: " << targetPos.x << " | Target Pos y: " << targetPos.y << " | Target Pos z: " << targetPos.z << std::endl;
             for (int i = 0; i < currentPath.size(); i++) {
                 logFile << "Path: " << i << " | X coord: " << currentPath[i].pos.x << " | Y coord: " << currentPath[i].pos.y << " | Z coord: " << currentPath[i].pos.z << std::endl;
@@ -746,6 +628,7 @@ public:
                         0,
                         ws.player.isFlying || ws.player.flyingMounted,
                         530,
+                        ws.player.isFlying,
                         false
                     );
                     ws.pathFollowState.index = 0;
@@ -755,10 +638,12 @@ public:
 
             // Increment Stage
             ws.stuckState.attemptCount++;
-
-            // Reset flags
             ws.stuckState.isStuck = false;
             ws.stuckState.lastUnstuckTime = now;
+
+            // Clear the waiting flag so ActionReturnWaypoint can resume
+            ws.waypointReturnState.waitingForUnstuck = false;
+
             actionStartTime = 0;
 
             return true;
@@ -1017,6 +902,11 @@ class ActionGather : public GoapAction {
 private:
     InteractionController& interact;
 
+    float approachDist = 3.5f;
+    float finalDist = 2.8f;
+
+    int failCount = 0;
+
 public:
     ActionGather(InteractionController& ic) : interact(ic) {}
 
@@ -1052,9 +942,9 @@ public:
             ws.player,
             ws.gatherState.path,
             ws.gatherState.index,
-            3.5f,
+            approachDist,
             2.8f,
-            2.8f,
+            finalDist,
             false,
             false,
             ws.globalState.flyingPath,
@@ -1066,10 +956,29 @@ public:
         ws.globalState.activeIndex = ws.gatherState.index;
 
         if (complete) {
+            if (failCount >= 3) {
+                logFile << "Failed to gather 3 times, adding to blacklist" << std::endl;
+                ws.gatherState.blacklistNodesGuidLow.push_back(ws.gatherState.guidLow);
+                ws.gatherState.blacklistNodesGuidHigh.push_back(ws.gatherState.guidHigh);
+                ws.gatherState.blacklistTime.push_back(GetTickCount());
+            }
+            else if (ws.gatherState.nodeActive) {
+                finalDist *= 0.7;
+                logFile << "Gathering Failed Node Still Active, retrying at distance of " << finalDist << std::endl;
+                failCount++;
+                interact.Reset();
+                return false;
+            }
+
             // Cleanup
             interact.Reset();
             ws.gatherState.hasNode = false;
             ws.gatherState.nodeActive = false;
+
+            approachDist = 3.5f;
+            finalDist = 2.8f;
+            failCount = 0;
+
             // Reset camera or other post-action stuff
             return true;
         }
@@ -1084,12 +993,15 @@ private:
     const float SAFE_FLIGHT_HEIGHT = 50.0f;
     const float GROUND_HEIGHT_THRESHOLD = 15.0f; // If target is this close to ground, use ground path
 
+    const int MAX_PATHFINDING_ATTEMPTS = 8;
+
     enum ReturnPhase {
         PHASE_CHECK_DIRECT,    // First check if we can go direct
         PHASE_MOUNT,           // Mount up if needed
         PHASE_ASCEND,          // Climb to safe height
         PHASE_NAVIGATE,        // Follow path back
-        PHASE_COMPLETE
+        PHASE_COMPLETE,
+        PHASE_FAILED
     };
 
     ReturnPhase currentPhase = PHASE_CHECK_DIRECT;
@@ -1107,6 +1019,10 @@ public:
     }
 
     bool CanExecute(const WorldState& ws) override {
+        // Don't execute if we're waiting for unstuck to complete
+        if (ws.waypointReturnState.waitingForUnstuck) {
+            return false;
+        }
         return (ws.waypointReturnState.enabled && ws.waypointReturnState.hasTarget);
     }
 
@@ -1126,6 +1042,7 @@ public:
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
         std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+        DWORD now = GetTickCount();
 
         switch (currentPhase) {
         case PHASE_CHECK_DIRECT:
@@ -1148,7 +1065,7 @@ public:
 
             // Check if we're at ground level
             float currentGroundZ = globalNavMesh.GetLocalGroundHeight(ws.player.position);
-            bool currentOnGround = (!ws.player.isFlying && !ws.player.flyingMounted) ||
+            bool currentOnGround = (!ws.player.isFlying) ||
                 (currentGroundZ > -90000.0f && std::abs(ws.player.position.z - currentGroundZ) < GROUND_HEIGHT_THRESHOLD);
 
             logFile << "  Current on ground: " << currentOnGround << " (Z=" << ws.player.position.z << ", groundZ=" << currentGroundZ << ")" << std::endl;
@@ -1162,6 +1079,7 @@ public:
                 currentPhase = PHASE_MOUNT;
                 break;
             }
+            Vector3 adjustedPlayer = ws.player.position;
 
             // Try direct path check - ONLY for short distances
             bool directClear = false;
@@ -1172,7 +1090,7 @@ public:
                 testStart.z = currentGroundZ + 1.0f;
                 Vector3 testEnd = returnTarget;
                 testEnd.z = targetGroundZ + 1.0f;
-                directClear = globalNavMesh.CheckFlightSegment(testStart, testEnd, 530, true);
+                directClear = globalNavMesh.CheckFlightSegment(testStart, testEnd, 530, ws.player.isFlying, true);
                 // Additional validation: sample midpoint
                 if (directClear) {
                     Vector3 midpoint = (testStart + testEnd) * 0.5f;
@@ -1186,17 +1104,23 @@ public:
             else {
                 // At least one is in air - check 3D flight path
                 logFile << "  Checking flight direct path (3D)..." << std::endl;
-                directClear = globalNavMesh.CheckFlightSegment(ws.player.position, returnTarget, 530, true);
+
+                /*if (currentOnGround) {
+                    adjustedPlayer.z += 20.0f;
+                    logFile << "Player on ground, raising player position z by 20.0 for flight path" << std::endl;
+                }*/
+
+                directClear = globalNavMesh.CheckFlightSegment(adjustedPlayer, returnTarget, 530, ws.player.isFlying, true);
                 // NEW: Additional validation for flight paths
                 if (directClear) {
                     // Check multiple points along the path
-                    Vector3 dir = returnTarget - ws.player.position;
+                    Vector3 dir = returnTarget - adjustedPlayer;
                     float dist = dir.Length();
                     dir = dir / dist;
 
                     for (int sample = 1; sample <= 3; sample++) {
                         float t = (float)sample / 1.0f;
-                        Vector3 testPoint = ws.player.position + (dir * (dist * t));
+                        Vector3 testPoint = adjustedPlayer + (dir * (dist * t));
 
                         // Verify flyability
                         if (!CanFlyAt(530, testPoint.x, testPoint.y, testPoint.z)) {
@@ -1217,12 +1141,22 @@ public:
             }
 
             if (directClear) {
-                logFile << "  ✓ Direct path is clear! Using simple 2-point path." << std::endl;
+                if (currentOnGround) {
+                    logFile << "  ✓ Direct path is clear! Using simple 3-point path." << std::endl;
+                    ws.waypointReturnState.path = {
+                        PathNode(ws.player.position, ws.player.onGround),
+                        PathNode(adjustedPlayer, PATH_AIR),
+                        PathNode(returnTarget, targetOnGround ? PATH_GROUND : PATH_AIR)
+                    };
+                }
+                else {
+                    logFile << "  ✓ Direct path is clear! Using simple 2-point path." << std::endl;
+                    ws.waypointReturnState.path = {
+                        PathNode(ws.player.position, ws.player.onGround),
+                        PathNode(returnTarget, targetOnGround ? PATH_GROUND : PATH_AIR)
+                    };
+                }
                 // Store PathNodes
-                ws.waypointReturnState.path = {
-                    PathNode(ws.player.position, ws.player.onGround),
-                    PathNode(returnTarget, targetOnGround ? PATH_GROUND : PATH_AIR)
-                };
                 ws.waypointReturnState.hasPath = true;
                 ws.waypointReturnState.index = 0;
 
@@ -1332,34 +1266,11 @@ public:
                 consoleInput->Reset();
             }
 
-            // Mount up
-            /*if (mountTimer == 0) {
-                logFile << "[RETURN] Mounting for flight..." << std::endl;
-                if (keyboard && consoleInput) {
-                    consoleInput->SendDataRobust(std::wstring(L"/run if not(IsFlyableArea()and IsMounted())then CallCompanion(\"Mount\", 1) end "));
-                }
-                mountTimer = GetTickCount();
-            }
-
-            if (GetTickCount() - mountTimer > 2500) {
-                if (ws.player.isFlying || ws.player.flyingMounted || ws.player.groundMounted) {
-                    logFile << "[RETURN] Mount successful" << std::endl;
-                    ws.waypointReturnState.flyingPath = true;
-                    currentPhase = PHASE_ASCEND;
-                    mountTimer = 0;
-                }
-                else {
-                    logFile << "[RETURN] Mount failed, retrying..." << std::endl;
-                    mountTimer = 0;
-                }
-            }*/
-
             return false;
         }
 
         case PHASE_ASCEND:
         {
-            // Find safe ascent target using mini A*
             if (!ascentTargetSet) {
                 float groundZ = globalNavMesh.GetLocalGroundHeight(ws.player.position);
                 float targetZ = (groundZ > -90000.0f)
@@ -1368,170 +1279,19 @@ public:
 
                 Vector3 straightUp = Vector3(ws.player.position.x, ws.player.position.y, targetZ);
 
-                if (globalNavMesh.CheckFlightSegment(ws.player.position, straightUp, 530, true)) {
+                if (globalNavMesh.CheckFlightSegment(ws.player.position, straightUp, 530, true, true)) {
                     ascentTarget = straightUp;
                     ascentTargetSet = true;
                     logFile << "[RETURN] Ascending straight up to Z=" << targetZ << std::endl;
                 }
                 else {
-                    logFile << "[RETURN] Blocked above, mini A* search..." << std::endl;
-
-                    // Mini 2D A* (same as before)
-                    struct EscapeNode {
-                        Vector3 pos;
-                        float gScore = 1e9f;
-                        float hScore = 0.0f;
-                        int parentIdx = -1;
-                        float fScore() const { return gScore + hScore; }
-                    };
-
-                    std::vector<EscapeNode> escapeNodes;
-                    escapeNodes.reserve(200);
-                    std::unordered_map<int64_t, int> gridMap;
-                    std::unordered_set<int> closedSet;
-
-                    auto GridHash = [](float x, float y, float gridSize) -> int64_t {
-                        int gx = (int)std::floor(x / gridSize);
-                        int gy = (int)std::floor(y / gridSize);
-                        return ((int64_t)gx << 32) | (int64_t)gy;
-                        };
-
-                    const float ESCAPE_GRID_SIZE = 10.0f;
-                    const int MAX_ESCAPE_ITERATIONS = 150;
-                    const float MAX_ESCAPE_RADIUS = 60.0f;
-
-                    Vector3 returnTarget = ws.waypointReturnState.savedPath[ws.waypointReturnState.savedIndex].pos;
-                    Vector3 searchCenter = ws.player.position;
-
-                    int startIdx = 0;
-                    escapeNodes.emplace_back();
-                    escapeNodes[startIdx].pos = ws.player.position;
-                    escapeNodes[startIdx].gScore = 0.0f;
-                    escapeNodes[startIdx].hScore = ws.player.position.Dist2D(returnTarget);
-                    gridMap[GridHash(ws.player.position.x, ws.player.position.y, ESCAPE_GRID_SIZE)] = startIdx;
-
-                    std::vector<int> openList = { startIdx };
-                    int goalIdx = -1;
-                    int iterations = 0;
-
-                    const int dirs[][2] = {
-                        {1,0}, {-1,0}, {0,1}, {0,-1},
-                        {1,1}, {1,-1}, {-1,1}, {-1,-1}
-                    };
-
-                    while (!openList.empty() && iterations < MAX_ESCAPE_ITERATIONS) {
-                        int currentIdx = openList[0];
-                        int listIdx = 0;
-                        for (size_t i = 1; i < openList.size(); ++i) {
-                            if (escapeNodes[openList[i]].fScore() < escapeNodes[currentIdx].fScore()) {
-                                currentIdx = openList[i];
-                                listIdx = i;
-                            }
-                        }
-                        openList.erase(openList.begin() + listIdx);
-
-                        if (closedSet.count(currentIdx)) continue;
-                        closedSet.insert(currentIdx);
-                        iterations++;
-
-                        EscapeNode& current = escapeNodes[currentIdx];
-
-                        Vector3 testAscent = Vector3(current.pos.x, current.pos.y, targetZ);
-                        if (globalNavMesh.CheckFlightSegment(current.pos, testAscent, 530, true)) {
-                            goalIdx = currentIdx;
-                            logFile << "[RETURN] Escape found after " << iterations << " iterations" << std::endl;
-                            break;
-                        }
-
-                        for (int i = 0; i < 8; ++i) {
-                            Vector3 neighborPos = current.pos + Vector3(
-                                dirs[i][0] * ESCAPE_GRID_SIZE,
-                                dirs[i][1] * ESCAPE_GRID_SIZE,
-                                0.0f
-                            );
-                            neighborPos.z = ws.player.position.z;
-
-                            if (searchCenter.Dist2D(neighborPos) > MAX_ESCAPE_RADIUS) continue;
-
-                            int64_t hash = GridHash(neighborPos.x, neighborPos.y, ESCAPE_GRID_SIZE);
-                            auto it = gridMap.find(hash);
-
-                            int neighborIdx;
-                            if (it == gridMap.end()) {
-                                neighborIdx = escapeNodes.size();
-                                escapeNodes.emplace_back();
-                                escapeNodes[neighborIdx].pos = neighborPos;
-                                escapeNodes[neighborIdx].hScore = neighborPos.Dist2D(returnTarget);
-                                gridMap[hash] = neighborIdx;
-                            }
-                            else {
-                                neighborIdx = it->second;
-                            }
-
-                            if (closedSet.count(neighborIdx)) continue;
-
-                            if (!globalNavMesh.CheckFlightSegment(current.pos, neighborPos, 530, true)) {
-                                continue;
-                            }
-
-                            float tentativeG = current.gScore + current.pos.Dist2D(neighborPos);
-                            if (tentativeG < escapeNodes[neighborIdx].gScore) {
-                                escapeNodes[neighborIdx].gScore = tentativeG;
-                                escapeNodes[neighborIdx].parentIdx = currentIdx;
-
-                                if (std::find(openList.begin(), openList.end(), neighborIdx) == openList.end()) {
-                                    openList.push_back(neighborIdx);
-                                }
-                            }
-                        }
-                    }
-
-                    if (goalIdx >= 0) {
-                        std::vector<PathNode> escapePath;
-                        int idx = goalIdx;
-                        while (idx >= 0) {
-                            escapePath.push_back(PathNode(escapeNodes[idx].pos, PATH_AIR));
-                            idx = escapeNodes[idx].parentIdx;
-                        }
-                        std::reverse(escapePath.begin(), escapePath.end());
-
-                        Vector3 escapePoint = escapeNodes[goalIdx].pos;
-                        ascentTarget = Vector3(escapePoint.x, escapePoint.y, targetZ);
-                        ascentTargetSet = true;
-
-                        escapePath.push_back(PathNode(ascentTarget, PATH_AIR));
-                        ws.globalState.activePath = escapePath;
-                        ws.globalState.activeIndex = 0;
-                    }
-                    else {
-                        logFile << "[RETURN] Mini A* failed, extreme height" << std::endl;
-
-                        logFile << "[RETURN] Skipping ascent, will use full pathfinding" << std::endl;
-                        currentPhase = PHASE_NAVIGATE;
-                        ascentTargetSet = false; // Reset for potential retry
-                    }
-                }
-            }
-
-            // Navigate escape path
-            if (!ws.globalState.activePath.empty() && ws.globalState.activeIndex < ws.globalState.activePath.size()) {
-                Vector3 nextWP = ws.globalState.activePath[ws.globalState.activeIndex].pos;
-                float dist = ws.player.position.Dist3D(nextWP);
-
-                if (dist < ACCEPTANCE_RADIUS) {
-                    ws.globalState.activeIndex++;
-                }
-
-                if (ws.globalState.activeIndex >= ws.globalState.activePath.size()) {
-                    logFile << "[RETURN] Reached safe height Z=" << ws.player.position.z << std::endl;
+                    logFile << "[RETURN] Blocked above, skipping ascent" << std::endl;
                     currentPhase = PHASE_NAVIGATE;
-                    ws.globalState.activePath.clear();
-                    break;
+                    ascentTargetSet = false;
                 }
-
-                pilot.SteerTowards(ws.player.position, ws.player.rotation, nextWP, true, ws.player);
             }
-            else {
+
+            if (ascentTargetSet) {
                 float dist = ws.player.position.Dist3D(ascentTarget);
                 if (dist < ACCEPTANCE_RADIUS || ws.player.position.z >= ascentTarget.z - 2.0f) {
                     logFile << "[RETURN] Reached safe height Z=" << ws.player.position.z << std::endl;
@@ -1554,19 +1314,42 @@ public:
                 logFile << "  From: (" << ws.player.position.x << "," << ws.player.position.y << "," << ws.player.position.z << ")" << std::endl;
                 logFile << "  To: (" << returnTarget.x << "," << returnTarget.y << "," << returnTarget.z << ")" << std::endl;
 
+                // Track attempt
+                ws.waypointReturnState.pathfindingAttempts++;
+                ws.waypointReturnState.lastPathAttemptTime = now;
+
                 ws.waypointReturnState.path = CalculatePath(
                     { returnTarget },
                     ws.player.position,
                     0,
                     ws.waypointReturnState.flyingPath,
                     530,
+                    ws.player.isFlying,
                     false
                 );
 
                 if (ws.waypointReturnState.path.empty()) {
-                    logFile << "[RETURN] Path calculation FAILED!" << std::endl;
-                    ResetState();
-                    return false;
+                    logFile << "[RETURN] ✗ Path calculation FAILED! (Attempt "
+                        << ws.waypointReturnState.pathfindingAttempts << "/"
+                        << MAX_PATHFINDING_ATTEMPTS << ")" << std::endl;
+
+                    if (ws.waypointReturnState.pathfindingAttempts >= MAX_PATHFINDING_ATTEMPTS) {
+                        logFile << "[RETURN] !!! CRITICAL: Maximum pathfinding attempts reached." << std::endl;
+                        currentPhase = PHASE_FAILED;
+                        break;
+                    }
+
+                    // NEW: Trigger ActionUnstuck by setting stuck flag
+                    logFile << "[RETURN] Triggering ActionUnstuck before retry..." << std::endl;
+                    ws.stuckState.isStuck = true;
+                    ws.waypointReturnState.waitingForUnstuck = true;
+
+                    // Reset phases so we retry from the beginning after unstuck
+                    checkedDirect = false;
+                    ascentTargetSet = false;
+                    currentPhase = PHASE_CHECK_DIRECT;
+
+                    return false; // ActionUnstuck will take over
                 }
 
                 ws.waypointReturnState.hasPath = true;
@@ -1601,7 +1384,7 @@ public:
 
             pilot.SteerTowards(ws.player.position, ws.player.rotation, target, ws.waypointReturnState.flyingPath, ws.player);
             return false;
-        }
+        }        
 
         case PHASE_COMPLETE:
         {
@@ -1610,9 +1393,24 @@ public:
             ws.waypointReturnState.savedPath = { PathNode(-1000.0f, -1000.0f, -1000.0f, 0) };
             ws.waypointReturnState.hasTarget = false;
             ws.waypointReturnState.hasPath = false;
+            ws.waypointReturnState.pathfindingAttempts = 0;
+            ws.waypointReturnState.waitingForUnstuck = false;
+            
             ResetState();
-            logFile << "[RETURN] Complete!" << std::endl;
+            logFile << "[RETURN] ✓ Complete!" << std::endl;
             return true;
+        }
+
+        case PHASE_FAILED:
+        {
+            pilot.Stop();
+
+            logFile << "!!! CRITICAL: ActionReturnWaypoint failed after "
+                << MAX_PATHFINDING_ATTEMPTS << " attempts. Stopping program." << std::endl;
+            logFile.close();
+
+            Sleep(500000000);
+            return false;
         }
         }
 
@@ -1690,12 +1488,11 @@ private:
     GoapAction* currentAction = nullptr;
     InteractionController interact;
     ConsoleInput consoleInput;  // Add this member
+    WorldState& state;
 
 public:
-    WorldState state;
-
-    GoapAgent(MovementController& mc, SimpleMouseClient& mouse, SimpleKeyboardClient& keyboard, Camera& cam, MemoryAnalyzer& mem, DWORD pid, ULONG_PTR base, HWND hGameWindow)
-        : pilot(mc), interact(mc, mouse, keyboard, cam, mem, pid, base, hGameWindow), combatController(keyboard), consoleInput(keyboard) {
+    GoapAgent(WorldState& worldState, MovementController& mc, SimpleMouseClient& mouse, SimpleKeyboardClient& keyboard, Camera& cam, MemoryAnalyzer& mem, DWORD pid, ULONG_PTR base, HWND hGameWindow)
+        : state(worldState), pilot(mc), interact(mc, mouse, keyboard, cam, mem, pid, base, hGameWindow), combatController(keyboard), consoleInput(keyboard) {
         // Register Actions
         availableActions.push_back(new ActionEscapeDanger());
         availableActions.push_back(new ActionLoot(interact));
@@ -1799,7 +1596,7 @@ private:
         }
 
         // 2. Only check if we are actually trying to go somewhere (active path)
-        if (state.globalState.activePath.empty()) {
+        if (state.globalState.activePath.empty() || !pilot.IsMoving()) {
             // NEW: Reset stuck state when idle
             state.stuckState.stuckStartTime = 0;
             state.stuckState.lastCheckTime = 0;

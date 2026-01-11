@@ -188,13 +188,13 @@ _CRT_NONSTDC_NO_DEPRECATE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ClInclude Include="MemoryRead.h" />
     <ClInclude Include="MovementController.h" />
     <ClInclude Include="OverlayWindow.h" />
-    <ClInclude Include="PathFinding.h" />
     <ClInclude Include="Pathfinding2.h" />
     <ClInclude Include="Profile.h" />
     <ClInclude Include="ScreenRenderer.h" />
     <ClInclude Include="SimpleKeyboardClient.h" />
     <ClInclude Include="SimpleMouseClient.h" />
     <ClInclude Include="Vector.h" />
+    <ClInclude Include="WorldState.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
