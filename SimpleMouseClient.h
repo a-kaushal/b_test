@@ -305,9 +305,9 @@ public:
     }
 
     void MoveToCenter() {
-        std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
-        if (!logFile.is_open()) {
-            logFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
+        
+        if (!g_LogFile.is_open()) {
+            g_LogFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
         }
         if (!m_LockWindow) return;
 
@@ -316,7 +316,7 @@ public:
         GetClientRect(m_LockWindow, &rect);
         POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
         ClientToScreen(m_LockWindow, &center);
-		logFile << "[MOUSE] Moving to center (" << rect.right << ", " << rect.left << ")" << std::endl;
+		g_LogFile << "[MOUSE] Moving to center (" << rect.right << ", " << rect.left << ")" << std::endl;
         MoveAbsolute(center.x, center.y);
     }
 
@@ -381,15 +381,15 @@ public:
 
     // Move to absolute position on screen
     bool MoveAbsolute(LONG x, LONG y) {
-        std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
-        if (!logFile.is_open()) {
-            logFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
+        
+        if (!g_LogFile.is_open()) {
+            g_LogFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
         }
         if (!m_Connected) return false;
 
-		logFile << "[MOUSE] Requested MoveAbsolute to (" << x << ", " << y << ")" << std::endl;
+		g_LogFile << "[MOUSE] Requested MoveAbsolute to (" << x << ", " << y << ")" << std::endl;
         ClampToLockWindow(x, y);
-		logFile << "[MOUSE] Clamped MoveAbsolute to (" << x << ", " << y << ")" << std::endl;
+		g_LogFile << "[MOUSE] Clamped MoveAbsolute to (" << x << ", " << y << ")" << std::endl;
 
         // Convert to absolute coordinates (0-65535 range)
         int screenWidth = GetSystemMetrics(SM_CXSCREEN);
@@ -612,9 +612,9 @@ public:
     }
 
     bool WithinBoundsCheck(LONG x, LONG y) {
-        std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
-        if (!logFile.is_open()) {
-            logFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
+        
+        if (!g_LogFile.is_open()) {
+            g_LogFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
         }
         if (!m_LockWindow) return false;
 

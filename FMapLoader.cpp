@@ -26,7 +26,7 @@ const bool DEBUG_FMAP = false;
 // --- DEBUG LOGGER ---
 class FMapLogger {
 private:
-    std::ofstream logFile;
+    std::ofstream g_LogFile;
     bool enabled;
     int totalChecks = 0;
     int totalHits = 0;
@@ -35,34 +35,33 @@ private:
 public:
     FMapLogger() : enabled(DEBUG_FMAP) {
         if (enabled) {
-            logFile.open("C:\\Driver\\SMM_FMap_Debug.log", std::ios::app);
-            if (logFile.is_open()) {
+            g_LogFile.open("C:\\Driver\\SMM_FMap_Debug.log", std::ios::app);
+            if (g_LogFile.is_open()) {
                 auto now = std::chrono::system_clock::now();
                 auto time = std::chrono::system_clock::to_time_t(now);
-                logFile << "\n========================================\n";
-                logFile << "FMap Session Started: " << std::ctime(&time);
-                logFile << "Format: 160x160 Grid, 24-byte Header\n";
-                logFile << "Coordinate System: File=MAPID_TY_TX, tx=f(Y), ty=f(X)\n";
-                logFile << "Grid Mapping: gx=f(Y), gy=f(X) [Detour convention]\n";
-                logFile << "========================================\n\n";
+                g_LogFile << "\n========================================\n";
+                g_LogFile << "FMap Session Started: " << std::ctime(&time);
+                g_LogFile << "Format: 160x160 Grid, 24-byte Header\n";
+                g_LogFile << "Coordinate System: File=MAPID_TY_TX, tx=f(Y), ty=f(X)\n";
+                g_LogFile << "Grid Mapping: gx=f(Y), gy=f(X) [Detour convention]\n";
+                g_LogFile << "========================================\n\n";
             }
         }
     }
 
     ~FMapLogger() {
-        if (logFile.is_open() && enabled) {
-            logFile << "\n=== FMap Session Summary ===\n";
-            logFile << "  LOS checks: " << totalChecks << " (hits: " << totalHits
+        if (g_LogFile.is_open() && enabled) {
+            g_LogFile << "\n=== FMap Session Summary ===\n";
+            g_LogFile << "  LOS checks: " << totalChecks << " (hits: " << totalHits
                 << ", " << (totalChecks > 0 ? (100.0f * totalHits / totalChecks) : 0.0f) << "%)\n";
-            logFile << "  Floor queries: " << totalFloorQueries << "\n";
-            logFile.close();
+            g_LogFile << "  Floor queries: " << totalFloorQueries << "\n";
+            g_LogFile.close();
         }
     }
 
     void Log(const std::string& msg) {
-        if (enabled && logFile.is_open()) {
-            logFile << "[FMAP] " << msg << std::endl;
-            logFile.flush();
+        if (enabled && g_LogFile.is_open()) {
+            g_LogFile << "[FMAP] " << msg << std::endl;
         }
     }
 
@@ -70,49 +69,46 @@ public:
         totalChecks++;
         if (hit) totalHits++;
 
-        if (enabled && logFile.is_open() && (totalChecks % 50 == 1)) {
-            logFile << "[LOS#" << totalChecks << "] Map=" << mapId << " | ";
-            logFile << std::fixed << std::setprecision(2);
-            logFile << "(" << x1 << "," << y1 << "," << z1 << ")->(" << x2 << "," << y2 << "," << z2 << ") | ";
+        if (enabled && g_LogFile.is_open() && (totalChecks % 50 == 1)) {
+            g_LogFile << "[LOS#" << totalChecks << "] Map=" << mapId << " | ";
+            g_LogFile << std::fixed << std::setprecision(2);
+            g_LogFile << "(" << x1 << "," << y1 << "," << z1 << ")->(" << x2 << "," << y2 << "," << z2 << ") | ";
             float dist = std::sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1) + (z2 - z1) * (z2 - z1));
-            logFile << "Dist=" << dist << " | " << (hit ? "BLOCKED" : "CLEAR") << std::endl;
-            logFile.flush();
+            g_LogFile << "Dist=" << dist << " | " << (hit ? "BLOCKED" : "CLEAR") << std::endl;
         }
     }
 
     void LogFloorQuery(float x, float y, float z, float result) {
         totalFloorQueries++;
-        if (enabled && logFile.is_open()) {
-            logFile << "[FLOOR#" << totalFloorQueries << "] (" << std::fixed << std::setprecision(2)
+        if (enabled && g_LogFile.is_open()) {
+            g_LogFile << "[FLOOR#" << totalFloorQueries << "] (" << std::fixed << std::setprecision(2)
                 << x << "," << y << "," << z << ") -> " << result << std::endl;
-            logFile.flush();
         }
     }
 
     void LogTileLoad(const std::string& filename, bool success, int cellsWithData = 0, int totalLayers = 0) {
-        if (enabled && logFile.is_open()) {
+        if (enabled && g_LogFile.is_open()) {
             if (success) {
-                logFile << "[TILE] ? " << filename << " | Cells: " << cellsWithData
+                g_LogFile << "[TILE] ? " << filename << " | Cells: " << cellsWithData
                     << "/" << FMAP_TOTAL_CELLS << " | Layers: " << totalLayers << std::endl;
             }
             else {
-                logFile << "[TILE] ? Failed: " << filename << std::endl;
+                g_LogFile << "[TILE] ? Failed: " << filename << std::endl;
             }
-            logFile.flush();
         }
     }
 
     void LogSampleCell(int x, int y, int layerCount, float floor, float ceiling) {
-        if (enabled && logFile.is_open()) {
-            logFile << "  Sample[" << x << "," << y << "]: " << layerCount << " layer(s) | ";
+        if (enabled && g_LogFile.is_open()) {
+            g_LogFile << "  Sample[" << x << "," << y << "]: " << layerCount << " layer(s) | ";
             if (layerCount > 0) {
-                logFile << "Floor=" << floor << " Ceiling=" << ceiling;
-                if (ceiling >= 9999.0f) logFile << " (OPEN SKY)";
+                g_LogFile << "Floor=" << floor << " Ceiling=" << ceiling;
+                if (ceiling >= 9999.0f) g_LogFile << " (OPEN SKY)";
             }
             else {
-                logFile << "VOID/SOLID";
+                g_LogFile << "VOID/SOLID";
             }
-            logFile << std::endl;
+            g_LogFile << std::endl;
         }
     }
 };

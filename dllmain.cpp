@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cmath>
 
+#include "dllmain.h"
 #include "SimpleKeyboardClient.h"
 #include "GameGui.h"
 #include "PathFinding2.h"
@@ -29,9 +30,10 @@
 #include "Gathering.h"
 #include "Combat.h"
 #include "Repair.h"
+#include "Logger.h"
 
-// Global Atomic Flag to control all threads
-#include <atomic>
+std::mutex g_EntityMutex;       // Create the mutex
+std::ofstream g_LogFile;        // Create the logger
 std::atomic<bool> g_IsRunning(true);
 
 // Global Databases
@@ -213,8 +215,6 @@ void GUIDBreakdown(uint32_t& low_counter, uint32_t& type_field, uint32_t& instan
 }
 
 std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray, int hashArrayMaximum, ULONG_PTR entityArray, PlayerInfo& playerInfo, GoapAgent& agent, bool playerOnly = false) {
-    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
-
     std::vector<GameEntity> entityList; // This will hold all our data
     PlayerInfo newPlayer = {};
 
@@ -326,9 +326,22 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     string rawData = creature_db.getRawLine(id);
 
                     if (!rawData.empty()) {
-                        std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->name = creature_db.getColumn(rawData, ENEMY_NAME_COLUMN_INDEX);
-                        std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->npcFlag = std::stoi(creature_db.getColumn(rawData, NPC_FLAG_COLUMN_INDEX));
-                        std::cout << "Enemy Name: " << std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->name << std::endl;
+                        auto enemyInfo = std::dynamic_pointer_cast<EnemyInfo>(newEntity.info);
+                        enemyInfo->name = creature_db.getColumn(rawData, ENEMY_NAME_COLUMN_INDEX);
+
+                        // SAFE PARSING REPLACEMENT
+                        try {
+                            std::string flagStr = creature_db.getColumn(rawData, NPC_FLAG_COLUMN_INDEX);
+                            if (!flagStr.empty()) {
+                                enemyInfo->npcFlag = std::stoi(flagStr);
+                            }
+                            else {
+                                enemyInfo->npcFlag = 0; // Default value
+                            }
+                        }
+                        catch (...) {
+                            enemyInfo->npcFlag = 0; // Fallback on error
+                        }
                     }
                 }
                 if (objType == 225) {
@@ -423,7 +436,7 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     // Fast Lookup
                     CreatureTemplateEntry* c = creature_db.getCreatureTemplate(enemy->id);
                     if (c == nullptr) {
-                        logFile << "Creature Template Entry with ID " << enemy->id << " not found." << std::endl;
+                        g_LogFile << "Creature Template Entry with ID " << enemy->id << " not found." << std::endl;
                     }
                     else {
                         // 1. Check Reaction
@@ -431,7 +444,7 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                             // 3. Calculate Range
                             float range = 20.0f - (float)(newPlayer.level - enemy->level);
                             // 2. Check Passive Flag (0x0200 = UNIT_FLAG_PASSIVE)
-                            if (c->UnitFlags & 512); //logFile << "Creature Template Entry with ID " << enemy->id << " passive flag." << std::endl;
+                            if (c->UnitFlags & 512); //g_LogFile << "Creature Template Entry with ID " << enemy->id << " passive flag." << std::endl;
                             else {
                                 // 4. Elite/Boss Bonus
                                 if (c->Rank >= 1) range += 10.0f; // Elite
@@ -527,14 +540,19 @@ void MainThread(HMODULE hModule) {
     g_GameState = &g_GameStateInstance;
 
     // Create log file early
-    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
-    if (!logFile.is_open()) {
-        logFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
-    }
+    //
+    //if (!g_LogFile.is_open()) {
+    //    g_LogFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
+    //}
 
-    auto log = [&logFile](const std::string& msg) {
-        logFile << msg << std::endl;
-        logFile.flush();
+    g_LogFile.open("C:\\Driver\\SMM_Debug.log", std::ios::out | std::ios::app);
+
+    auto log = [](const std::string& msg) {
+        // Write to global file
+        if (g_LogFile.is_open()) {
+            g_LogFile << msg << std::endl;
+            // g_LogFile.flush(); // Only flush if debugging a crash, otherwise remove for speed
+        }
         std::cout << msg << std::endl;
         };
 
@@ -569,12 +587,12 @@ void MainThread(HMODULE hModule) {
 
         SimpleKeyboardClient kbd;
         if (!kbd.Connect()) {
-            logFile << "[ERROR] Failed to connect to driver!" << std::endl;
-            logFile << "Make sure SimpleKeyboard.sys is loaded:" << std::endl;
-            logFile << "  sc query SimpleKeyboard" << std::endl;
+            g_LogFile << "[ERROR] Failed to connect to driver!" << std::endl;
+            g_LogFile << "Make sure SimpleKeyboard.sys is loaded:" << std::endl;
+            g_LogFile << "  sc query SimpleKeyboard" << std::endl;
         }
         else {
-            logFile << "[SUCCESS] Connected to driver\n" << std::endl;
+            g_LogFile << "[SUCCESS] Connected to driver\n" << std::endl;
         }
         ConsoleInput console(kbd);
         SimpleMouseClient mouse; // Create Mouse
@@ -585,15 +603,15 @@ void MainThread(HMODULE hModule) {
         MovementController pilot(kbd, mouse, hGameWindow);
 
         if (!hGameWindow) {
-            logFile << "Waiting for game window..." << std::endl;
+            g_LogFile << "Waiting for game window..." << std::endl;
             while (!hGameWindow) {
                 hGameWindow = FindWindowA(NULL, "World of Warcraft");
                 Sleep(1000);
             }
         }
-        logFile << hGameWindow << std::endl;
+        g_LogFile << hGameWindow << std::endl;
         mouse.SetLockWindow(hGameWindow); // Update lock window
-        logFile << "Found Window: " << std::hex << hGameWindow << std::dec << std::endl;
+        g_LogFile << "Found Window: " << std::hex << hGameWindow << std::dec << std::endl;
 
         // Bring Window to Foreground & Center Cursor ---
         if (IsIconic(hGameWindow)) {
@@ -602,7 +620,7 @@ void MainThread(HMODULE hModule) {
         SetForegroundWindow(hGameWindow);
 
         if (!analyzer.Connect()) {
-            logFile << "Failed to connect to driver!" << std::endl;
+            g_LogFile << "Failed to connect to driver!" << std::endl;
             // Don't return, let user see error
             Sleep(5000);
         }
@@ -612,10 +630,10 @@ void MainThread(HMODULE hModule) {
 
             DWORD procId = GetProcId(L"WowClassic.exe");
             if (procId == 0) {
-                logFile << "WowClassic.exe not found." << std::endl;
+                g_LogFile << "WowClassic.exe not found." << std::endl;
             }
             else {
-                logFile << "Attached to PID: " << procId << std::endl;
+                g_LogFile << "Attached to PID: " << procId << std::endl;
 
                 // Driver Scan
                 baseAddress = FindMainModuleViaDriver(analyzer, procId);
@@ -628,7 +646,7 @@ void MainThread(HMODULE hModule) {
                 if (baseAddress != 0) {
                     // Read Offsets
                     if (analyzer.ReadPointer(procId, baseAddress + OBJECT_MANAGER_ENTRY_OFFSET, objMan_Entry))
-                        logFile << "Object Manager Entry: 0x" << std::hex << objMan_Entry << std::endl;
+                        g_LogFile << "Object Manager Entry: 0x" << std::hex << objMan_Entry << std::endl;
 
                     analyzer.ReadPointer(procId, objMan_Entry + OBJECT_MANAGER_FIRST_OBJECT_OFFSET, objMan_Base);
                     analyzer.ReadPointer(procId, objMan_Base + ENTITY_ARRAY_OFFSET, entityArray);
@@ -660,7 +678,7 @@ void MainThread(HMODULE hModule) {
                     std::vector<Vector3> myPath = ParsePathString(temp);
 
                     /*for (const auto& point : myPath) {
-                        logFile << "Pre-Points: " << point.x << ", " << point.y << ", " << point.z << std::endl;
+                        g_LogFile << "Pre-Points: " << point.x << ", " << point.y << ", " << point.z << std::endl;
                     }*/
                     // --- Pre-validate path for No-Fly Zones ---
                     if (globalNavMesh.LoadMap("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/mmaps/", g_GameState->player.mapId)) {
@@ -675,7 +693,7 @@ void MainThread(HMODULE hModule) {
                         }
                     }
                     /*for (const auto& point : myPath) {
-                        logFile << "Points: " << point.x << ", " << point.y << ", " << point.z << std::endl;
+                        g_LogFile << "Points: " << point.x << ", " << point.y << ", " << point.z << std::endl;
                     }*/
 
                     g_GameState->pathFollowState.presetPath = myPath;
@@ -689,9 +707,9 @@ void MainThread(HMODULE hModule) {
                     //pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[2], true, agent.state.player);
 
                     /*for (const auto& point : path) {
-                        logFile << "Point: " << point.x << ", " << point.y << ", " << point.z << std::endl;
+                        g_LogFile << "Point: " << point.x << ", " << point.y << ", " << point.z << std::endl;
                     }*/
-                    logFile << g_GameState->player.isMounted << std::endl;
+                    g_LogFile << g_GameState->player.isMounted << std::endl;
                     
                     g_GameState->pathFollowState.path = path;
                     g_GameState->pathFollowState.index = 0;
@@ -706,7 +724,7 @@ void MainThread(HMODULE hModule) {
                     g_GameState->waypointReturnState.hasTarget = true;
                     g_GameState->waypointReturnState.savedIndex = 0;
 
-                    //logFile << "Underwater Check: " << globalNavMesh.IsUnderwater(Vector3(414.4220886f, 6918.97f, -5.0f)) << std::endl;
+                    //g_LogFile << "Underwater Check: " << globalNavMesh.IsUnderwater(Vector3(414.4220886f, 6918.97f, -5.0f)) << std::endl;
 
                     //console.SendDataRobust(L"/cast");
                     
@@ -839,7 +857,7 @@ void MainThread(HMODULE hModule) {
                                         // ws.repairState.targetId = candidate.id; // Store ID if you added that field
                                         validTargetFound = true;
 
-                                        logFile << "[ActionRepair] Selected reachable vendor ID " << candidate.id
+                                        g_LogFile << "[ActionRepair] Selected reachable vendor ID " << candidate.id
                                             << " at distance " << candidate.distance << "m" << std::endl;
                                         break; // Stop looking
                                     }
@@ -847,7 +865,7 @@ void MainThread(HMODULE hModule) {
                             }
 
                             if (!validTargetFound) {
-                                logFile << "[ActionRepair] No reachable repair vendors found!" << std::endl;
+                                g_LogFile << "[ActionRepair] No reachable repair vendors found!" << std::endl;
                             }
                         }*/
 
@@ -858,27 +876,37 @@ void MainThread(HMODULE hModule) {
                         //}
 
                         if (UnderAttackCheck(g_GameStateInstance) == true) {
-                            logFile << "Under Attack Detected!" << std::endl;
+                            g_LogFile << "Under Attack Detected!" << std::endl;
 						}
-						//logFile << "Repair NPC Position: " << agent.state.repairState.npcLocation.x << ", " << agent.state.repairState.npcLocation.y << ", " << agent.state.repairState.npcLocation.z << " | Repair ID: " << repairId << " | " << mapId << std::endl;
+						//g_LogFile << "Repair NPC Position: " << agent.state.repairState.npcLocation.x << ", " << agent.state.repairState.npcLocation.y << ", " << agent.state.repairState.npcLocation.z << " | Repair ID: " << repairId << " | " << mapId << std::endl;
 
                         // 1. Extract Data
+                        // LOCK before writing
+                        std::lock_guard<std::mutex> lock(g_EntityMutex);
+
+                        // Now it is safe to update the vector
                         g_GameState->entities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, g_GameState->player, agent);
 
-                        // 2. Update GUI
+                        // UpdateGuiData usually reads entities too, so keep it inside the lock
                         UpdateGuiData(g_GameState->entities);
 
                         // 3. Logic (Rotation/Console Print)
-                        //logFile << nextKey << std::endl;
+                        //g_LogFile << nextKey << std::endl;
 
                         /*if (pilot.Calibrate(agent.state.player.rotation, agent.state.player.vertRotation) == true) {
                             break;
 						}*/
 
                         Sleep(10); // Prevent high CPU usage
-                        agent.Tick();
+                        //agent.Tick();
                     }
                     pilot.Stop();
+
+                    if (g_LogFile.is_open()) {
+                        g_LogFile.close();
+                    }
+                    FreeLibraryAndExitThread(hModule, 0);
+
                     g_IsRunning = false;
                     RaiseException(0xDEADBEEF, 0, 0, nullptr); // Forcibly exit all threads (including GUI)
 
@@ -957,7 +985,7 @@ void MainThread(HMODULE hModule) {
                                 }
                             }
 						}
-						logFile << "Closest Enemy Distance: " << std::fixed << std::setprecision(2) << min_distance << std::endl;
+                        g_LogFile << "Closest Enemy Distance: " << std::fixed << std::setprecision(2) << min_distance << std::endl;
 
                         // 4. Calculate Screen Position
                         int sx, sy;
@@ -980,7 +1008,7 @@ void MainThread(HMODULE hModule) {
 
                     //////////////////////////////////////////////////////////////
                     //////////////////////////////////////////////////////////////
-                    logFile << "Agent Started. Press END to stop." << std::endl;
+                    g_LogFile << "Agent Started. Press END to stop." << std::endl;
                     //////////////////////////////////////////////////////////////
                     //////////////////////////////////////////////////////////////
                     // LOOP FOREVER (Or until uninject)
@@ -998,8 +1026,15 @@ void MainThread(HMODULE hModule) {
                         // --- 2. ENTITY UPDATE (GUI) ---
                         // Update all entities every 100ms
                         else {
-                            std::vector<GameEntity> currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, g_GameState->player, agent);
-                            UpdateGuiData(currentEntities);
+                            // LOCK before writing
+                            std::lock_guard<std::mutex> lock(g_EntityMutex);
+
+                            // Now it is safe to update the vector
+                            g_GameState->entities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, g_GameState->player, agent);
+
+                            // UpdateGuiData usually reads entities too, so keep it inside the lock
+                            UpdateGuiData(g_GameState->entities);
+
                             lastTick = GetTickCount();
                         }
                         
@@ -1018,7 +1053,7 @@ void MainThread(HMODULE hModule) {
                     Vector3 lastPoint = {};
 
      //               for (auto& point : path) {
-     //                   logFile << std::fixed << std::setprecision(2) << "Moving to Point: (" << point.x << ", " << point.y << ", " << point.z << ")" << std::endl;
+     //                   g_LogFile << std::fixed << std::setprecision(2) << "Moving to Point: (" << point.x << ", " << point.y << ", " << point.z << ")" << std::endl;
      //                   while (agent.state.player.position.Dist3D(point) > 3.0f) {
      //                       if (lastPoint.x != 0.0f && lastPoint.y != 0.0f && lastPoint.z != 0.0f) {
      //                           if ((kbd.IsHolding('W')) && (agent.state.player.position.Dist3D(lastPoint) > 10)) {
@@ -1044,7 +1079,7 @@ void MainThread(HMODULE hModule) {
      //                       }
      //                       Sleep(100); // Small delay to allow position update
      //                       currentEntities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, agent.state.player);
-     //                       //logFile << std::fixed << std::setprecision(2) << "Player Pos: (" << playerInfo.position.x << ", " << playerInfo.position.y << ", " << playerInfo.position.z << ")" << "  Player Rotation: " << playerInfo.rotation << std::endl;
+     //                       //g_LogFile << std::fixed << std::setprecision(2) << "Player Pos: (" << playerInfo.position.x << ", " << playerInfo.position.y << ", " << playerInfo.position.z << ")" << "  Player Rotation: " << playerInfo.rotation << std::endl;
      //                   }
 					//}                    
                 }
@@ -1053,12 +1088,10 @@ void MainThread(HMODULE hModule) {
     }
     catch (const std::exception& ex) {
         std::string msg = std::string("EXCEPTION: ") + ex.what();
-        logFile << msg << std::endl;
-        logFile.flush();
+        g_LogFile << msg << std::endl;
     }
     catch (...) {
-        logFile << "UNKNOWN EXCEPTION CAUGHT" << std::endl;
-        logFile.flush();
+        g_LogFile << "UNKNOWN EXCEPTION CAUGHT" << std::endl;
     }
 
     log("Unloading...");

@@ -2,6 +2,7 @@
 #include "MemoryRead.h"
 #include "Vector.h"
 #include "SimpleMouseClient.h"
+#include "Logger.h"
 
 class Camera {
 private:
@@ -39,10 +40,6 @@ public:
             mem.ReadPointer(procId, baseAddress + 0x3DEFB68, cameraMgr);
             mem.ReadPointer(procId, cameraMgr + 0x488, cameraPtr);
         }
-        std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
-        if (!logFile.is_open()) {
-            logFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
-        }
 
         // Camera world position
         mem.ReadFloat(procId, cameraPtr + CAMERA_POSITION_X, camPos.x);
@@ -67,7 +64,7 @@ public:
         mem.ReadFloat(procId, cameraPtr + CAMERA_PROJECTION_MATRIX_UP_Y, camUp.y);
         mem.ReadFloat(procId, cameraPtr + CAMERA_PROJECTION_MATRIX_UP_Z, camUp.z);
 
-		//logFile << "[CAMERA] Position: (" << camPos.x << ", " << camPos.y << ", " << camPos.z << ")" << std::endl;
+		//g_LogFile << "[CAMERA] Position: (" << camPos.x << ", " << camPos.y << ", " << camPos.z << ")" << std::endl;
 
         return (cameraPtr != 0);
     }
@@ -94,10 +91,6 @@ public:
 
     bool WorldToScreen(Vector3 targetPos, int& outX, int& outY) {
         Update(baseAddress);
-        std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
-        if (!logFile.is_open()) {
-            logFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
-        }
         if (!cameraPtr) return false;
 
         // Construct View Matrix

@@ -158,7 +158,7 @@ inline Matrix4x4 MatrixPerspectiveFovRH(float fovY, float aspect, float zn, floa
 
 // Finds the closest waypoint in a path to the input position
 inline int FindClosestWaypoint(std::vector<Vector3>& path, Vector3& position) {
-    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+    
     if (path.empty()) return -1;
 
     int closestIndex = 0;
@@ -166,7 +166,7 @@ inline int FindClosestWaypoint(std::vector<Vector3>& path, Vector3& position) {
 
     for (size_t i = 0; i < path.size(); ++i) {
         float dist = position.Dist3D(path[i]);
-        //logFile << "Distance : " << dist << " | minDistance: " << minDistance << " | closestIndex: " << closestIndex << std::endl;
+        //g_LogFile << "Distance : " << dist << " | minDistance: " << minDistance << " | closestIndex: " << closestIndex << std::endl;
         if (dist < minDistance) {
             minDistance = dist;
             closestIndex = (int)i;

@@ -36,7 +36,7 @@ bool BlacklistCheck(WorldState& ws, ULONG_PTR guidLow, ULONG_PTR guidHigh) {
 
 // Helper to find nodes in the entity list
 void UpdateGatherTarget(WorldState& ws) {
-    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+    
 
     float bestDist = GATHERING_RANGE; // Max scan range (yards)
     float secondBestDist = GATHERING_RANGE; // Max scan range (yards)
@@ -131,7 +131,7 @@ void UpdateGatherTarget(WorldState& ws) {
             ws.gatherState.guidHigh = target.guidHigh;
             ws.gatherState.hasNode = true;
             ws.gatherState.nodeActive = true;
-            logFile << "[AGENT] Found Gather Node: " << objInfo->name << " at " << bestDist << "y" << std::endl;
+            g_LogFile << "[AGENT] Found Gather Node: " << objInfo->name << " at " << bestDist << "y" << std::endl;
         }
     }
 }

@@ -139,7 +139,7 @@ public:
     // Returns FALSE if it is currently working (caller should return and wait).
    // --- UPDATED CALIBRATION FUNCTION ---
     bool Calibrate(float currentYaw, float currentPitch) {
-        std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+        
         if (m_IsCalibrated) return true;
 
         DWORD now = GetTickCount();
@@ -183,7 +183,7 @@ public:
 
                 // If moving +50 would hit the edge, OR if we are just too close to any edge
                 if (cursor.x > safeMaxX || cursor.x < safeMinX) {
-                    logFile << "[CALIBRATION] Cursor near edge. Recentering..." << std::endl;
+                    g_LogFile << "[CALIBRATION] Cursor near edge. Recentering..." << std::endl;
 
                     // Release button if held (safety)
                     mouse.ReleaseButton(MOUSE_RIGHT);
@@ -228,7 +228,7 @@ public:
                 // If the previous attempt failed, FLIP the direction
                 if (m_RetryInvert) {
                     moveY = -moveY;
-                    logFile << "[CALIB PITCH] Retrying with INVERTED direction: " << moveY << std::endl;
+                    g_LogFile << "[CALIB PITCH] Retrying with INVERTED direction: " << moveY << std::endl;
                 }
 
                 mouse.PressButton(MOUSE_RIGHT);
@@ -264,11 +264,11 @@ public:
                 if (std::abs(delta) > 0.01f) {
                     float k = 100.0f / delta;
                     m_AccumulatedYawK += k;
-                    logFile << "[CALIB YAW] Step " << m_CalibrationStep << " | K: " << k << std::endl;
+                    g_LogFile << "[CALIB YAW] Step " << m_CalibrationStep << " | K: " << k << std::endl;
                     m_CalibrationStep++;
                 }
                 else {
-                    logFile << "[CALIB YAW] Failed (No delta). Retrying..." << std::endl;
+                    g_LogFile << "[CALIB YAW] Failed (No delta). Retrying..." << std::endl;
                 }
             }
             // --- MEASURE PITCH (Steps 5-9) ---
@@ -279,16 +279,16 @@ public:
 
                 mouse.ReleaseButton(MOUSE_RIGHT);
 
-                logFile << "[CALIB DEBUG] StartPitch: " << m_StartPitch << " EndPitch: " << currentPitch << " Delta: " << delta << std::endl;
+                g_LogFile << "[CALIB DEBUG] StartPitch: " << m_StartPitch << " EndPitch: " << currentPitch << " Delta: " << delta << std::endl;
 
                 if (std::abs(delta) > 0.01f) {
                     float k = pixelsMoved / delta;
                     m_AccumulatedPitchK += k;
-                    logFile << "[CALIB PITCH] Step " << m_CalibrationStep << " | Pixels: " << pixelsMoved << " | Delta: " << delta << " | K: " << k << std::endl;
+                    g_LogFile << "[CALIB PITCH] Step " << m_CalibrationStep << " | Pixels: " << pixelsMoved << " | Delta: " << delta << " | K: " << k << std::endl;
                     m_CalibrationStep++;
                 }
                 else {
-                    logFile << "[CALIB PITCH] Failed (Hit Limit?). Retrying..." << std::endl;
+                    g_LogFile << "[CALIB PITCH] Failed (Hit Limit?). Retrying..." << std::endl;
                     m_RetryInvert = !m_RetryInvert; // FLIP DIRECTION
                 }
             }
@@ -302,11 +302,11 @@ public:
                 m_IsCalibrated = true;
                 m_IsCalibrating = false;
 
-                logFile << "------------------------------------------------" << std::endl;
-                logFile << "CALIBRATION COMPLETE" << std::endl;
-                logFile << "YAW K:   " << m_PixelsPerRadianYaw << std::endl;
-                logFile << "PITCH K: " << m_PixelsPerRadianPitch << std::endl;
-                logFile << "------------------------------------------------" << std::endl;
+                g_LogFile << "------------------------------------------------" << std::endl;
+                g_LogFile << "CALIBRATION COMPLETE" << std::endl;
+                g_LogFile << "YAW K:   " << m_PixelsPerRadianYaw << std::endl;
+                g_LogFile << "PITCH K: " << m_PixelsPerRadianPitch << std::endl;
+                g_LogFile << "------------------------------------------------" << std::endl;
                 return true;
             }
 
@@ -319,7 +319,7 @@ public:
     }
 
     void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool flyingPath, PlayerInfo& player) {
-        std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+        
         float dx = targetPos.x - currentPos.x;
         float dy = targetPos.y - currentPos.y;
         float dz = targetPos.z - currentPos.z;
@@ -352,7 +352,7 @@ public:
                     }
                     else {
                         // FAILED: Set cooldown for 2 minutes (120,000 ms)
-                        logFile << "[Movement] Mount failed (Tunnel/Indoor?). Disabling mounting for 2 minutes." << std::endl;
+                        g_LogFile << "[Movement] Mount failed (Tunnel/Indoor?). Disabling mounting for 2 minutes." << std::endl;
                         m_MountDisabledUntil = now + 120000;
                         m_IsMounting = false;
                         // Fall through to walk logic
@@ -622,7 +622,7 @@ public:
 
 // Detect if player is in an enclosed space (tunnel/indoor/cave)
 inline bool IsInTunnel(const Vector3& pos, int mapId) {
-    std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
+    
     // Check 1: Is there a LOW CEILING above us?
     const float TUNNEL_CEILING_HEIGHT = 20.0f;  // Tunnels have ceilings within 20 units
 
@@ -665,7 +665,7 @@ inline bool IsInTunnel(const Vector3& pos, int mapId) {
             blockedDirections++;
         }
     }
-    logFile << hitCeiling << " " << ceilingHeight << std::endl;
+    g_LogFile << hitCeiling << " " << ceilingHeight << std::endl;
 
     // Decision logic:
     // - If ceiling is low (< 20 units) AND we're blocked in 4+ directions = TUNNEL

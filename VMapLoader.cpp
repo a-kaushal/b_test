@@ -20,72 +20,67 @@ const bool DEBUG_VMAP = true;  // Enable/disable VMap logging
 // --- DEBUG LOGGER ---
 class VMapLogger {
 private:
-    std::ofstream logFile;
+    std::ofstream g_LogFile;
     bool enabled;
 
 public:
     VMapLogger() : enabled(DEBUG_VMAP) {
         if (enabled) {
-            logFile.open("C:\\Driver\\SMM_VMap_Debug.log", std::ios::app);
-            if (logFile.is_open()) {
+            g_LogFile.open("C:\\Driver\\SMM_VMap_Debug.log", std::ios::app);
+            if (g_LogFile.is_open()) {
                 auto now = std::chrono::system_clock::now();
                 auto time = std::chrono::system_clock::to_time_t(now);
-                logFile << "\n========================================\n";
-                logFile << "VMap Session Started: " << std::ctime(&time);
-                logFile << "========================================\n\n";
+                g_LogFile << "\n========================================\n";
+                g_LogFile << "VMap Session Started: " << std::ctime(&time);
+                g_LogFile << "========================================\n\n";
             }
         }
     }
 
     ~VMapLogger() {
-        if (logFile.is_open()) {
-            logFile.close();
+        if (g_LogFile.is_open()) {
+            g_LogFile.close();
         }
     }
 
     void Log(const std::string& msg) {
-        if (enabled && logFile.is_open()) {
-            logFile << "[VMAP] " << msg << std::endl;
-            logFile.flush(); // Ensure immediate write
+        if (enabled && g_LogFile.is_open()) {
+            g_LogFile << "[VMAP] " << msg << std::endl;
         }
     }
 
     void LogCheck(int mapId, float x1, float y1, float z1, float x2, float y2, float z2, bool hit) {
-        if (enabled && logFile.is_open()) {
-            logFile << "[CHECK] Map=" << mapId << " | ";
-            logFile << std::fixed << std::setprecision(2);
-            logFile << "Start=(" << x1 << ", " << y1 << ", " << z1 << ") ";
-            logFile << "End=(" << x2 << ", " << y2 << ", " << z2 << ") | ";
-            logFile << "Distance=" << std::sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1) + (z2 - z1) * (z2 - z1)) << " | ";
-            logFile << "Result: " << (hit ? "BLOCKED ❌" : "CLEAR ✓") << std::endl;
-            logFile.flush();
+        if (enabled && g_LogFile.is_open()) {
+            g_LogFile << "[CHECK] Map=" << mapId << " | ";
+            g_LogFile << std::fixed << std::setprecision(2);
+            g_LogFile << "Start=(" << x1 << ", " << y1 << ", " << z1 << ") ";
+            g_LogFile << "End=(" << x2 << ", " << y2 << ", " << z2 << ") | ";
+            g_LogFile << "Distance=" << std::sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1) + (z2 - z1) * (z2 - z1)) << " | ";
+            g_LogFile << "Result: " << (hit ? "BLOCKED ❌" : "CLEAR ✓") << std::endl;
         }
     }
 
     void LogTileLoad(const std::string& filename, bool success, int instanceCount = 0) {
-        if (enabled && logFile.is_open()) {
+        if (enabled && g_LogFile.is_open()) {
             if (success) {
-                logFile << "[TILE] Loaded: " << filename << " (" << instanceCount << " instances)" << std::endl;
+                g_LogFile << "[TILE] Loaded: " << filename << " (" << instanceCount << " instances)" << std::endl;
             }
             else {
-                logFile << "[TILE] Failed to load: " << filename << std::endl;
+                g_LogFile << "[TILE] Failed to load: " << filename << std::endl;
             }
-            logFile.flush();
         }
     }
 
     void LogCollision(int instanceIdx, const std::string& bounds) {
-        if (enabled && logFile.is_open()) {
-            logFile << "  ├─ HIT Instance #" << instanceIdx << " " << bounds << std::endl;
-            logFile.flush();
+        if (enabled && g_LogFile.is_open()) {
+            g_LogFile << "  ├─ HIT Instance #" << instanceIdx << " " << bounds << std::endl;
         }
     }
 
     void LogClearance(float midZ, float threshold) {
-        if (enabled && logFile.is_open()) {
-            logFile << "  ├─ High altitude flight detected (Z=" << midZ
+        if (enabled && g_LogFile.is_open()) {
+            g_LogFile << "  ├─ High altitude flight detected (Z=" << midZ
                 << " > threshold=" << threshold << ") - SKIPPING VMap check" << std::endl;
-            logFile.flush();
         }
     }
 };

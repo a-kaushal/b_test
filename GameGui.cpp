@@ -1,4 +1,5 @@
 #include "GameGui.h"
+#include "dllmain.h"
 #include <commctrl.h> // Common Controls (ListView)
 #include <cstdio>
 #include <string>
@@ -14,9 +15,6 @@
 std::mutex guiMutex;
 std::vector<GameEntity> globalEntities;
 HWND hListView = NULL;
-
-// LINK TO MAIN: Access the global flag defined in your main.cpp
-extern std::atomic<bool> g_IsRunning;
 
 // --- Helper Functions ---
 void AddColumn(HWND hList, int columnIndex, const char* title, int width) {
@@ -90,7 +88,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         // Check if we should stop (Safety check)
         if (!g_IsRunning) break;
 
-        std::lock_guard<std::mutex> lock(guiMutex);
+        std::lock_guard<std::mutex> lock(g_EntityMutex);
 
         // Get how many items are currently in the list
         int existingCount = (int)SendMessageA(hListView, (0x1000 + 4), 0, 0); // LVM_GETITEMCOUNT
@@ -119,92 +117,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             sprintf_s(buffer, "%d", ent.id);
             SetItemText(hListView, i, 2, buffer);
 
-            // 4. MAP ID (Column 3)
-            if (ent.info) {
-                // ADD TRY-CATCH FOR STRING READS
-                try {
-                    if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(ent.info)) {
-                        std::snprintf(buffer, sizeof(buffer), "%s", enemy->name.c_str());
-                        SetItemText(hListView, i, 3, buffer);
-                    }
-                    else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(ent.info)) {
-                        std::snprintf(buffer, sizeof(buffer), "%s", object->name.c_str());
-                        SetItemText(hListView, i, 3, buffer);
-                    }
-                    else {
-                        SetItemText(hListView, i, 3, "N/A");
-                    }
-                }
-                catch (...) {
-                    // If a race condition occurs during string read, handle it gracefully
-                    SetItemText(hListView, i, 3, "Error");
-                }
-            }
-            else {
-                SetItemText(hListView, i, 3, "N/A");
-            }
+            // 4. NAME (Column 3)
+            SetItemText(hListView, i, 3, ent.name_safe);
 
-            // 4. Entity Pointer (Column 4)
+            // 5. POINTER
             sprintf_s(buffer, "%02X", ent.entityPtr);
             SetItemText(hListView, i, 4, buffer);
 
-            // 4. Entity Pointer (Column 4)
-            if (ent.info) {
-                if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(ent.info)) {
-                    if (enemy->reaction == 0) {
-                        sprintf_s(buffer, sizeof(buffer), "Enemy");
-                    }
-                    if (enemy->reaction == 1) {
-                        sprintf_s(buffer, sizeof(buffer), "Neutral");
-                    }
-                    if (enemy->reaction == 2) {
-                        sprintf_s(buffer, sizeof(buffer), "Friendly");
-                    }
-                    SetItemText(hListView, i, 5, buffer);
-                }
-                else {
-                    SetItemText(hListView, i, 5, "N/A");
-                }
-            }
-            else {
-                SetItemText(hListView, i, 5, "N/A");
-            }
+            // 6. REACTION
+            SetItemText(hListView, i, 5, ent.reaction_safe);
 
-            // 6. TYPE ID (Column 6)
+            // 7. TYPE ID
             sprintf_s(buffer, "%d", ent.type);
             SetItemText(hListView, i, 6, buffer);
 
-            // 7. DISTANCE TO PLAYER (Column 7)
-            if (ent.info) {
-                if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(ent.info)) {
-                    sprintf_s(buffer, sizeof(buffer), "%.2f", enemy->distance);
-                    SetItemText(hListView, i, 7, buffer);
-                }
-                else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(ent.info)) {
-                    sprintf_s(buffer, sizeof(buffer), "%.2f", object->distance);
-                    SetItemText(hListView, i, 7, buffer);
-                }
-                else {
-                    SetItemText(hListView, i, 7, "N/A");
-                }
-            }
-            else {
-                SetItemText(hListView, i, 7, "N/A");
-            }
+            // 8. DISTANCE (CRITICAL FIX: Use dist_safe)
+            sprintf_s(buffer, "%.2f", ent.dist_safe);
+            SetItemText(hListView, i, 7, buffer);
 
-            // 8. AGRO RANGE (Column 8)
-            if (ent.info) {
-                if (auto object = std::dynamic_pointer_cast<ObjectInfo>(ent.info)) {
-                    sprintf_s(buffer, sizeof(buffer), "%d", object->nodeActive);
-                    SetItemText(hListView, i, 8, buffer);
-                }
-                else {
-                    SetItemText(hListView, i, 8, "N/A");
-                }
-            }
-            else {
-                SetItemText(hListView, i, 8, "N/A");
-            }
+            // 9. NODE ACTIVE/AGGRO (Use nodeActive_safe)
+            sprintf_s(buffer, "%d", ent.nodeActive_safe);
+            SetItemText(hListView, i, 8, buffer);
         }
 
         // If the new list is smaller than the old list, delete the extra rows

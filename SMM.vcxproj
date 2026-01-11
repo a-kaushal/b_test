@@ -181,10 +181,12 @@ _CRT_NONSTDC_NO_DEPRECATE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ClInclude Include="Combat.h" />
     <ClInclude Include="CombatController.h" />
     <ClInclude Include="Database.h" />
+    <ClInclude Include="dllmain.h" />
     <ClInclude Include="Entity.h" />
     <ClInclude Include="GameGui.h" />
     <ClInclude Include="Gathering.h" />
     <ClInclude Include="GoapSystem.h" />
+    <ClInclude Include="Logger.h" />
     <ClInclude Include="MemoryRead.h" />
     <ClInclude Include="MovementController.h" />
     <ClInclude Include="OverlayWindow.h" />
