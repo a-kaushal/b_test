@@ -28,6 +28,14 @@ extern "C" bool CheckFMapLine(int mapId, float x1, float y1, float z1, float x2,
 extern "C" float GetFMapFloorHeight(int mapId, float x, float y, float z);
 extern "C" bool CanFlyAt(int mapId, float x, float y, float z);
 
+// --- AREA CONSTANTS (Must match Generator/PathCommon.h) ---
+const unsigned short AREA_GROUND = 0x01; // 1
+const unsigned short AREA_MAGMA = 0x02; // 2
+const unsigned short AREA_SLIME = 0x04; // 4
+const unsigned short AREA_WATER = 0x08; // 8 (Surface)
+const unsigned short AREA_UNDERWATER = 0x10; // 16 (Sea Floor)
+const unsigned short AREA_ROAD = 0x20; // 32 (Roads
+
 // --- CONFIGURATION ---
 const float COLLISION_STEP_SIZE = 0.5f;    // Was 1.5f - much finer sampling
 const float MIN_CLEARANCE = 2.0f;          // Was 1.0f - more safety margin
@@ -46,7 +54,7 @@ const float FMAP_VERTICAL_TOLERANCE = 2.0f;  // Tolerance for floor snapping
 const size_t MAX_CACHE_SIZE = 100;
 const size_t CACHE_CLEANUP_THRESHOLD = 120;
 
-const bool DEBUG_PATHFINDING = true;  // Enable for flight debugging
+const bool DEBUG_PATHFINDING = false;  // Enable for flight debugging
 
 enum PathType {
     PATH_GROUND = 0,
@@ -150,8 +158,10 @@ struct IndexPriorityQueue {
 struct PathCacheKey {
     int sx, sy, sz, ex, ey, ez;
     bool flying;
+    bool ignoreWater;
 
-    PathCacheKey(const Vector3& start, const Vector3& end, bool fly) : flying(fly) {
+    PathCacheKey(const Vector3& start, const Vector3& end, bool fly, bool ignoreWater_ = false)
+        : flying(fly), ignoreWater(ignoreWater_) {
         sx = (int)start.x; sy = (int)start.y; sz = (int)start.z;
         ex = (int)end.x; ey = (int)end.y; ez = (int)end.z;
     }
@@ -163,7 +173,8 @@ struct PathCacheKey {
         if (ex != o.ex) return ex < o.ex;
         if (ey != o.ey) return ey < o.ey;
         if (ez != o.ez) return ez < o.ez;
-        return flying < o.flying;
+        if (flying != o.flying) return flying < o.flying;
+        return ignoreWater < o.ignoreWater;
     }
 };
 
@@ -633,6 +644,9 @@ public:
 
         int tilesLoadedCount = 0;
 
+        // SAFETY CHECK: Ensure directory exists before iterating
+        if (!std::filesystem::exists(directory)) return false;
+
         for (const auto& entry : std::filesystem::directory_iterator(directory)) {
             if (entry.path().filename().string().find(prefix) == 0 &&
                 entry.path().extension() == ".mmtile") {
@@ -802,16 +816,59 @@ public:
         }
         return output;
     }
+
+    // --- GET AREA ID AT COORDINATE ---
+    // Returns the Area ID (Ground=1, Water=8, Underwater=16, etc.) at the given position.
+    // Returns 0 if no navmesh is found there.
+    unsigned char GetAreaID(const Vector3& pos, float searchRadius = 2.0f, float heightRange = 10.0f) {
+        if (!query || !mesh) return 0;
+
+        float center[3] = { pos.y, pos.z, pos.x }; // WoW -> Recast coords
+        float extent[3] = { searchRadius, heightRange, searchRadius };
+
+        dtQueryFilter filter;
+        filter.setIncludeFlags(0xFFFF); // Search ALL polygons (Ground, Water, everything)
+        filter.setExcludeFlags(0);
+
+        dtPolyRef ref;
+        float nearest[3];
+
+        // Find the nearest polygon to the point
+        if (dtStatusSucceed(query->findNearestPoly(center, extent, &filter, &ref, nearest))) {
+            if (ref) {
+                const dtMeshTile* tile = 0;
+                const dtPoly* poly = 0;
+
+                // Get the polygon data to read the Area ID
+                if (dtStatusSucceed(mesh->getTileAndPolyByRef(ref, &tile, &poly))) {
+                    return poly->getArea();
+                }
+            }
+        }
+        return 0; // NAV_EMPTY
+    }
 };
 
 static NavMesh globalNavMesh;
 
-inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end) {
+inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, bool ignoreWater) {
     if (!globalNavMesh.query || !globalNavMesh.mesh) return {};
 
     dtQueryFilter filter;
-    filter.setIncludeFlags(0xFFFF);
+
+    // --- UPDATED FILTERING LOGIC ---
+    // Start with default walkable areas (Ground, Magma, Slime, Road)
+    unsigned short includeFlags = AREA_GROUND | AREA_MAGMA | AREA_SLIME | AREA_ROAD;
+
+    // If ignoring water is disabled, we add Water (Swimming) and Underwater (Sea Floor)
+    if (!ignoreWater) {
+        includeFlags |= AREA_WATER;      // 0x08
+        includeFlags |= AREA_UNDERWATER; // 0x10
+    }
+
+    filter.setIncludeFlags(includeFlags);
     filter.setExcludeFlags(0);
+
     dtPolyRef startRef = 0, endRef = 0;
     float startPt[3], endPt[3];
     float detourStart[3] = { start.y, start.z, start.x };
@@ -1439,7 +1496,7 @@ inline bool DetectNoFlyZone(const Vector3& start, const Vector3& end, int mapId,
 
 // Create a hybrid path that handles tunnels
 inline std::vector<PathNode> CreateHybridPath(const Vector3& start, const Vector3& end,
-    int mapId, bool flying, bool isFlying) {
+    int mapId, bool flying, bool isFlying, bool ignoreWater) {
     std::ofstream logFile;
     if (DEBUG_PATHFINDING) {
         logFile.open("C:\\Driver\\SMM_Debug.log", std::ios::app);
@@ -1493,7 +1550,8 @@ inline std::vector<PathNode> CreateHybridPath(const Vector3& start, const Vector
         logFile << "[HYBRID] Computing ground path through tunnel...\n";
     }
 
-    std::vector<PathNode> tunnelPath = FindPath(tunnelEntry, tunnelExit);
+    // Pass ignoreWater to FindPath
+    std::vector<PathNode> tunnelPath = FindPath(tunnelEntry, tunnelExit, ignoreWater);
     if (!tunnelPath.empty()) {
         // Add tunnel waypoints (skip first if it overlaps with approach end)
         if (!hybridPath.empty() && hybridPath.back().pos.Dist3D(tunnelPath[0].pos) < 3.0f) {
@@ -1572,12 +1630,20 @@ inline void CleanPathGroundZ(std::vector<PathNode>& path, int mapId) {
     }
 }
 
-// MODIFY CalculatePath to use hybrid pathfinding
+// MODIFIED: CalculatePath accepts ignoreWater and passes it to FindPath/Cache
 inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath, const Vector3& startPos,
-    int currentIndex, bool flying, int mapId, bool isFlying, bool path_loop = false) {
+    int currentIndex, bool flying, int mapId, bool isFlying, bool ignoreWater, bool path_loop = false) {
     std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
 
     std::string mmapFolder = "C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/mmaps/";
+
+    // --- ADD THIS CHECK ---
+    if (!std::filesystem::exists(mmapFolder)) {
+        logFile << "[ERROR] CRITICAL: MMap folder does not exist: " << mmapFolder << std::endl;
+        logFile << "[ERROR] Please update 'mmapFolder' in Pathfinding2.h to your correct path." << std::endl;
+        return {}; // Return empty path instead of crashing
+    }
+    // ----------------------
 
     std::vector<PathNode> stitchedPath;
     std::vector<Vector3> modifiedInput;
@@ -1592,10 +1658,6 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
         for (int i = currentIndex; i < inputPath.size(); ++i) modifiedInput.push_back(inputPath[i]);
         for (int i = 0; i < currentIndex; ++i) modifiedInput.push_back(inputPath[i]);
     }
-
-    for (const auto& point : modifiedInput) {
-        logFile << "Path-Points: " << point.x << ", " << point.y << ", " << point.z << std::endl;
-    }
     
     // Sparse loading of only needed tiles
     if (!globalNavMesh.LoadMap(mmapFolder, mapId, &modifiedInput, true)) return {};
@@ -1605,7 +1667,8 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
     for (int i = 0; i < lookahead; ++i) {
         Vector3 start = modifiedInput[i];
         Vector3 end = modifiedInput[i + 1];
-        PathCacheKey key(start, end, flying);
+        // Pass ignoreWater to cache key so we don't reuse a water path when water is ignored
+        PathCacheKey key(start, end, flying, ignoreWater);
 
         std::vector<PathNode>* cached = globalPathCache.Get(key);
         if (!cached) {
@@ -1616,7 +1679,8 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
 
             if (flying) {
                 // First check for tunnels/no-fly zones
-                //std::vector<PathNode> hybridPath = CreateHybridPath(start, end, mapId, flying, isFlying);
+                // Pass ignoreWater to hybrid path generation
+                // std::vector<PathNode> hybridPath = CreateHybridPath(start, end, mapId, flying, isFlying, ignoreWater);
                 std::vector<PathNode> hybridPath = {};
                 if (!hybridPath.empty()) {
                     // Found a tunnel, use the hybrid path
@@ -1659,7 +1723,8 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
 
             // Try ground path first if conditions are met
             if (shouldTryGroundFirst) {
-                segment = FindPath(start, end);
+                // Pass ignoreWater to FindPath
+                segment = FindPath(start, end, ignoreWater);
 
                 if (!segment.empty()) {
                     if (DEBUG_PATHFINDING) {
@@ -1684,12 +1749,13 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
                     logFile.flush();
                     segment = Calculate3DFlightPath(start, end, mapId, isFlying);
                     if (segment.empty()) {
-                        //segment = FindPath(start, end);
+                        // segment = FindPath(start, end, ignoreWater);
                         return segment;
                     }
                 }
                 else {
-                    segment = FindPath(start, end);
+                    // Pass ignoreWater to FindPath
+                    segment = FindPath(start, end, ignoreWater);
                 }
             }
 

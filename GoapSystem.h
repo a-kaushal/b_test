@@ -121,11 +121,11 @@ public:
     // Main Entry Point
     // returns TRUE if interaction sequence is complete
     bool EngageTarget(Vector3 targetPos, ULONG_PTR targetGuidLow, ULONG_PTR targetGuidHigh, PlayerInfo & player, std::vector<PathNode>&currentPath, int& pathIndex, float approachDist, float interactDist, float finalDist,
-        bool checkTarget, bool targetGuid, bool fly, int postClickWaitMs, MouseButton click, bool movingTarget) {
+        bool checkTarget, bool targetGuid, bool fly, int postClickWaitMs, MouseButton click, bool movingTarget, bool& failedPath) {
         std::ofstream logFile("C:\\Driver\\SMM_Debug.log", std::ios::app);
         bool fly_entry_state = fly;
         if ((currentState != STATE_CREATE_PATH) && (movingTarget == true) && (pathCalcTimer != 0) && (GetTickCount() - pathCalcTimer > 200)) {
-            currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530, player.isFlying);
+            currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530, player.isFlying, g_GameState->globalState.ignoreUnderWater);
             pathIndex = 0;
             pathCalcTimer = GetTickCount();
         }
@@ -147,11 +147,15 @@ public:
 
         case STATE_CREATE_PATH:
             // Assuming CalculatePath is available globally or via included header
-            currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530, player.isFlying);
+            currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530, player.isFlying, g_GameState->globalState.ignoreUnderWater);
             logFile << "Target Pos x: " << targetPos.x << " | Target Pos y: " << targetPos.y << " | Target Pos z: " << targetPos.z << std::endl;
-            for (int i = 0; i < currentPath.size(); i++) {
-                logFile << "Path: " << i << " | X coord: " << currentPath[i].pos.x << " | Y coord: " << currentPath[i].pos.y << " | Z coord: " << currentPath[i].pos.z << std::endl;
+            if (currentPath.empty() == true) {
+                logFile << "Path is empty" << std::endl;
+                failedPath = true;
             }
+            /*for (int i = 0; i < currentPath.size(); i++) {
+                logFile << "Path: " << i << " | X coord: " << currentPath[i].pos.x << " | Y coord: " << currentPath[i].pos.y << " | Z coord: " << currentPath[i].pos.z << std::endl;
+            }*/
             pathIndex = 0;
             pathCalcTimer = GetTickCount();
             currentState = STATE_APPROACH;
@@ -259,29 +263,29 @@ public:
         if (index >= path.size()) {
             pilot.Stop();
             // Dismount Logic
-            if (player.flyingMounted || player.groundMounted) {
+            if (player.flyingMounted || player.groundMounted || player.inWater) {
+                if (player.inWater) {
+                    if (timer != 0) {
+                        if (GetTickCount() - timer > 1500) {
+                            keyboard.SendKey('X', 0, false);
+                            if (GetTickCount() - timer > 1700) {
+                                if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"))) {
+                                    inputCommand.Reset();
+                                    return true;
+                                }
+                            }
+                        }
+                        return false;
+                    }
+
+                    if (timer == 0) { timer = GetTickCount(); keyboard.SendKey('X', 0, true); }
+                    return false;
+                }
                 if (player.position.Dist3D(path[index - 1].pos) < 10.0f) {
                     if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"))) {
                         inputCommand.Reset();
                         return true;
                     }
-                    return false;
-                }
-                if (timer != 0) {
-                    if (GetTickCount() - timer > 1000) {
-                        keyboard.SendKey('X', 0, false);
-                        if (GetTickCount() - timer > 1200) {
-                            if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"))) {
-                                inputCommand.Reset();
-                                return true;
-                            }
-                        }
-                    }
-                    return false;
-                }
-                if (inputCommand.GetState() == "OPEN_CHAT_WINDOW") {
-                    if (timer == 0) timer = GetTickCount();
-                    if (GetTickCount() - timer < 1000) keyboard.SendKey('X', 0, true);
                     return false;
                 }
             }
@@ -382,6 +386,8 @@ private:
     SimpleKeyboardClient& keyboard;
     ConsoleInput input; // Used to send the Lua command
 
+    bool failedPath = false;
+
 public:
     ActionRepair(InteractionController& ic, SimpleKeyboardClient& k)
         : interact(ic), keyboard(k), input(k) {
@@ -425,7 +431,8 @@ public:
             true, // Fly if applicable
             2500,  // Wait 2.5s for window to open
             MOUSE_RIGHT,
-            false // NPC is likely stationary
+            false, // NPC is likely stationary
+            failedPath
         );
 
         // Visualization
@@ -446,6 +453,8 @@ public:
 
             // Cleanup
             interact.Reset();
+
+            failedPath = false;
 
             // Close the window (Optional: prevents clutter)
             // input.SendDataRobust(std::wstring(L"/run CloseGossip() CloseMerchant()"));
@@ -629,6 +638,7 @@ public:
                         ws.player.isFlying || ws.player.flyingMounted,
                         530,
                         ws.player.isFlying,
+                        g_GameState->globalState.ignoreUnderWater,
                         false
                     );
                     ws.pathFollowState.index = 0;
@@ -692,6 +702,8 @@ private:
 
     const float MELEE_RANGE = 3.5f; // Adjust based on class (e.g., 30.0f for casters)
 
+    bool failedPath = false;
+
 public:
     ActionCombat(InteractionController& ic, CombatController& cc)
         : interact(ic), combatController(cc) {
@@ -730,12 +742,13 @@ public:
 		const auto& entity = ws.entities[ws.combatState.entityIndex];
         if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
             if ((ws.combatState.targetGuidLow == entity.guidLow) && (ws.combatState.targetGuidHigh == entity.guidHigh)) {
-                logFile << npc->health << std::endl;
+                //logFile << npc->health << std::endl;
                 if (npc->health == 0) {
                     ResetState();
                     ws.combatState.hasTarget = false;
                     ws.combatState.underAttack = false;
                     ws.combatState.inCombat = false;
+                    failedPath = false;
                     return true;
                 }
                 if ((static_cast<float>(npc->health) / npc->maxHealth) < 0.2f) {
@@ -747,9 +760,9 @@ public:
         // 1. Target Selection Phase
         if ((!targetSelected) && (!ws.combatState.inCombat)) {
             // Range 4.0f (Melee), No Flying, 100ms wait after click
-            logFile << ws.player.isFlying << " " << interact.GetState() << std::endl;
+            //logFile << ws.player.isFlying << " " << interact.GetState() << std::endl;
             if (interact.EngageTarget(ws.combatState.enemyPosition, ws.combatState.targetGuidLow, ws.combatState.targetGuidHigh, ws.player, ws.combatState.path,
-                ws.combatState.index, 4.0f, 10.0f, 3.0f, true, true, ws.globalState.flyingPath, 100, MOUSE_RIGHT, true)) {
+                ws.combatState.index, 4.0f, 10.0f, 3.0f, true, true, ws.globalState.flyingPath, 100, MOUSE_RIGHT, true, failedPath)) {
                 targetSelected = true;
                 ws.combatState.inCombat = true;
             }
@@ -839,6 +852,8 @@ class ActionLoot : public GoapAction {
 private:
     InteractionController& interact;
 
+    bool failedPath = false;
+
 public:
     ActionLoot(InteractionController& ic) : interact(ic) {}
 
@@ -882,7 +897,8 @@ public:
             ws.globalState.flyingPath,
             1500,
             MOUSE_RIGHT,
-            false
+            false,
+            failedPath
         );
         ws.globalState.activePath = ws.lootState.path;
         ws.globalState.activeIndex = ws.lootState.index;
@@ -891,6 +907,7 @@ public:
             // Cleanup
             interact.Reset();
             ws.lootState.hasLoot = false;
+            failedPath = false;
             return true;
         }
         return false;
@@ -906,6 +923,7 @@ private:
     float finalDist = 2.8f;
 
     int failCount = 0;
+    bool failedPath = false;
 
 public:
     ActionGather(InteractionController& ic) : interact(ic) {}
@@ -950,10 +968,20 @@ public:
             ws.globalState.flyingPath,
             4500,
             MOUSE_RIGHT,
-            false
+            false,
+            failedPath
         );
         ws.globalState.activePath = ws.gatherState.path;
         ws.globalState.activeIndex = ws.gatherState.index;
+
+        if (failedPath) {
+            logFile << "Failed to create path to node, adding to blacklist" << std::endl;
+            ws.gatherState.blacklistNodesGuidLow.push_back(ws.gatherState.guidLow);
+            ws.gatherState.blacklistNodesGuidHigh.push_back(ws.gatherState.guidHigh);
+            ws.gatherState.blacklistTime.push_back(GetTickCount());
+            complete = true;
+            ws.gatherState.nodeActive = false;
+        }
 
         if (complete) {
             if (failCount >= 3) {
@@ -978,6 +1006,7 @@ public:
             approachDist = 3.5f;
             finalDist = 2.8f;
             failCount = 0;
+            failedPath = false;
 
             // Reset camera or other post-action stuff
             return true;
@@ -1324,7 +1353,8 @@ public:
                     0,
                     ws.waypointReturnState.flyingPath,
                     530,
-                    ws.player.isFlying,
+                    ws.player.isFlying, 
+                    g_GameState->globalState.ignoreUnderWater,
                     false
                 );
 

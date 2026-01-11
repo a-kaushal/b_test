@@ -166,7 +166,7 @@ inline int FindClosestWaypoint(std::vector<Vector3>& path, Vector3& position) {
 
     for (size_t i = 0; i < path.size(); ++i) {
         float dist = position.Dist3D(path[i]);
-        logFile << "Distance : " << dist << " | minDistance: " << minDistance << " | closestIndex: " << closestIndex << std::endl;
+        //logFile << "Distance : " << dist << " | minDistance: " << minDistance << " | closestIndex: " << closestIndex << std::endl;
         if (dist < minDistance) {
             minDistance = dist;
             closestIndex = (int)i;

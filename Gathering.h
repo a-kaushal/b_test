@@ -7,6 +7,8 @@
 #include "Entity.h"
 #include "GoapSystem.h"
 
+#include "Pathfinding2.h"
+
 const int BLACKLIST_TIMEOUT = 300000;
 
 void BlacklistClear(WorldState& ws) {
@@ -64,9 +66,23 @@ void UpdateGatherTarget(WorldState& ws) {
 
         float d = 9999.0f;
         if (auto object = std::dynamic_pointer_cast<ObjectInfo>(entity.info)) {
-            if (object->position.z <= 0.0f) continue;
-            if (object->nodeActive == 0) continue; // NOT WORKING. NEED TO INVESTIGATE
+            //if (object->position.z <= 0.0f) continue;
+            if (object->nodeActive == 0) continue;
+
             if (((object->type == 1) && (HERBALISM_ENABLED == true)) || ((object->type == 2) && (MINING_ENABLED == true))) {
+
+                // --- CLEANER IGNORE WATER LOGIC ---
+                if (g_GameState->globalState.ignoreUnderWater) {
+                    // Get the Area ID directly from our new function
+                    unsigned char area = globalNavMesh.GetAreaID(object->position);
+
+                    // Check against our flags (Water Surface or Sea Floor)
+                    if (area == AREA_WATER || area == AREA_UNDERWATER) {
+                        continue; // Skip this node
+                    }
+                }
+                // ----------------------------------
+               
                 // 2. Distance Check
                 d = object->distance;
                 if (d <= 5.0f) {

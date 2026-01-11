@@ -121,16 +121,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
             // 4. MAP ID (Column 3)
             if (ent.info) {
-                if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(ent.info)) {
-                    std::snprintf(buffer, sizeof(buffer), "%s", enemy->name.c_str());
-                    SetItemText(hListView, i, 3, buffer);
+                // ADD TRY-CATCH FOR STRING READS
+                try {
+                    if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(ent.info)) {
+                        std::snprintf(buffer, sizeof(buffer), "%s", enemy->name.c_str());
+                        SetItemText(hListView, i, 3, buffer);
+                    }
+                    else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(ent.info)) {
+                        std::snprintf(buffer, sizeof(buffer), "%s", object->name.c_str());
+                        SetItemText(hListView, i, 3, buffer);
+                    }
+                    else {
+                        SetItemText(hListView, i, 3, "N/A");
+                    }
                 }
-                else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(ent.info)) {
-                    std::snprintf(buffer, sizeof(buffer), "%s", object->name.c_str());
-                    SetItemText(hListView, i, 3, buffer);
-                }
-                else {
-                    SetItemText(hListView, i, 3, "N/A");
+                catch (...) {
+                    // If a race condition occurs during string read, handle it gracefully
+                    SetItemText(hListView, i, 3, "Error");
                 }
             }
             else {
@@ -300,11 +307,41 @@ void StartGuiThread(HMODULE hDllInst) {
     UnregisterClassA(className, hDllInst);
 }
 
+// CRITICAL FIX: Populate safe cache here (Main Thread)
 void UpdateGuiData(const std::vector<GameEntity>& newData) {
     std::lock_guard<std::mutex> lock(guiMutex);
 
-    // Copy the new data into the global list
-    globalEntities = newData;
+    // We rebuild the list to ensure the cache is fresh
+    globalEntities.clear();
+    globalEntities.reserve(newData.size());
 
-    SortEntitiesByDistance(globalEntities);
+    for (const auto& rawEnt : newData) {
+        GameEntity safeEnt = rawEnt; // Copy basic fields
+
+        // DEFAULT VALUES
+        safeEnt.name_safe = "N/A";
+        safeEnt.reaction_safe = "N/A";
+        safeEnt.dist_safe = 0.0f;
+        safeEnt.nodeActive_safe = 0;
+
+        // RESOLVE POINTERS SAFELY HERE (Main thread owns the memory)
+        if (rawEnt.info) {
+            if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(rawEnt.info)) {
+                safeEnt.name_safe = enemy->name; // Copy string
+                safeEnt.dist_safe = enemy->distance;
+                if (enemy->reaction == 0) safeEnt.reaction_safe = "Enemy";
+                else if (enemy->reaction == 1) safeEnt.reaction_safe = "Neutral";
+                else safeEnt.reaction_safe = "Friendly";
+            }
+            else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(rawEnt.info)) {
+                safeEnt.name_safe = object->name; // Copy string
+                safeEnt.dist_safe = object->distance;
+                safeEnt.nodeActive_safe = object->nodeActive;
+            }
+        }
+        globalEntities.push_back(safeEnt);
+    }
+
+    // Sort logic (optional, keep if you had it)
+    SortEntitiesByDistance(globalEntities); 
 }

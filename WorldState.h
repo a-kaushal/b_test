@@ -15,6 +15,7 @@ struct ActionState {
     bool actionChange = 0;
     bool flyingPath = true;
     bool inMotion = false;
+    bool ignoreUnderWater = true;
     int bagFreeSlots;
 };
 

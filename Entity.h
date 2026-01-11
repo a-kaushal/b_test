@@ -26,6 +26,14 @@ struct GameEntity {
     uint32_t id;
     std::string objType;
     int32_t rotation;
+
+    // --- THREAD-SAFE CACHE ---
+    // The GUI thread will ONLY read these. They are copies.
+    std::string name_safe;
+    std::string reaction_safe;
+    float dist_safe;
+    int nodeActive_safe;
+
     GameEntity() : info(nullptr), guidLow(0), guidHigh(0), entityIndex(0), entityPtr(0),
         lowCounter(0), type(0), instance(0), entry(0), mapId(0), id(0), rotation(0) {
     }

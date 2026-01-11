@@ -684,7 +684,8 @@ void MainThread(HMODULE hModule) {
 
                     //std::vector<Vector3> path = { Vector3{7.07241, 7449.82, 17.3746}, Vector3{15.2708, 7443.25, 113.991} };
                     //pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[0], false);
-                    path = CalculatePath(g_GameState->pathFollowState.presetPath, g_GameState->player.position, g_GameState->pathFollowState.presetIndex, true, 530, g_GameState->player.isFlying, g_GameState->pathFollowState.looping);
+                    path = CalculatePath(g_GameState->pathFollowState.presetPath, g_GameState->player.position, g_GameState->pathFollowState.presetIndex, true, 530, g_GameState->player.isFlying
+                        , g_GameState->globalState.ignoreUnderWater, g_GameState->pathFollowState.looping);
                     //pilot.SteerTowards(agent.state.player.position, agent.state.player.rotation, path[2], true, agent.state.player);
 
                     /*for (const auto& point : path) {
