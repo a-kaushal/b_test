@@ -31,6 +31,9 @@
     <Filter Include="Memory">
       <UniqueIdentifier>{9708c2b8-6fbb-43a3-b38e-13e01b84f730}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Behaviors">
+      <UniqueIdentifier>{4bfddd62-1bd7-481e-a5ca-fcef621bf5ff}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
@@ -190,6 +193,9 @@
     </ClInclude>
     <ClInclude Include="dllmain.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Behaviors.h">
+      <Filter>Behaviors</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

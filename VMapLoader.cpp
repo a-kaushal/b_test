@@ -46,6 +46,7 @@ public:
     void Log(const std::string& msg) {
         if (enabled && g_LogFile.is_open()) {
             g_LogFile << "[VMAP] " << msg << std::endl;
+            g_LogFile.flush(); // Ensure immediate write
         }
     }
 
@@ -57,6 +58,7 @@ public:
             g_LogFile << "End=(" << x2 << ", " << y2 << ", " << z2 << ") | ";
             g_LogFile << "Distance=" << std::sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1) + (z2 - z1) * (z2 - z1)) << " | ";
             g_LogFile << "Result: " << (hit ? "BLOCKED ❌" : "CLEAR ✓") << std::endl;
+            g_LogFile.flush();
         }
     }
 
@@ -68,12 +70,14 @@ public:
             else {
                 g_LogFile << "[TILE] Failed to load: " << filename << std::endl;
             }
+            g_LogFile.flush();
         }
     }
 
     void LogCollision(int instanceIdx, const std::string& bounds) {
         if (enabled && g_LogFile.is_open()) {
             g_LogFile << "  ├─ HIT Instance #" << instanceIdx << " " << bounds << std::endl;
+            g_LogFile.flush();
         }
     }
 
@@ -81,6 +85,7 @@ public:
         if (enabled && g_LogFile.is_open()) {
             g_LogFile << "  ├─ High altitude flight detected (Z=" << midZ
                 << " > threshold=" << threshold << ") - SKIPPING VMap check" << std::endl;
+            g_LogFile.flush();
         }
     }
 };

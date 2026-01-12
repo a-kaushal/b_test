@@ -14,7 +14,7 @@ const int BLACKLIST_TIMEOUT = 300000;
 void BlacklistClear(WorldState& ws) {
     DWORD now = GetTickCount();
     if (ws.gatherState.blacklistTime.size() > 0) {
-        for (int i = ws.gatherState.blacklistTime.size() - 1; i >= 0; i--) {
+        for (size_t i = ws.gatherState.blacklistTime.size() - 1; i >= 0; i--) {
             if (now - ws.gatherState.blacklistTime[i] > BLACKLIST_TIMEOUT) {
                 ws.gatherState.blacklistTime.erase(ws.gatherState.blacklistTime.begin(), ws.gatherState.blacklistTime.begin() + i);
                 ws.gatherState.blacklistNodesGuidHigh.erase(ws.gatherState.blacklistNodesGuidHigh.begin(), ws.gatherState.blacklistNodesGuidHigh.begin() + i);
@@ -26,7 +26,7 @@ void BlacklistClear(WorldState& ws) {
 }
 
 bool BlacklistCheck(WorldState& ws, ULONG_PTR guidLow, ULONG_PTR guidHigh) {
-    for (int i = 0; i < ws.gatherState.blacklistTime.size(); i++) {
+    for (size_t i = 0; i < ws.gatherState.blacklistTime.size(); i++) {
         if ((ws.gatherState.blacklistNodesGuidLow[i] == guidLow) && (ws.gatherState.blacklistNodesGuidHigh[i] == guidHigh)) {
             return true;
         }
@@ -46,7 +46,7 @@ void UpdateGatherTarget(WorldState& ws) {
     BlacklistClear(ws);
 
     // Loop through all entities updated by the Memory Reader
-    for (size_t i = 0; i < ws.entities.size(); ++i) {
+    for (int i = 0; i < ws.entities.size(); ++i) {
         const auto& entity = ws.entities[i];
         int nearbyEnemyCount = 0;
         //int nearbyStrongEnemyCount = 0;

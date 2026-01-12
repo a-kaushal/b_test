@@ -14,6 +14,7 @@
 #include "CombatController.h"
 #include "WorldState.h"
 #include "Logger.h"
+#include "dllmain.h"
 
 // --- ABSTRACT ACTION ---
 class GoapAction {
@@ -77,6 +78,8 @@ private:
 
     bool groundOverride = false;
 
+    int sx, sy;
+
     // Scanning Variables
     int offsetIndex = 0;
     const std::vector<POINT> searchOffsets = {
@@ -122,9 +125,10 @@ public:
     // Main Entry Point
     // returns TRUE if interaction sequence is complete
     bool EngageTarget(Vector3 targetPos, ULONG_PTR targetGuidLow, ULONG_PTR targetGuidHigh, PlayerInfo & player, std::vector<PathNode>&currentPath, int& pathIndex, float approachDist, float interactDist, float finalDist,
-        bool checkTarget, bool targetGuid, bool fly, int postClickWaitMs, MouseButton click, bool movingTarget, bool& failedPath) {
+        bool checkTarget, bool targetGuid, bool fly, int postClickWaitMs, MouseButton click, bool movingTarget, bool& failedPath, int targetId) {
         bool fly_entry_state = fly;
         if ((currentState != STATE_CREATE_PATH) && (movingTarget == true) && (pathCalcTimer != 0) && (GetTickCount() - pathCalcTimer > 200)) {
+            
             currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530, player.isFlying, g_GameState->globalState.ignoreUnderWater);
             pathIndex = 0;
             pathCalcTimer = GetTickCount();
@@ -149,9 +153,15 @@ public:
             // Assuming CalculatePath is available globally or via included header
             currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530, player.isFlying, g_GameState->globalState.ignoreUnderWater);
             g_LogFile << "Target Pos x: " << targetPos.x << " | Target Pos y: " << targetPos.y << " | Target Pos z: " << targetPos.z << std::endl;
-            if (currentPath.empty() == true) {
+            if (currentPath.empty()) {
                 g_LogFile << "Path is empty" << std::endl;
                 failedPath = true;
+
+                // --- CRITICAL FIX START ---
+                // Do NOT switch to STATE_APPROACH. Reset and bail out.
+                currentState = STATE_IDLE;
+                return false;
+                // --- CRITICAL FIX END ---
             }
             /*for (int i = 0; i < currentPath.size(); i++) {
                 g_LogFile << "Path: " << i << " | X coord: " << currentPath[i].pos.x << " | Y coord: " << currentPath[i].pos.y << " | Z coord: " << currentPath[i].pos.z << std::endl;
@@ -192,11 +202,11 @@ public:
 
             // Move Mouse Logic
             {
-                int sx, sy;
-                POINT p = searchOffsets[offsetIndex];
+                POINT p = { 0,0 };
                 ClientToScreen(hGameWindow, &p);
 
                 if (camera.WorldToScreen(targetPos, sx, sy)) {
+                    g_LogFile << sx << " " << p.x << " " << sy << " " << p.y << std::endl;
                     mouse.MoveAbsolute(sx + p.x, sy + p.y);
                 }
             }
@@ -215,7 +225,12 @@ public:
                 analyzer.ReadPointer(procId, baseAddress + MOUSE_OVER_GUID_OFFSET, currentLow);
                 analyzer.ReadPointer(procId, baseAddress + MOUSE_OVER_GUID_OFFSET + 0x8, currentHigh);
 
-                if (currentLow == targetGuidLow && currentHigh == targetGuidHigh) {
+                uint32_t low_counter, type_field, instance, id, map_id, server_id;
+                GUIDBreakdown(low_counter, type_field, instance, id, map_id, server_id, currentLow, currentHigh);                
+                if ((targetGuidLow == 0) && (targetGuidHigh == 0) && (targetId != -1) && (id == targetId)) {
+                    currentState = STATE_CLICK;
+                }                
+                else if ((targetGuidLow != 0) && (targetGuidHigh != 0) && (currentLow == targetGuidLow && currentHigh == targetGuidHigh)) {
                     currentState = STATE_CLICK;
                 }
                 else {
@@ -230,7 +245,10 @@ public:
                 mouse.ReleaseButton(MOUSE_RIGHT);
                 pilot.ChangeSteering(false);
             }
-            mouse.Click(click); // Or Left, depending on need. Right for interact/attack.
+            g_LogFile << "Mouse Click " << click << std::endl;
+            
+            mouse.Click(click);
+
             stateTimer = GetTickCount();
             currentState = STATE_POST_INTERACT_WAIT;
             return false;
@@ -259,7 +277,9 @@ public:
 public:
     // Helper: Logic to follow path and dismount
     bool MoveToTargetLogic(Vector3 targetPos, std::vector<PathNode>& path, int& index, PlayerInfo& player, DWORD& timer, float approachDist, float interactDist, float finalDist, bool fly) {
-        
+        if (path.empty()) {
+            return true; // Treat as "Arrived" to prevent crash
+        }
         if (index >= path.size()) {
             pilot.Stop();
             // Dismount Logic
@@ -380,7 +400,7 @@ public:
     }
 };
 
-class ActionRepair : public GoapAction {
+class ActionInteract : public GoapAction {
 private:
     InteractionController& interact;
     SimpleKeyboardClient& keyboard;
@@ -389,55 +409,59 @@ private:
     bool failedPath = false;
 
 public:
-    ActionRepair(InteractionController& ic, SimpleKeyboardClient& k)
+    ActionInteract(InteractionController& ic, SimpleKeyboardClient& k)
         : interact(ic), keyboard(k), input(k) {
     }
 
     // Priority 150: Higher than Gathering(100)/Looting(60), Lower than Combat(200)
     // If equipment is broken, we should prioritize this over farming, but defend ourselves if attacked.
-    int GetPriority() override { return 150; }
+    int GetPriority() override { return 50; }
 
     std::string GetName() override { return "Repair Equipment"; }
 
-    ActionState* GetState(WorldState& ws) override { return &ws.repairState; }
+    ActionState* GetState(WorldState& ws) override { return &ws.interactState; }
 
     bool CanExecute(const WorldState& ws) override {
         // Execute if enabled AND we actually need repairs
-        return ws.repairState.enabled && ws.repairState.repairNeeded;
+        return ws.interactState.enabled && ws.interactState.interactActive;
     }
 
     void ResetState() override {
         interact.Reset();
+        g_GameState->interactState.path = {};
+        g_GameState->interactState.index = 0;
+        g_GameState->interactState.targetGuidHigh = 0;
+        g_GameState->interactState.targetGuidLow = 0;
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
         
-        g_LogFile << "[ACTION] Repairing Equipment..." << std::endl;
         // 1. Move to NPC and Interact
         // approachDist: 3.0f, interactDist: 5.0f
         // postClickWaitMs: 2500 (Give the vendor window time to open)
         bool complete = interact.EngageTarget(
-            ws.repairState.npcLocation,
-            ws.repairState.npcGuidLow,
-            ws.repairState.npcGuidHigh,
+            ws.interactState.location,
+            ws.interactState.targetGuidLow,
+            ws.interactState.targetGuidHigh,
             ws.player,
-            ws.repairState.path,
-            ws.repairState.index,
-            6.0f,  // Approach Distance
-            4.0f,  // Interact Distance
-            4.0f,  // Final Distance
+            ws.interactState.path,
+            ws.interactState.index,
+            5.0f,  // Approach Distance
+            3.0f,  // Interact Distance
+            3.0f,  // Final Distance
             true,  // Check Target
             true,  // Check GUID
             true, // Fly if applicable
             2500,  // Wait 2.5s for window to open
             MOUSE_RIGHT,
             false, // NPC is likely stationary
-            failedPath
+            failedPath,
+            ws.interactState.interactId
         );
 
         // Visualization
-        ws.globalState.activePath = ws.repairState.path;
-        ws.globalState.activeIndex = ws.repairState.index;
+        ws.globalState.activePath = ws.interactState.path;
+        ws.globalState.activeIndex = ws.interactState.index;
 
         // 2. Perform Repair Logic
         if (complete) {
@@ -449,7 +473,7 @@ public:
             Sleep(500);
 
             // Mark repair as done
-            ws.repairState.repairNeeded = false;
+            ws.interactState.interactActive = false;
 
             // Cleanup
             interact.Reset();
@@ -728,6 +752,13 @@ public:
         combatController.ResetCombatState();
         interact.Reset();
         targetSelected = false;
+        g_GameState->combatState.path = {};
+        g_GameState->combatState.index = 0;
+        g_GameState->combatState.hasTarget = false;
+        g_GameState->combatState.underAttack = false;
+        g_GameState->combatState.inCombat = false;
+        failedPath = false;
+        clickCooldown = 0;
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
@@ -765,14 +796,15 @@ public:
             // Range 4.0f (Melee), No Flying, 100ms wait after click
             //g_LogFile << ws.player.isFlying << " " << interact.GetState() << std::endl;
             if (interact.EngageTarget(ws.combatState.enemyPosition, ws.combatState.targetGuidLow, ws.combatState.targetGuidHigh, ws.player, ws.combatState.path,
-                ws.combatState.index, 4.0f, 10.0f, 3.0f, true, true, ws.globalState.flyingPath, 100, MOUSE_RIGHT, true, failedPath)) {
+                ws.combatState.index, 4.0f, 10.0f, 3.0f, true, true, ws.globalState.flyingPath, 100, MOUSE_RIGHT, true, failedPath, -1)) {
                 targetSelected = true;
                 ws.combatState.inCombat = true;
             }
         }
         else if (GetTickCount() - clickCooldown > 5000) {
+            interact.Reset();
             if (interact.EngageTarget(ws.combatState.enemyPosition, ws.combatState.targetGuidLow, ws.combatState.targetGuidHigh, ws.player, ws.combatState.path,
-                ws.combatState.index, 4.0f, 10.0f, 3.0f, true, true, ws.globalState.flyingPath, 100, MOUSE_RIGHT, true, failedPath)) {
+                ws.combatState.index, 4.0f, 10.0f, 3.0f, true, true, ws.globalState.flyingPath, 100, MOUSE_RIGHT, true, failedPath, -1)) {
                 clickCooldown = GetTickCount();
             }
         }
@@ -881,6 +913,8 @@ public:
     // Reset state if we are switching to this action fresh
     void ResetState() override {
         interact.Reset();
+        g_GameState->lootState.path = {};
+        g_GameState->lootState.index = 0;
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
@@ -908,7 +942,8 @@ public:
             1500,
             MOUSE_RIGHT,
             false,
-            failedPath
+            failedPath,
+            -1
         );
         ws.globalState.activePath = ws.lootState.path;
         ws.globalState.activeIndex = ws.lootState.index;
@@ -952,6 +987,8 @@ public:
 
     void ResetState() override {
         interact.Reset();
+        g_GameState->gatherState.path = {};
+        g_GameState->gatherState.index = 0;
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
@@ -979,7 +1016,8 @@ public:
             4500,
             MOUSE_RIGHT,
             false,
-            failedPath
+            failedPath,
+            -1
         );
         ws.globalState.activePath = ws.gatherState.path;
         ws.globalState.activeIndex = ws.gatherState.index;
@@ -1001,7 +1039,7 @@ public:
                 ws.gatherState.blacklistTime.push_back(GetTickCount());
             }
             else if (ws.gatherState.nodeActive) {
-                finalDist *= 0.7;
+                finalDist *= 0.7f;
                 g_LogFile << "Gathering Failed Node Still Active, retrying at distance of " << finalDist << std::endl;
                 failCount++;
                 interact.Reset();
@@ -1073,6 +1111,15 @@ public:
     }
 
     void ResetState() override {
+        g_GameState->waypointReturnState.path = {};
+        g_GameState->waypointReturnState.index = 0;
+        g_GameState->waypointReturnState.pathfindingAttempts = 0;
+        g_GameState->waypointReturnState.waitingForUnstuck = false;
+
+        g_GameState->waypointReturnState.savedPath = {};
+        g_GameState->waypointReturnState.hasTarget = false;
+        g_GameState->waypointReturnState.hasPath = false;
+
         currentPhase = PHASE_CHECK_DIRECT;
         ascentTargetSet = false;
         checkedDirect = false;
@@ -1429,8 +1476,8 @@ public:
         case PHASE_COMPLETE:
         {
             pilot.Stop();
-            ws.waypointReturnState.path = { PathNode(-1000.0f, -1000.0f, -1000.0f, 0) };
-            ws.waypointReturnState.savedPath = { PathNode(-1000.0f, -1000.0f, -1000.0f, 0) };
+            ws.waypointReturnState.path = {};
+            ws.waypointReturnState.savedPath = {};
             ws.waypointReturnState.hasTarget = false;
             ws.waypointReturnState.hasPath = false;
             ws.waypointReturnState.pathfindingAttempts = 0;
@@ -1468,19 +1515,18 @@ public:
         return ws.pathFollowState.enabled;
     }
 
-    int GetPriority() override { return 50; } // STANDARD PRIORITY
+    int GetPriority() override { return 20; } // STANDARD PRIORITY
     std::string GetName() override { return "Follow Path"; }
 
     ActionState* GetState(WorldState& ws) override {
         return &ws.pathFollowState;
     }
 
-    bool Execute(WorldState& ws, MovementController& pilot) override {
+    void ResetState() override {
         
+    }
 
-        if (ws.globalState.actionChange == true) {
-            ws.globalState.actionChange = false;
-        }
+    bool Execute(WorldState& ws, MovementController& pilot) override {
 
         ws.globalState.activePath = ws.pathFollowState.path;
         ws.globalState.activeIndex = ws.pathFollowState.index;
@@ -1545,7 +1591,7 @@ public:
         availableActions.push_back(new ActionGather(interact));
         availableActions.push_back(new ActionFollowPath());
         availableActions.push_back(new ActionUnstuck(keyboard, mc));
-        availableActions.push_back(new ActionRepair(interact, keyboard));
+        availableActions.push_back(new ActionInteract(interact, keyboard));
     }
     
     ~GoapAgent() {
@@ -1576,24 +1622,46 @@ public:
             }
         }
 
-        if (bestAction != currentAction) {
-            if (currentAction) {
-                // FIXED: Save from globalState, not from action's state
-                // Only save if we're interrupting PathFollowState
-                if (currentAction->GetName() == "Follow Path") {
-                    state.waypointReturnState.savedPath = state.pathFollowState.path;  // Use .path not .activePath
-                    state.waypointReturnState.savedIndex = state.pathFollowState.index;  // Use .index not .activeIndex
-
-                    g_LogFile << "[GOAP] Saving path position: waypoint " << state.pathFollowState.index
-                        << " of " << state.pathFollowState.path.size() << std::endl;
-
-                    // Enable return after interruption
-                    PathNode temp = PathNode(-1000.0f, -1000.0f, -1000.0f, 0);
-                    if (state.pathFollowState.path.size() > 0 && state.pathFollowState.path[0] != temp) {
-                        state.waypointReturnState.hasTarget = true;
+        if (currentAction == nullptr) {
+            if (bestAction->GetName() == "Follow Path") {
+                std::vector<Vector3> empty = {};
+                if (state.pathFollowState.path.size() > 0) {
+                    state.waypointReturnState.savedPath = state.pathFollowState.path;
+                    //state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.pathFollowState.path, state.player.position);
+                    state.waypointReturnState.savedIndex = state.pathFollowState.index;
+                }
+            }
+            else if (bestAction->GetName() == "Repair Equipment") {
+                std::vector<Vector3> empty = {};
+                if (state.interactState.path.size() > 0) {
+                    state.waypointReturnState.savedPath = state.interactState.path;
+                    state.waypointReturnState.savedIndex = state.interactState.index;
+                }
+            }
+            /*if (bestAction->GetName() == "Gather Node") {
+                std::vector<Vector3> empty = {};
+                state.waypointReturnState.savedPath = state.gatherState.path;
+                state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.gatherState.path, state.player.position);
+            }*/
+            if ((state.waypointReturnState.savedPath.size() > 0) && 
+                (state.player.position.Dist3D(state.waypointReturnState.savedPath[state.waypointReturnState.savedIndex].pos) > 10.0f)) {
+                state.waypointReturnState.hasTarget = true;
+                for (auto action : availableActions) {
+                    if (action->CanExecute(state)) {
+                        int p = action->GetPriority();
+                        if (p > highestPriority) {
+                            highestPriority = p;
+                            bestAction = action;
+                        }
                     }
                 }
+            }
+        }
 
+        if (bestAction != currentAction) {
+            //if (currentAction->GetName() == "Return to previous waypoint") currentAction->ResetState();
+            if (currentAction) {
+                currentAction->ResetState();
                 g_LogFile << "[GOAP] Stopping action: " << currentAction->GetName() << std::endl;
                 pilot.Stop();
             }

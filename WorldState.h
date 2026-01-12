@@ -66,8 +66,8 @@ struct PathFollowing : public ActionState {
 struct WaypointReturn : public ActionState {
     // Follow a set path
     bool enabled = true;
-    std::vector<PathNode> path = { PathNode(-1000.0f,-1000.0f, -1000.0f, 0) };
-    std::vector<PathNode> savedPath = { PathNode(-1000.0f,-1000.0f, -1000.0f, 0) };
+    std::vector<PathNode> path = {};
+    std::vector<PathNode> savedPath = {};
     int index;
     int savedIndex;
     bool hasTarget = false;
@@ -103,14 +103,16 @@ struct StuckState : public ActionState {
     DWORD lastUnstuckTime = 0;      // Tracks when we last performed an unstuck action
 };
 
-struct RepairState : public ActionState {
+struct InteractState : public ActionState {
     bool enabled = true;
     std::vector<PathNode> path;
     int index;
-    Vector3 npcLocation;
-    bool repairNeeded = false;
-    ULONG_PTR npcGuidLow;
-    ULONG_PTR npcGuidHigh;
+    Vector3 location;
+    int interactId;
+    bool interactActive = false;
+    int interactTimes = 0;
+    ULONG_PTR targetGuidLow = 0;
+    ULONG_PTR targetGuidHigh = 0;
 };
 
 // --- WORLD STATE (The Knowledge) ---
@@ -122,7 +124,7 @@ struct WorldState {
     WaypointReturn waypointReturnState;
     Combat combatState;
     StuckState stuckState;
-    RepairState repairState;
+    InteractState interactState;
 
     std::vector<GameEntity> entities;
     PlayerInfo player;

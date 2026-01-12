@@ -16,7 +16,7 @@ bool UnderAttackCheck(WorldState& ws) {
             // Use std::dynamic_pointer_cast for shared_ptr
             if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
                 if ((entity.guidLow == ws.player.underAttackGuidLow) && (entity.guidHigh == ws.player.underAttackGuidHigh)) {
-                    if (npc->health > 0) {
+                    if ((npc->health > 0) && (npc->reaction == 0)) {
                         ws.combatState.hasTarget = true;
                         ws.combatState.underAttack = true;
                         ws.combatState.enemyPosition = npc->position;
@@ -42,7 +42,7 @@ void TargetEnemy(WorldState& ws, ULONG_PTR targetGuidLow = 0, ULONG_PTR targetGu
     if (targetId != 0) {
         for (auto& entity : ws.entities) {
             if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
-				int distance = ws.player.position.Dist2D(npc->position);
+				int distance = std::round(ws.player.position.Dist2D(npc->position));
                 if ((npc->id == targetId) && (distance < minDistance)) {
                     if (npc->health > 0) {
                         ws.combatState.hasTarget = true;

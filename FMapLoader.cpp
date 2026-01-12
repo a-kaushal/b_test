@@ -62,6 +62,7 @@ public:
     void Log(const std::string& msg) {
         if (enabled && g_LogFile.is_open()) {
             g_LogFile << "[FMAP] " << msg << std::endl;
+            g_LogFile.flush();
         }
     }
 
@@ -75,6 +76,7 @@ public:
             g_LogFile << "(" << x1 << "," << y1 << "," << z1 << ")->(" << x2 << "," << y2 << "," << z2 << ") | ";
             float dist = std::sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1) + (z2 - z1) * (z2 - z1));
             g_LogFile << "Dist=" << dist << " | " << (hit ? "BLOCKED" : "CLEAR") << std::endl;
+            g_LogFile.flush();
         }
     }
 
@@ -83,6 +85,7 @@ public:
         if (enabled && g_LogFile.is_open()) {
             g_LogFile << "[FLOOR#" << totalFloorQueries << "] (" << std::fixed << std::setprecision(2)
                 << x << "," << y << "," << z << ") -> " << result << std::endl;
+            g_LogFile.flush();
         }
     }
 
@@ -95,6 +98,7 @@ public:
             else {
                 g_LogFile << "[TILE] ? Failed: " << filename << std::endl;
             }
+            g_LogFile.flush();
         }
     }
 
