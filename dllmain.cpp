@@ -248,7 +248,7 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
 	}    
 
     for (int i = 0; i < hashArrayMaximum; ++i) {
-        ULONG_PTR EntryGuidLow, EntryGuidHigh, EntityIndex;
+        ULONG_PTR EntryGuidLow = 0, EntryGuidHigh = 0, EntityIndex = 0;
 
         analyzer.ReadPointer(procId, hashArray + (i * 24), EntryGuidLow);
         analyzer.ReadPointer(procId, hashArray + (i * 24) + 0x8, EntryGuidHigh);
@@ -259,13 +259,13 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
         // Valid check
         if (!(EntryGuidHigh == 0 && EntryGuidLow == 0) && !(EntryGuidLow == 1 && EntryGuidHigh == 0x400000000000000)) {
 
-            DWORD_PTR entityBuilderPtr, entity_ptr;
-            int32_t objType;
-            ULONG_PTR guidLow, guidHigh;
+            DWORD_PTR entityBuilderPtr = 0, entity_ptr = 0;
+            int32_t objType = 0;
+            ULONG_PTR guidLow = 0, guidHigh = 0;
 
-            analyzer.ReadPointer(procId, entityArray + ((int)EntInd * ENTITY_BUILDER_ARRAY_ITEM), entityBuilderPtr);
-            analyzer.ReadPointer(procId, entityBuilderPtr + ENTITY_ENTRY_OFFSET, entity_ptr);
-            analyzer.ReadInt32(procId, entity_ptr + ENTITY_OBJECT_TYPE_OFFSET, objType);
+            if (!analyzer.ReadPointer(procId, entityArray + ((int)EntInd * ENTITY_BUILDER_ARRAY_ITEM), entityBuilderPtr)) continue;
+            if (!analyzer.ReadPointer(procId, entityBuilderPtr + ENTITY_ENTRY_OFFSET, entity_ptr)) continue;
+            if (!analyzer.ReadInt32(procId, entity_ptr + ENTITY_OBJECT_TYPE_OFFSET, objType)) continue;
             analyzer.ReadPointer(procId, entity_ptr + ENTITY_GUID_LOW_OFFSET, guidLow);
             analyzer.ReadPointer(procId, entity_ptr + ENTITY_GUID_HIGH_OFFSET, guidHigh);
             uint32_t low_counter, type_field, instance, id, map_id, server_id;
@@ -322,25 +322,28 @@ std::vector<GameEntity> ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, 
                     analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->health);
                     analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_MAX_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->maxHealth);
                     std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id = id;
+
                     creature_db.getCreatureReaction(std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id, true, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->reaction);
-                    string rawData = creature_db.getRawLine(id);
+                    if (id > 0 && id < 200000) {
+                        string rawData = creature_db.getRawLine(id);
 
-                    if (!rawData.empty()) {
-                        auto enemyInfo = std::dynamic_pointer_cast<EnemyInfo>(newEntity.info);
-                        enemyInfo->name = creature_db.getColumn(rawData, ENEMY_NAME_COLUMN_INDEX);
+                        if (!rawData.empty()) {
+                            auto enemyInfo = std::dynamic_pointer_cast<EnemyInfo>(newEntity.info);
+                            enemyInfo->name = creature_db.getColumn(rawData, ENEMY_NAME_COLUMN_INDEX);
 
-                        // SAFE PARSING REPLACEMENT
-                        try {
-                            std::string flagStr = creature_db.getColumn(rawData, NPC_FLAG_COLUMN_INDEX);
-                            if (!flagStr.empty()) {
-                                enemyInfo->npcFlag = std::stoi(flagStr);
+                            // SAFE PARSING REPLACEMENT
+                            try {
+                                std::string flagStr = creature_db.getColumn(rawData, NPC_FLAG_COLUMN_INDEX);
+                                if (!flagStr.empty()) {
+                                    enemyInfo->npcFlag = std::stoi(flagStr);
+                                }
+                                else {
+                                    enemyInfo->npcFlag = 0; // Default value
+                                }
                             }
-                            else {
-                                enemyInfo->npcFlag = 0; // Default value
+                            catch (...) {
+                                enemyInfo->npcFlag = 0; // Fallback on error
                             }
-                        }
-                        catch (...) {
-                            enemyInfo->npcFlag = 0; // Fallback on error
                         }
                     }
                 }
@@ -567,8 +570,8 @@ void MainThread(HMODULE hModule) {
     log("DLL Loaded! Console Attached.");
 
     // Launch GUI in background thread
-    std::thread guiThread(StartGuiThread, hModule);
-	log("GUI Thread Started.");
+    //std::thread guiThread(StartGuiThread, hModule);
+	//log("GUI Thread Started.");
 
     try {
         MemoryAnalyzer analyzer;
@@ -876,7 +879,7 @@ void MainThread(HMODULE hModule) {
                         //}
 
                         if (UnderAttackCheck(g_GameStateInstance) == true) {
-                            g_LogFile << "Under Attack Detected!" << std::endl;
+                            //g_LogFile << "Under Attack Detected!" << std::endl;
 						}
 						//g_LogFile << "Repair NPC Position: " << agent.state.repairState.npcLocation.x << ", " << agent.state.repairState.npcLocation.y << ", " << agent.state.repairState.npcLocation.z << " | Repair ID: " << repairId << " | " << mapId << std::endl;
 
@@ -888,7 +891,7 @@ void MainThread(HMODULE hModule) {
                         g_GameState->entities = ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, g_GameState->player, agent);
 
                         // UpdateGuiData usually reads entities too, so keep it inside the lock
-                        UpdateGuiData(g_GameState->entities);
+                        //UpdateGuiData(g_GameState->entities);
 
                         // 3. Logic (Rotation/Console Print)
                         //g_LogFile << nextKey << std::endl;
@@ -898,14 +901,14 @@ void MainThread(HMODULE hModule) {
 						}*/
 
                         Sleep(10); // Prevent high CPU usage
-                        //agent.Tick();
+                        agent.Tick();
                     }
                     pilot.Stop();
 
                     if (g_LogFile.is_open()) {
                         g_LogFile.close();
                     }
-                    FreeLibraryAndExitThread(hModule, 0);
+                    //FreeLibraryAndExitThread(hModule, 0);
 
                     g_IsRunning = false;
                     RaiseException(0xDEADBEEF, 0, 0, nullptr); // Forcibly exit all threads (including GUI)
@@ -1095,11 +1098,6 @@ void MainThread(HMODULE hModule) {
     }
 
     log("Unloading...");
-    
-    // 1. Wait for GUI thread to close naturally
-    if (guiThread.joinable()) {
-        guiThread.join();
-    }
 
     // 2. Clean up Console Streams
     if (fDummy) fclose(fDummy);

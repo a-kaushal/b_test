@@ -88,7 +88,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         // Check if we should stop (Safety check)
         if (!g_IsRunning) break;
 
-        std::lock_guard<std::mutex> lock(g_EntityMutex);
+        std::lock_guard<std::mutex> lock(guiMutex);
 
         // Get how many items are currently in the list
         int existingCount = (int)SendMessageA(hListView, (0x1000 + 4), 0, 0); // LVM_GETITEMCOUNT

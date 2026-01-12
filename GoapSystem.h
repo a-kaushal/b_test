@@ -703,6 +703,7 @@ private:
     const float MELEE_RANGE = 3.5f; // Adjust based on class (e.g., 30.0f for casters)
 
     bool failedPath = false;
+    DWORD clickCooldown = 0;
 
 public:
     ActionCombat(InteractionController& ic, CombatController& cc)
@@ -730,9 +731,10 @@ public:
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
-        
-
         bool lowHp = false;
+        if (clickCooldown == 0) {
+            clickCooldown = GetTickCount();
+        }
 
         if ((ws.player.position.Dist3D(ws.combatState.enemyPosition) > 4.0f) && (ws.combatState.inCombat)){
             ws.combatState.inCombat = false;
@@ -749,6 +751,7 @@ public:
                     ws.combatState.underAttack = false;
                     ws.combatState.inCombat = false;
                     failedPath = false;
+                    clickCooldown = 0;
                     return true;
                 }
                 if ((static_cast<float>(npc->health) / npc->maxHealth) < 0.2f) {
@@ -767,6 +770,13 @@ public:
                 ws.combatState.inCombat = true;
             }
         }
+        else if (GetTickCount() - clickCooldown > 5000) {
+            if (interact.EngageTarget(ws.combatState.enemyPosition, ws.combatState.targetGuidLow, ws.combatState.targetGuidHigh, ws.player, ws.combatState.path,
+                ws.combatState.index, 4.0f, 10.0f, 3.0f, true, true, ws.globalState.flyingPath, 100, MOUSE_RIGHT, true, failedPath)) {
+                clickCooldown = GetTickCount();
+            }
+        }
+
         ws.globalState.activePath = ws.combatState.path;
         ws.globalState.activeIndex = ws.combatState.index;
 
