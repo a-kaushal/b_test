@@ -54,7 +54,7 @@ const float FMAP_VERTICAL_TOLERANCE = 2.0f;  // Tolerance for floor snapping
 const size_t MAX_CACHE_SIZE = 100;
 const size_t CACHE_CLEANUP_THRESHOLD = 120;
 
-const bool DEBUG_PATHFINDING = false;  // Enable for flight debugging
+const bool DEBUG_PATHFINDING = true;  // Enable for flight debugging
 
 enum FlightSegmentResult {
     SEGMENT_VALID = 0,
@@ -245,12 +245,13 @@ public:
         dtFreeNavMeshQuery(query); query = nullptr;
         currentMapId = -1;
         globalPathCache.Clear();
+
+        loadedTiles.clear();
     }
 
     // Use FMap for precise floor height
     float GetLocalGroundHeight(const Vector3& pos) {
         if (currentMapId < 0) return -99999.0f;
-
         // Try FMap first for precise voxel-based height
         float fmapHeight = GetFMapFloorHeight(currentMapId, pos.x, pos.y, pos.z);
         if (fmapHeight > -90000.0f) {
@@ -546,6 +547,15 @@ public:
     }
 
     bool LoadMap(const std::string& directory, int mapId, const std::vector<Vector3>* path = nullptr, bool sparseLoad = true) {
+        if (loadedTiles.size() > 50) {
+            if (DEBUG_PATHFINDING) {
+                g_LogFile << "[Memory] Pruning NavMesh tiles (Limit reached)" << std::endl;
+            }
+            Clear();
+            // Force re-initialization logic below to run
+            currentMapId = -1;
+        }
+
         bool isNewMap = (currentMapId != mapId);
 
         // If map ID changed, we must clear everything
@@ -888,7 +898,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
     float groundZ = globalNavMesh.GetLocalGroundHeight(start);
 
     if (groundZ > -90000.0f && start.z < groundZ + MIN_CLEARANCE) {
-        actualStart.z = groundZ + MIN_CLEARANCE + 1.0f;
+        actualStart.z = groundZ + MIN_CLEARANCE;
         if (DEBUG_PATHFINDING) {
             g_LogFile << "Adjusted start height to: " << actualStart.z << " (ground: " << groundZ << ")\n";
         }
@@ -896,7 +906,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
 
     groundZ = globalNavMesh.GetLocalGroundHeight(end);
     if (groundZ > -90000.0f && end.z < groundZ + MIN_CLEARANCE) {
-        actualEnd.z = groundZ + MIN_CLEARANCE + 1.0f;
+        actualEnd.z = groundZ + MIN_CLEARANCE;
         if (DEBUG_PATHFINDING) {
             g_LogFile << "Adjusted end height to: " << actualEnd.z << " (ground: " << groundZ << ")\n";
         }
@@ -1000,7 +1010,27 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
 
     // Attempt 1-3: Strict Collision
     // Attempt 4-5: Relaxed Collision
+    // --- OPTIMIZATION: Allocate ONCE to prevent fragmentation ---
+
+        // --- A* SETUP ---
+    std::vector<FlightNode3D> nodes;
+    nodes.reserve(410000); // Pre-allocate the maximum size needed
+
+    std::unordered_map<GridKey, int, GridKeyHash> gridToIndex;
+    gridToIndex.reserve(410000);
+
+    std::unordered_set<int> closedSet;
+    closedSet.reserve(100000);
+    // -----------------------------------------------------------
+
     for (int attempt = 1; attempt <= 5; ++attempt) {
+        // RESET containers instead of re-allocating
+        nodes.clear();
+        gridToIndex.clear();
+        closedSet.clear();
+
+        // Pass the existing vector to the queue wrapper
+        IndexPriorityQueue openSet(&nodes);
         if (DEBUG_PATHFINDING) {
             g_LogFile << ">>> A* Attempt " << attempt << " / 5 <<<\n";
         }
@@ -1013,7 +1043,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
         float currentGridSize = (attempt % 2 == 0) ? 15.0f : 25.0f;
 
         // Increase node limit progressively
-        int maxNodes = 200000 + ((attempt - 1) * 100000);
+        int maxNodes = 200000 + ((attempt - 1) * 50000);
 
         // Increase search radius on last attempts
         Vector3 midpoint = (actualStart + actualEnd) * 0.5f;
@@ -1027,13 +1057,6 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
             g_LogFile << "   Grid: " << currentGridSize << " | Strict: " << strictCollision
                 << " | MaxNodes: " << maxNodes << " | Radius: " << currentSearchRadius << "\n";
         }
-
-        // --- A* SETUP ---
-        std::vector<FlightNode3D> nodes;
-        nodes.reserve(maxNodes);
-        std::unordered_map<GridKey, int, GridKeyHash> gridToIndex;
-        std::unordered_set<int> closedSet;
-        IndexPriorityQueue openSet(&nodes);
 
         // Helper to track failures for logging (don't log every single one, just summary/examples)
         int invalidPoints = 0;
@@ -1590,8 +1613,6 @@ inline void CleanPathGroundZ(std::vector<PathNode>& path, int mapId) {
 // MODIFIED: CalculatePath accepts ignoreWater and passes it to FindPath/Cache
 inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath, const Vector3& startPos,
     int currentIndex, bool flying, int mapId, bool isFlying, bool ignoreWater, bool path_loop = false) {
-    
-
     std::string mmapFolder = "C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/mmaps/";
 
     // --- ADD THIS CHECK ---
@@ -1604,20 +1625,17 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
 
     std::vector<PathNode> stitchedPath;
     std::vector<Vector3> modifiedInput;
-
+    g_LogFile << "A" << std::endl;
     if (inputPath.empty() || currentIndex < 0 || currentIndex >= inputPath.size()) return {};
 
     if (!path_loop) {
         modifiedInput.push_back(startPos);
         for (int i = currentIndex; i < inputPath.size(); ++i) modifiedInput.push_back(inputPath[i]);
-        g_LogFile << inputPath[0].x << std::endl;
     }
     else {
         for (int i = currentIndex; i < inputPath.size(); ++i) modifiedInput.push_back(inputPath[i]);
         for (int i = 0; i < currentIndex; ++i) modifiedInput.push_back(inputPath[i]);
     }
-
-    for (int i = currentIndex; i < modifiedInput.size(); ++i) g_LogFile << modifiedInput[i].x << " " << modifiedInput[i].y << std::endl;
     
     // Sparse loading of only needed tiles
     if (!globalNavMesh.LoadMap(mmapFolder, mapId, &modifiedInput, true)) {
@@ -1700,13 +1718,17 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
                         
                         g_LogFile << "[PATHFINDING] ✗ Ground path failed, falling back to flight" << std::endl;
                     }
+                    g_LogFile << "B" << std::endl;
                     segment = Calculate3DFlightPath(start, end, mapId, isFlying);
+                    g_LogFile << "B" << std::endl;
                 }
             }
             else {
                 // Normal logic: use requested path type
                 if (flying) {
+                    g_LogFile << "A" << std::endl;
                     segment = Calculate3DFlightPath(start, end, mapId, isFlying);
+                    g_LogFile << "A" << std::endl;
                     if (segment.empty()) {
                         // segment = FindPath(start, end, ignoreWater);
                         return segment;
@@ -1744,6 +1766,7 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
 
     // Don't subdivide hybrid paths - they're already properly segmented
     if (flying) {
+        g_LogFile << "C" << std::endl;
         // Check if this is a hybrid path (has both high and low altitude sections)
         bool isHybrid = false;
         if (stitchedPath.size() > 5) {
@@ -1757,10 +1780,12 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
             isHybrid = (maxZ - minZ) > 30.0f && stitchedPath.size() > 20;
         }
 
+        g_LogFile << "C" << std::endl;
         if (!isHybrid) {
             stitchedPath = SubdivideFlightPath(stitchedPath, mapId);
         }
 
+        g_LogFile << "C" << std::endl;
         // NEW: Only clean GROUND nodes in flight paths
         for (auto& node : stitchedPath) {
             if (node.type == PATH_GROUND) {
@@ -1771,11 +1796,14 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
             }
         }
 
+        g_LogFile << "C" << std::endl;
         return stitchedPath;
     }
     else {
+        g_LogFile << "D" << std::endl;
         stitchedPath = globalNavMesh.SubdivideOnMesh(stitchedPath);
         CleanPathGroundZ(stitchedPath, mapId);
+        g_LogFile << "D" << std::endl;
         return stitchedPath;
     }
 }

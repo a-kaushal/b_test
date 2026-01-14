@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <chrono>
 #include <cstring>
+#include <iostream>
 
 // --- CONFIGURATION ---
 const int FMAP_GRID_WIDTH = 160;
@@ -21,12 +22,13 @@ const float FMAP_CELL_SIZE = 3.33333f;  // Game units per cell
 const float FMAP_HEIGHT_PRECISION = 0.1f;  // Quantization scale
 const float FMAP_HEIGHT_BASE = 2000.0f;   // Base height that data is stored at
 const float FMAP_AGENT_HEIGHT = 2.0f;     // Agent collision height
+const float FMAP_HEIGHT_RANGE = 5.0f;  // Range within which a height value is valid
 const bool DEBUG_FMAP = false;
 
 // --- DEBUG LOGGER ---
 class FMapLogger {
 private:
-    std::ofstream g_LogFile;
+    std::ofstream logFile;
     bool enabled;
     int totalChecks = 0;
     int totalHits = 0;
@@ -35,34 +37,34 @@ private:
 public:
     FMapLogger() : enabled(DEBUG_FMAP) {
         if (enabled) {
-            g_LogFile.open("C:\\Driver\\SMM_FMap_Debug.log", std::ios::app);
-            if (g_LogFile.is_open()) {
+            logFile.open("C:\\Driver\\SMM_FMap_Debug.log", std::ios::app);
+            if (logFile.is_open()) {
                 auto now = std::chrono::system_clock::now();
                 auto time = std::chrono::system_clock::to_time_t(now);
-                g_LogFile << "\n========================================\n";
-                g_LogFile << "FMap Session Started: " << std::ctime(&time);
-                g_LogFile << "Format: 160x160 Grid, 24-byte Header\n";
-                g_LogFile << "Coordinate System: File=MAPID_TY_TX, tx=f(Y), ty=f(X)\n";
-                g_LogFile << "Grid Mapping: gx=f(Y), gy=f(X) [Detour convention]\n";
-                g_LogFile << "========================================\n\n";
+                logFile << "\n========================================\n";
+                logFile << "FMap Session Started: " << std::ctime(&time);
+                logFile << "Format: 160x160 Grid, 24-byte Header\n";
+                logFile << "Coordinate System: File=MAPID_TY_TX, tx=f(Y), ty=f(X)\n";
+                logFile << "Grid Mapping: gx=f(Y), gy=f(X) [Detour convention]\n";
+                logFile << "========================================\n\n";
             }
         }
     }
 
     ~FMapLogger() {
-        if (g_LogFile.is_open() && enabled) {
-            g_LogFile << "\n=== FMap Session Summary ===\n";
-            g_LogFile << "  LOS checks: " << totalChecks << " (hits: " << totalHits
+        if (logFile.is_open() && enabled) {
+            logFile << "\n=== FMap Session Summary ===\n";
+            logFile << "  LOS checks: " << totalChecks << " (hits: " << totalHits
                 << ", " << (totalChecks > 0 ? (100.0f * totalHits / totalChecks) : 0.0f) << "%)\n";
-            g_LogFile << "  Floor queries: " << totalFloorQueries << "\n";
-            g_LogFile.close();
+            logFile << "  Floor queries: " << totalFloorQueries << "\n";
+            logFile.close();
         }
     }
 
     void Log(const std::string& msg) {
-        if (enabled && g_LogFile.is_open()) {
-            g_LogFile << "[FMAP] " << msg << std::endl;
-            g_LogFile.flush();
+        if (enabled && logFile.is_open()) {
+            logFile << "[FMAP] " << msg << std::endl;
+            logFile.flush();
         }
     }
 
@@ -70,49 +72,49 @@ public:
         totalChecks++;
         if (hit) totalHits++;
 
-        if (enabled && g_LogFile.is_open() && (totalChecks % 50 == 1)) {
-            g_LogFile << "[LOS#" << totalChecks << "] Map=" << mapId << " | ";
-            g_LogFile << std::fixed << std::setprecision(2);
-            g_LogFile << "(" << x1 << "," << y1 << "," << z1 << ")->(" << x2 << "," << y2 << "," << z2 << ") | ";
+        if (enabled && logFile.is_open() && (totalChecks % 50 == 1)) {
+            logFile << "[LOS#" << totalChecks << "] Map=" << mapId << " | ";
+            logFile << std::fixed << std::setprecision(2);
+            logFile << "(" << x1 << "," << y1 << "," << z1 << ")->(" << x2 << "," << y2 << "," << z2 << ") | ";
             float dist = std::sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1) + (z2 - z1) * (z2 - z1));
-            g_LogFile << "Dist=" << dist << " | " << (hit ? "BLOCKED" : "CLEAR") << std::endl;
-            g_LogFile.flush();
+            logFile << "Dist=" << dist << " | " << (hit ? "BLOCKED" : "CLEAR") << std::endl;
+            logFile.flush();
         }
     }
 
     void LogFloorQuery(float x, float y, float z, float result) {
         totalFloorQueries++;
-        if (enabled && g_LogFile.is_open()) {
-            g_LogFile << "[FLOOR#" << totalFloorQueries << "] (" << std::fixed << std::setprecision(2)
+        if (enabled && logFile.is_open()) {
+            logFile << "[FLOOR#" << totalFloorQueries << "] (" << std::fixed << std::setprecision(2)
                 << x << "," << y << "," << z << ") -> " << result << std::endl;
-            g_LogFile.flush();
+            logFile.flush();
         }
     }
 
     void LogTileLoad(const std::string& filename, bool success, int cellsWithData = 0, int totalLayers = 0) {
-        if (enabled && g_LogFile.is_open()) {
+        if (enabled && logFile.is_open()) {
             if (success) {
-                g_LogFile << "[TILE] ? " << filename << " | Cells: " << cellsWithData
+                logFile << "[TILE] ? " << filename << " | Cells: " << cellsWithData
                     << "/" << FMAP_TOTAL_CELLS << " | Layers: " << totalLayers << std::endl;
             }
             else {
-                g_LogFile << "[TILE] ? Failed: " << filename << std::endl;
+                logFile << "[TILE] ? Failed: " << filename << std::endl;
             }
-            g_LogFile.flush();
+            logFile.flush();
         }
     }
 
     void LogSampleCell(int x, int y, int layerCount, float floor, float ceiling) {
-        if (enabled && g_LogFile.is_open()) {
-            g_LogFile << "  Sample[" << x << "," << y << "]: " << layerCount << " layer(s) | ";
+        if (enabled && logFile.is_open()) {
+            logFile << "  Sample[" << x << "," << y << "]: " << layerCount << " layer(s) | ";
             if (layerCount > 0) {
-                g_LogFile << "Floor=" << floor << " Ceiling=" << ceiling;
-                if (ceiling >= 9999.0f) g_LogFile << " (OPEN SKY)";
+                logFile << "Floor=" << floor << " Ceiling=" << ceiling;
+                if (ceiling >= 9999.0f) logFile << " (OPEN SKY)";
             }
             else {
-                g_LogFile << "VOID/SOLID";
+                logFile << "VOID/SOLID";
             }
-            g_LogFile << std::endl;
+            logFile << std::endl;
         }
     }
 };
@@ -146,7 +148,7 @@ struct VoxelLayer {
 
     bool isOpenSky() const {
         // If ceiling is very high or max value, it's open sky
-        return ceilingRaw >= 60000;  // ~6000 units is way above any geometry
+        return ceilingRaw >= 22000;  // ~6000 units is way above any geometry
     }
 };
 
@@ -167,7 +169,7 @@ struct VoxelCell {
             float ceiling = layer.getCeilingZ();
 
             // If we're within this layer's vertical span
-            if (z >= floor && z <= ceiling) {
+            if ((z + FMAP_HEIGHT_RANGE) >= floor && z <= ceiling) {
                 return floor;  // Standing on this floor
             }
 
@@ -180,17 +182,42 @@ struct VoxelCell {
         return bestFloor;
     }
 
-    // Check if we can fly at height Z
-    bool canFlyAt(float z) const {
-        if (layers.empty()) return false;  // Void/solid - can't fly
+    float getCeilingAbove(float z) const {
+        if (layers.empty()) return 99999.0f;
+
+        float bestCeiling = 99999.0f;
 
         for (const auto& layer : layers) {
             float floor = layer.getFloorZ();
             float ceiling = layer.getCeilingZ();
 
+            // If we're within this layer's vertical span
+            if ((z + FMAP_HEIGHT_RANGE) >= floor && z <= ceiling) {
+                return ceiling;  // Standing on this floor
+            }
+
+            // Track highest floor below us
+            if (ceiling >= z && ceiling < bestCeiling) {
+                bestCeiling = ceiling;
+            }
+        }
+
+        return bestCeiling;
+    }
+
+    // Check if we can fly at height Z
+    bool canFlyAt(float z) const {
+        std::cout << layers.empty() << std::endl;
+        if (layers.empty()) return false;  // Void/solid - can't fly
+
+        for (const auto& layer : layers) {
+            float floor = layer.getFloorZ();
+            float ceiling = layer.getCeilingZ();
+            std::cout << floor << " " << ceiling << std::endl;;
             // Check if Z is within a walkable span
-            if (z >= floor && z <= ceiling) {
+            if ((z + FMAP_HEIGHT_RANGE) >= floor && z <= ceiling) {
                 // Can fly if this span has open sky above
+                std::cout << "isOpen Sky: " << layer.isOpenSky() << std::endl;;
                 return layer.isOpenSky() || (z < ceiling - FMAP_AGENT_HEIGHT);
             }
         }
@@ -216,7 +243,7 @@ struct VoxelCell {
             float ceiling = layer.getCeilingZ();
 
             // Check if segment intersects this layer's navigable space
-            if (maxZ >= floor && minZ <= ceiling) {
+            if ((maxZ + FMAP_HEIGHT_RANGE) >= floor && minZ <= ceiling) {
                 return true;  // Found a layer that contains part of the segment
             }
         }
@@ -411,6 +438,34 @@ public:
         return result;
     }
 
+    float getCeilingHeight(float worldX, float worldY, float worldZ) const {
+        const VoxelCell* cell = getCell(worldX, worldY);
+        if (!cell) return -99999.0f;
+
+        if (DEBUG_FMAP && !cell->isEmpty()) {
+            char msg[256];
+            sprintf(msg, "  Cell has %d layer(s)", (int)cell->layers.size());
+            g_Logger.Log(msg);
+
+            for (size_t i = 0; i < cell->layers.size() && i < 3; ++i) {
+                sprintf(msg, "    Layer %d: Floor=%.1f Ceiling=%.1f (raw: %u, %u)",
+                    (int)i, cell->layers[i].getFloorZ(), cell->layers[i].getCeilingZ(),
+                    cell->layers[i].floorRaw, cell->layers[i].ceilingRaw);
+                g_Logger.Log(msg);
+            }
+        }
+
+        float result = cell->getCeilingAbove(worldZ);
+
+        if (DEBUG_FMAP) {
+            char msg[128];
+            sprintf(msg, "  getCeilingAbove(%.2f) returned: %.2f", worldZ, result);
+            g_Logger.Log(msg);
+        }
+
+        return result;
+    }
+
     // Check if position is flyable
     bool canFlyAt(float worldX, float worldY, float worldZ) const {
         const VoxelCell* cell = getCell(worldX, worldY);
@@ -466,6 +521,7 @@ private:
         return ((uint64_t)mapId << 32) | ((uint64_t)x << 16) | (uint64_t)y;
     }
 
+public:
     FMapTile* getTileAt(int mapId, float x, float y) {
         // CONFIRMED: Detour/Recast coordinate system
         // tx derives from WoW Y, ty derives from WoW X
@@ -518,7 +574,6 @@ private:
         }
     }
 
-public:
     void init(const std::string& path) {
         basePath = path;
         if (basePath.back() != '/' && basePath.back() != '\\') {
@@ -530,6 +585,44 @@ public:
     ~FMapSystem() {
         for (auto& pair : loadedTiles) {
             delete pair.second;
+        }
+    }
+
+    // Cleanup tiles retentionRadius away from player or on a diffrent map
+    void CleanupTiles(int currentMapId, float playerX, float playerY, float retentionRadius) {
+        auto it = loadedTiles.begin();
+        while (it != loadedTiles.end()) {
+            uint64_t key = it->first;
+            FMapTile* tile = it->second;
+
+            // CRITICAL FIX 1: If tile failed to load previously (nullptr), remove it or skip it.
+            // We remove it so we can try loading it again later if needed, or just to clean the map key.
+            if (tile == nullptr) {
+                it = loadedTiles.erase(it);
+                continue;
+            }
+
+            // Extract mapId from key (upper 32 bits)
+            int tileMapId = (int)(key >> 32);
+
+            // CRITICAL FIX 2: Correct X/Y mapping. 
+            // originX corresponds to WoW X, originY corresponds to WoW Y.
+            float dist = std::sqrt(std::pow(tile->originX - playerX, 2) + std::pow(tile->originY - playerY, 2));
+
+            // Unload if different map OR too far away
+            if (tileMapId != currentMapId || dist > retentionRadius) {
+                if (DEBUG_FMAP) {
+                    // Optional logging
+                    // char msg[128];
+                    // sprintf(msg, "Unloading Tile: %04d (Dist: %.2f)", tile->mapId, dist);
+                    // g_Logger.Log(msg);
+                }
+                delete tile; // Free memory
+                it = loadedTiles.erase(it); // Remove from map
+            }
+            else {
+                ++it;
+            }
         }
     }
 
@@ -572,6 +665,29 @@ public:
         return result;
     }
 
+    float getCeilingHeight(int mapId, float x, float y, float z) {
+        FMapTile* tile = getTileAt(mapId, x, y);
+        if (!tile) {
+            if (DEBUG_FMAP) {
+                char msg[128];
+                sprintf(msg, "getCeilingHeight(%.2f, %.2f, %.2f) - No tile loaded", x, y, z);
+                g_Logger.Log(msg);
+            }
+            return -99999.0f;
+        }
+
+        if (DEBUG_FMAP) {
+            char msg[256];
+            sprintf(msg, "getCeilingHeight(%.2f, %.2f, %.2f) - Using tile %04d_%02d_%02d",
+                x, y, z, mapId, tile->tileY, tile->tileX);
+            g_Logger.Log(msg);
+        }
+
+        float result = tile->getCeilingHeight(x, y, z);
+        //g_Logger.LogCeilingQuery(x, y, z, result);
+        return result;
+    }
+
     bool canFlyAt(int mapId, float x, float y, float z) {
         FMapTile* tile = getTileAt(mapId, x, y);
         if (!tile) return false;
@@ -580,6 +696,112 @@ public:
 };
 
 static FMapSystem g_FMapSys;
+
+// Detect if a position is in an enclosed space (tunnel/cave/indoor)
+bool detectTunnel(int mapId, float x, float y, float z) {
+    FMapTile* tile = g_FMapSys.getTileAt(mapId, x, y);
+    if (!tile) return false;  // No tile = outdoor, not a tunnel
+
+    const VoxelCell* currentCell = tile->getCell(x, y);
+    if (!currentCell || currentCell->isEmpty()) {
+        return false;  // Solid or void, but not a navigable tunnel
+    }
+
+    // === CHECK 1: LOW CEILING ===
+    const float TUNNEL_CEILING_HEIGHT = 20.0f;
+    bool hasLowCeiling = false;
+    float ceilingDistance = 999.0f;
+
+    // Check vertical clearance at current position
+    for (const auto& layer : currentCell->layers) {
+        float floor = layer.getFloorZ();
+        float ceiling = layer.getCeilingZ();
+
+        // Are we in this layer's vertical span?
+        if ((z + FMAP_HEIGHT_RANGE) >= floor && z <= ceiling) {
+            ceilingDistance = ceiling - z;
+            if (ceilingDistance < TUNNEL_CEILING_HEIGHT && !layer.isOpenSky()) {
+                hasLowCeiling = true;
+            }
+            break;
+        }
+    }
+
+    // === CHECK 2: HORIZONTAL ENCLOSURE ===
+    // Sample 8 directions to detect walls
+    const float CHECK_RADIUS = 8.0f;  // Check 8 units away
+    int blockedDirections = 0;
+
+    struct Direction {
+        float dx, dy;
+    };
+
+    Direction directions[8] = {
+        {CHECK_RADIUS, 0},                 // East
+        {-CHECK_RADIUS, 0},                // West
+        {0, CHECK_RADIUS},                 // North
+        {0, -CHECK_RADIUS},                // South
+        {CHECK_RADIUS, CHECK_RADIUS},      // NE
+        {-CHECK_RADIUS, CHECK_RADIUS},     // NW
+        {CHECK_RADIUS, -CHECK_RADIUS},     // SE
+        {-CHECK_RADIUS, -CHECK_RADIUS}     // SW
+    };
+
+    for (int i = 0; i < 8; ++i) {
+        float testX = x + directions[i].dx;
+        float testY = y + directions[i].dy;
+        float testZ = z + 1.0f;  // Check at head height
+
+        // Check if ray to this direction is blocked
+        if (g_FMapSys.checkLine(mapId, x, y, z + 1.0f, testX, testY, testZ)) {
+            blockedDirections++;
+        }
+    }
+
+    // === CHECK 3: VERTICAL CONFINEMENT ===
+    // Check if there's geometry above (ceiling) within a short distance
+    bool hasGeometryAbove = false;
+    float testHeight = z + 5.0f;
+    for (int i = 0; i < 4; ++i) {
+        if (g_FMapSys.checkLine(mapId, x, y, z, x, y, testHeight)) {
+            hasGeometryAbove = true;
+            break;
+        }
+        testHeight += 5.0f;
+        if (testHeight - z > TUNNEL_CEILING_HEIGHT) break;
+    }
+
+    // === DECISION LOGIC ===
+    // Tunnel criteria:
+    // 1. Low ceiling OR geometry above + blocked on 4+ sides = TUNNEL
+    // 2. Blocked on 6+ sides regardless = ENCLOSED SPACE
+    // 3. Low ceiling + no open sky + blocked on 3+ sides = INDOOR
+
+    bool criteriaTunnel = (hasLowCeiling || hasGeometryAbove) && (blockedDirections >= 4);
+    bool criteriaEnclosed = (blockedDirections >= 6);
+    bool criteriaIndoor = hasLowCeiling && !currentCell->layers.empty() &&
+        !currentCell->layers.back().isOpenSky() && (blockedDirections >= 3);
+
+    bool inTunnel = criteriaTunnel || criteriaEnclosed || criteriaIndoor;
+
+    if (DEBUG_FMAP && inTunnel) {
+        g_Logger.Log("=== TUNNEL DETECTED ===");
+        char msg[512];
+        sprintf(msg, "  Position: (%.2f, %.2f, %.2f)", x, y, z);
+        g_Logger.Log(msg);
+        sprintf(msg, "  Low ceiling: %s (%.2f units above)", hasLowCeiling ? "YES" : "NO", ceilingDistance);
+        g_Logger.Log(msg);
+        sprintf(msg, "  Blocked directions: %d/8", blockedDirections);
+        g_Logger.Log(msg);
+        sprintf(msg, "  Geometry above: %s", hasGeometryAbove ? "YES" : "NO");
+        g_Logger.Log(msg);
+        sprintf(msg, "  Classification: %s",
+            criteriaEnclosed ? "ENCLOSED" : (criteriaTunnel ? "TUNNEL" : "INDOOR"));
+        g_Logger.Log(msg);
+    }
+
+    return inTunnel;
+}
 
 // --- EXPORTED C API ---
 extern "C" {
@@ -602,6 +824,15 @@ extern "C" {
         return g_FMapSys.getFloorHeight(mapId, x, y, z);
     }
 
+    __declspec(dllexport) float GetFMapCeilingHeight(int mapId, float x, float y, float z) {
+        static bool initialized = false;
+        if (!initialized) {
+            g_FMapSys.init("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/fmaps/");
+            initialized = true;
+        }
+        return g_FMapSys.getCeilingHeight(mapId, x, y, z);
+    }
+
     __declspec(dllexport) bool CanFlyAt(int mapId, float x, float y, float z) {
         static bool initialized = false;
         if (!initialized) {
@@ -609,5 +840,25 @@ extern "C" {
             initialized = true;
         }
         return g_FMapSys.canFlyAt(mapId, x, y, z);
+    }
+
+    __declspec(dllexport) bool IsInTunnel(int mapId, float x, float y, float z) {
+        static bool initialized = false;
+        if (!initialized) {
+            g_FMapSys.init("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/fmaps/");
+            initialized = true;
+        }
+        return detectTunnel(mapId, x, y, z);
+    }
+
+    __declspec(dllexport) void CleanupFMapCache(int mapId, float x, float y) {
+        static bool initialized = false;
+        if (!initialized) {
+            // Ensure init is called if not already
+            g_FMapSys.init("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/fmaps/");
+            initialized = true;
+        }
+        // Prune tiles further than 1200 yards away
+        g_FMapSys.CleanupTiles(mapId, x, y, 1200.0f);
     }
 }

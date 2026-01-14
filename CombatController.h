@@ -1,5 +1,6 @@
 #pragma once
 #include "SimpleKeyboardClient.h"
+#include "MovementController.h"
 #include <chrono>
 #include <map>
 #include <string>
@@ -9,6 +10,7 @@ class CombatController {
 private:
     SimpleKeyboardClient& kbd;
     ConsoleInput console;
+    MovementController pilot;
 
     // Cooldown tracking (in milliseconds)
     std::map<std::string, std::chrono::steady_clock::time_point> lastCastTime;
@@ -48,16 +50,13 @@ private:
         if (estimatedHolyPower > 5) estimatedHolyPower = 5;
         if (estimatedHolyPower < 0) estimatedHolyPower = 0;
 
-        std::cout << "[COMBAT] Cast " << std::string(spell.begin(), spell.end()) << " (Est HP: " << estimatedHolyPower << ")" << std::endl;
-
-        // Chat typing takes time (~500ms+), so we enforce a global throttle
-        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        g_LogFile << "[COMBAT] Cast " << std::string(spell.begin(), spell.end()) << " (Est HP: " << estimatedHolyPower << ")" << std::endl;
     }
 
 public:
-    CombatController(SimpleKeyboardClient& keyboard) : kbd(keyboard), console(keyboard) {}
+    CombatController(SimpleKeyboardClient& keyboard, MovementController pilot) : kbd(keyboard), console(keyboard), pilot(pilot) {}
 
-    void UpdateRotation(bool targetIsLowHealth = false) {
+    void UpdateRotation(Vector3 playerPos, Vector3 targetPos, float playerRot, bool targetIsLowHealth = false) {
         // MOP RETRIBUTION PALADIN PRIORITY (5.4.8)
 
         // 1. Inquisition (Buff)

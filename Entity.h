@@ -59,8 +59,8 @@ struct PlayerInfo : EntityInfo {
     bool isMounted;
     ULONG_PTR inCombatGuidLow;
     ULONG_PTR inCombatGuidHigh;
-    ULONG_PTR underAttackGuidLow;
-    ULONG_PTR underAttackGuidHigh;
+    ULONG_PTR targetGuidLow;
+    ULONG_PTR targetGuidHigh;
     float rotation;
     float vertRotation;
     float distance;

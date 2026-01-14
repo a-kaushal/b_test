@@ -65,8 +65,8 @@ inline ULONG_PTR baseAddress;
 #define ENTITY_PLAYER_BAG_OFFSET 0x14700 // Offset to bag array
 #define ENTITY_PLAYER_IN_COMBAT_GUID_LOW 0x670 // Attacking Enemy
 #define ENTITY_PLAYER_IN_COMBAT_GUID_HIGH 0x678 // Attacking Enemy
-#define ENTITY_PLAYER_UNDER_ATTACK_GUID_LOW 0x11BF0 // Under attack from enemy
-#define ENTITY_PLAYER_UNDER_ATTACK_GUID_HIGH 0x11BF8 // Under attack from enemy
+#define ENTITY_PLAYER_TARGET_GUID_LOW 0x11BF0 // Under attack from enemy
+#define ENTITY_PLAYER_TARGET_GUID_HIGH 0x11BF8 // Under attack from enemy
 
 
 #define MOUSE_OVER_GUID_OFFSET 0x3F2D038

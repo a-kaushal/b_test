@@ -22,17 +22,17 @@ void FollowPath(int mapId, string myPath, bool looping, bool flyingPath) {
     std::vector<Vector3> myPathParsed = ParsePathString(myPath);
 
     // --- Pre-validate path for No-Fly Zones ---
-    if (globalNavMesh.LoadMap("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/mmaps/", g_GameState->player.mapId)) {
-        for (auto& pt : myPathParsed) {
-            // If this point is in a No-Fly Zone (CanFlyAt returns false), fix it
-            if (!CanFlyAt(g_GameState->player.mapId, pt.x, pt.y, pt.z)) {
-                Vector3 fixedPt = globalNavMesh.FindNearestFlyablePoint(pt, g_GameState->player.mapId);
-                if (fixedPt.x != 0.0f || fixedPt.y != 0.0f || fixedPt.z != 0.0f) {
-                    pt = fixedPt;
-                }
-            }
-        }
-    }
+    //if (globalNavMesh.LoadMap("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/mmaps/", g_GameState->player.mapId)) {
+    //    for (auto& pt : myPathParsed) {
+    //        // If this point is in a No-Fly Zone (CanFlyAt returns false), fix it
+    //        if (!CanFlyAt(g_GameState->player.mapId, pt.x, pt.y, pt.z)) {
+    //            Vector3 fixedPt = globalNavMesh.FindNearestFlyablePoint(pt, g_GameState->player.mapId);
+    //            if (fixedPt.x != 0.0f || fixedPt.y != 0.0f || fixedPt.z != 0.0f) {
+    //                pt = fixedPt;
+    //            }
+    //        }
+    //    }
+    //}
 
     g_GameState->pathFollowState.presetPath = myPathParsed;
     g_GameState->pathFollowState.presetIndex = FindClosestWaypoint(myPathParsed, empty, g_GameState->player.position);

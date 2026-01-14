@@ -40,6 +40,8 @@ private:
     const float PIXELS_PER_RADIAN_YAW = 200.0f;
     const float PIXELS_PER_RADIAN_PITCH = 150.0f;
 
+    const float TURN_THRESHOLD = 0.1f;
+
     // User specified: 1.0 radian per second
     // ADJUST THIS if the bot consistently undershoots (increase value) or overshoots (decrease value)
     const float TURN_SPEED_RAD_SEC = PI;
@@ -100,6 +102,13 @@ public:
         return isSteering;
     }
 
+    // FORCE reset the mount cooldown (Call this only when safe to mount)
+    void ForceResetMountCooldown() {
+        m_MountDisabledUntil = 0;
+        // Optionally clear any "failed attempt" counters if you have them
+        g_LogFile << "[Movement] Mount cooldown forcibly reset for hybrid path." << std::endl;
+    }
+
     // Emergency Stop
     void Stop() {
         // Must cancel async threads first
@@ -131,7 +140,8 @@ public:
     bool IsMoving() {
         return kbd.IsHolding('W') || kbd.IsHolding('S') ||
             kbd.IsHolding('Q') || kbd.IsHolding('E') ||
-            kbd.IsHolding(KEY_ASCEND) || kbd.IsHolding(KEY_DESCEND);
+            kbd.IsHolding(KEY_ASCEND) || kbd.IsHolding(KEY_DESCEND) ||
+            mouse.IsButtonDown(MOUSE_RIGHT) || mouse.IsButtonDown(MOUSE_LEFT);
     }
 
     // --- NEW: CALIBRATION FUNCTION ---
@@ -319,11 +329,11 @@ public:
     }
 
     void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool flyingPath, PlayerInfo& player) {
-        
+
         float dx = targetPos.x - currentPos.x;
         float dy = targetPos.y - currentPos.y;
         float dz = targetPos.z - currentPos.z;
-        float dist2D = std::sqrt(dx * dx + dy * dy); 
+        float dist2D = std::sqrt(dx * dx + dy * dy);
         float dist3D = std::sqrt(dx * dx + dy * dy + dz * dz);
 
         DWORD now = GetTickCount();
@@ -385,7 +395,7 @@ public:
         // Pitch calculation (Target Pitch)
         float targetPitch = std::atan2(dz, dist2D);
         float pitchDiff = targetPitch - player.vertRotation;
-        
+
         // --- 2. START STEERING INPUT ---
         if (!isSteering) {
             mouse.PressButton(MOUSE_RIGHT);
@@ -518,56 +528,57 @@ public:
                 lastPosTime = now;
             }
         }
-        
-        // --- 1. Horizontal Steering (Yaw) --- (A and D old)
-        /*float targetAngle = std::atan2(dy, dx);
-        float angleDiff = NormalizeAngle(targetAngle - currentRot);
 
-        bool isTurningLeft = kbd.IsHolding('A');
-        bool isTurningRight = kbd.IsHolding('D');
+        //    // --- 1. Horizontal Steering (Yaw) --- (A and D old)
+        //    float targetAngle = std::atan2(dy, dx);
+        //    float angleDiff = NormalizeAngle(targetAngle - currentRot);
 
-        // Check if we need to turn
-        if (angleDiff > TURN_THRESHOLD) {
-            // WE WANT TO GO LEFT
-            if (isTurningRight) kbd.StopHold('D'); // Cancel opposite turn
+        //    bool isTurningLeft = kbd.IsHolding('A');
+        //    bool isTurningRight = kbd.IsHolding('D');
 
-            // Only start a new turn if we aren't already holding the key
-            if (!isTurningLeft) {
-                // Calculate precise duration
-                // Time = Distance / Speed
-                float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
-                int durationMs = static_cast<int>(durationSeconds * 1000.0f);
-                durationMs *= 0.5;
+        //    // Check if we need to turn
+        //    if (angleDiff > TURN_THRESHOLD) {
+        //        // WE WANT TO GO LEFT
+        //        if (isTurningRight) kbd.StopHold('D'); // Cancel opposite turn
 
-                // Min duration to avoid micro-presses
-                if (durationMs > 20) {
-                    kbd.HoldKeyAsync('A', durationMs);
-                }
-            }
-        }
-        else if (angleDiff < -TURN_THRESHOLD) {
-            // WE WANT TO GO RIGHT
-            if (isTurningLeft) kbd.StopHold('A');
+        //        // Only start a new turn if we aren't already holding the key
+        //        if (!isTurningLeft) {
+        //            // Calculate precise duration
+        //            // Time = Distance / Speed
+        //            float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
+        //            int durationMs = static_cast<int>(durationSeconds * 1000.0f);
+        //            durationMs *= 0.5;
 
-            if (!isTurningRight) {
-                float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
-                int durationMs = static_cast<int>(durationSeconds * 1000.0f);
-				durationMs *= 0.5;
+        //            // Min duration to avoid micro-presses
+        //            if (durationMs > 20) {
+        //                kbd.HoldKeyAsync('A', durationMs);
+        //            }
+        //        }
+        //    }
+        //    else if (angleDiff < -TURN_THRESHOLD) {
+        //        // WE WANT TO GO RIGHT
+        //        if (isTurningLeft) kbd.StopHold('A');
 
-                if (durationMs > 20) {
-                    kbd.HoldKeyAsync('D', durationMs);
-                }
-            }
-        }
-        // DEADZONE (Aligned)
-        else {
-            // FIX: Force stop if we are aligned, even if the timer is still running.
-            // This prevents the bot from continuing to turn if it reached the target faster than calculated.
-            if (isTurningLeft) kbd.StopHold('A');
-            if (isTurningRight) kbd.StopHold('D');
-        }
-        
-        // --- 2. Vertical Steering (Altitude) ---
+        //        if (!isTurningRight) {
+        //            float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
+        //            int durationMs = static_cast<int>(durationSeconds * 1000.0f);
+        //            durationMs *= 0.5;
+
+        //            if (durationMs > 20) {
+        //                kbd.HoldKeyAsync('D', durationMs);
+        //            }
+        //        }
+        //    }
+        //    // DEADZONE (Aligned)
+        //    else {
+        //        // FIX: Force stop if we are aligned, even if the timer is still running.
+        //        // This prevents the bot from continuing to turn if it reached the target faster than calculated.
+        //        if (isTurningLeft) kbd.StopHold('A');
+        //        if (isTurningRight) kbd.StopHold('D');
+        //    }
+        //}
+
+        /*// --- 2. Vertical Steering (Altitude) ---
         // Just manage the keys; don't block other movement
 
 
@@ -603,10 +614,10 @@ public:
         bool facingCorrectly = (std::abs(angleDiff) < stopThreshold);
         if ((dist2D < 10) && (std::abs(angleDiff) > (TURN_THRESHOLD*2)) && (facingCorrectly)) {
             facingCorrectly = false;
-		}
+        }
 
         // DIAGONAL MOVEMENT FIX:
-        // We removed the (dist2D < 1.0f) check here. 
+        // We removed the (dist2D < 1.0f) check here.
         // Previously, if the bot was under the target, it would stop 'W' and only use 'Space' (Elevator).
         // Now, we generally allow 'W' unless we are significantly off-angle.
         // We rely on the pathfinding logic to switch waypoints when we get close enough in 3D space.
@@ -618,7 +629,67 @@ public:
             kbd.SendKey('W', 0, false);
         }*/
     }
+
+    bool faceTarget(Vector3 currentPos, Vector3 targetPos, float currentRot) {
+        float dx = targetPos.x - currentPos.x;
+        float dy = targetPos.y - currentPos.y;
+        float dz = targetPos.z - currentPos.z;
+        float dist2D = std::sqrt(dx * dx + dy * dy);
+        float dist3D = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+        DWORD now = GetTickCount();
+        // --- 1. Horizontal Steering (Yaw) --- (A and D old)
+        float targetAngle = std::atan2(dy, dx);
+        float angleDiff = NormalizeAngle(targetAngle - currentRot);
+
+        bool isTurningLeft = kbd.IsHolding('A');
+        bool isTurningRight = kbd.IsHolding('D');
+
+        // Check if we need to turn
+        if (angleDiff > TURN_THRESHOLD) {
+            // WE WANT TO GO LEFT
+            if (isTurningRight) kbd.StopHold('D'); // Cancel opposite turn
+
+            // Only start a new turn if we aren't already holding the key
+            if (!isTurningLeft) {
+                // Calculate precise duration
+                // Time = Distance / Speed
+                float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
+                int durationMs = static_cast<int>(durationSeconds * 1000.0f);
+                durationMs *= 0.5;
+
+                // Min duration to avoid micro-presses
+                if (durationMs > 20) {
+                    kbd.HoldKeyAsync('A', durationMs);
+                }
+            }
+        }
+        else if (angleDiff < -TURN_THRESHOLD) {
+            // WE WANT TO GO RIGHT
+            if (isTurningLeft) kbd.StopHold('A');
+
+            if (!isTurningRight) {
+                float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
+                int durationMs = static_cast<int>(durationSeconds * 1000.0f);
+                durationMs *= 0.5;
+
+                if (durationMs > 20) {
+                    kbd.HoldKeyAsync('D', durationMs);
+                }
+            }
+        }
+        // DEADZONE (Aligned)
+        else {
+            // FIX: Force stop if we are aligned, even if the timer is still running.
+            // This prevents the bot from continuing to turn if it reached the target faster than calculated.
+            if (isTurningLeft) kbd.StopHold('A');
+            if (isTurningRight) kbd.StopHold('D');
+            return true;
+        }
+        return false;
+    }
 };
+
 
 // Detect if player is in an enclosed space (tunnel/indoor/cave)
 inline bool IsInTunnel(const Vector3& pos, int mapId) {

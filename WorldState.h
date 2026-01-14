@@ -94,7 +94,7 @@ struct Combat : public ActionState {
 
 struct StuckState : public ActionState {
     bool isStuck = false;
-    Vector3 lastPosition;
+    Vector3 lastPosition = { 0, 0, 0 };
     DWORD lastCheckTime = 0;
     DWORD stuckStartTime = 0;
 

@@ -217,6 +217,23 @@ public:
         }
     }
 
+    // Check if a specific button is currently held down
+    bool IsButtonDown(MouseButton button) {
+        int vKey = 0;
+        switch (button) {
+        case MOUSE_LEFT:   vKey = VK_LBUTTON; break;
+        case MOUSE_RIGHT:  vKey = VK_RBUTTON; break;
+        case MOUSE_MIDDLE: vKey = VK_MBUTTON; break;
+        case MOUSE_X1:     vKey = VK_XBUTTON1; break;
+        case MOUSE_X2:     vKey = VK_XBUTTON2; break;
+        default: return false;
+        }
+
+        // GetAsyncKeyState checks the state of the physical/virtual key at the time of the call.
+        // The most significant bit (0x8000) tells us if the button is currently down.
+        return (GetAsyncKeyState(vKey) & 0x8000) != 0;
+    }
+
     void RestoreAcceleration() {
         // Restore the exact settings we found when we started
         SystemParametersInfoA(SPI_SETMOUSE, 0, m_OriginalMouseParams, SPIF_SENDCHANGE);
