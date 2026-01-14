@@ -414,6 +414,7 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
 
                         (((newPlayer.state & (1 << 11)) >> 11) == 1) ? newPlayer.inAir = true : newPlayer.inAir = false;
                         (((newPlayer.state & (1 << 24)) >> 24) == 1) ? newPlayer.isFlying = true : newPlayer.isFlying = false;
+                        (((newPlayer.state & (1 << 26)) >> 26) == 1) ? newPlayer.isDead = true : newPlayer.isDead = false;
                         (((newPlayer.state & (1 << 23)) >> 23) == 1) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
                         (((newPlayer.state & (1 << 20)) >> 20) == 1) ? newPlayer.inWater = true : newPlayer.inWater = false;
 
@@ -763,6 +764,7 @@ void MainThread(HMODULE hModule) {
                     SetCursorPos(center.x, center.y);
 
                     static DWORD lastTrim = 0;
+                    static DWORD overlayUpdate = 0;
                     while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
                         if (GetTickCount() - lastTrim > 30000) { // Every 30 seconds
                             //SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
@@ -820,17 +822,10 @@ void MainThread(HMODULE hModule) {
                         cam.UpdateScreenSize(width, height);
 
                         overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
-                        for (size_t i = g_GameState->globalState.activeIndex; i < g_GameState->globalState.activeIndex + 16; ++i) {
+                        for (size_t i = g_GameState->globalState.activeIndex; i < g_GameState->globalState.activeIndex + 6; ++i) {
                             int screenPosx, screenPosy;
                             if (i >= g_GameState->globalState.activePath.size()) break;
                             if (cam.WorldToScreen(g_GameState->globalState.activePath[i].pos, screenPosx, screenPosy)) {
-                                // Draw a line using your overlay's draw list
-                                overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
-                            }
-                        }
-                        if (g_GameState->combatState.hasTarget) {
-                            int screenPosx, screenPosy;
-                            if (cam.WorldToScreen(g_GameState->combatState.enemyPosition, screenPosx, screenPosy)) {
                                 // Draw a line using your overlay's draw list
                                 overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
                             }

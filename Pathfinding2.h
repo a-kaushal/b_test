@@ -1700,6 +1700,8 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
                     }
                 }
             }
+            // Dont use ground path
+            shouldTryGroundFirst = false;
 
             // Try ground path first if conditions are met
             if (shouldTryGroundFirst) {
@@ -1707,20 +1709,16 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
                 segment = FindPath(start, end, ignoreWater);
 
                 if (!segment.empty()) {
-                    if (DEBUG_PATHFINDING) {
-                        
+                    if (DEBUG_PATHFINDING) {                        
                         g_LogFile << "[PATHFINDING] ✓ Ground path successful ("
                             << segment.size() << " waypoints)" << std::endl;
                     }
                 }
                 else {
-                    if (DEBUG_PATHFINDING) {
-                        
+                    if (DEBUG_PATHFINDING) {                        
                         g_LogFile << "[PATHFINDING] ✗ Ground path failed, falling back to flight" << std::endl;
                     }
-                    g_LogFile << "B" << std::endl;
                     segment = Calculate3DFlightPath(start, end, mapId, isFlying);
-                    g_LogFile << "B" << std::endl;
                 }
             }
             else {

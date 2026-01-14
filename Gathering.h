@@ -14,12 +14,11 @@ const int BLACKLIST_TIMEOUT = 300000;
 void BlacklistClear(WorldState& ws) {
     DWORD now = GetTickCount();
     if (ws.gatherState.blacklistTime.size() > 0) {
-        for (size_t i = ws.gatherState.blacklistTime.size() - 1; i >= 0; i--) {
+        for (int i = ws.gatherState.blacklistTime.size() - 1; i >= 0; i--) {
             if (now - ws.gatherState.blacklistTime[i] > BLACKLIST_TIMEOUT) {
                 ws.gatherState.blacklistTime.erase(ws.gatherState.blacklistTime.begin(), ws.gatherState.blacklistTime.begin() + i);
                 ws.gatherState.blacklistNodesGuidHigh.erase(ws.gatherState.blacklistNodesGuidHigh.begin(), ws.gatherState.blacklistNodesGuidHigh.begin() + i);
                 ws.gatherState.blacklistNodesGuidLow.erase(ws.gatherState.blacklistNodesGuidLow.begin(), ws.gatherState.blacklistNodesGuidLow.begin() + i);
-                break;
             }
         }
     }
