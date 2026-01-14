@@ -35,11 +35,17 @@ public:
 
     bool Update(ULONG_PTR baseAddress) {
 
-        // 1. Get CameraPtr (Static Offset)
-        if (cameraPtr == 0) {
-            mem.ReadPointer(procId, baseAddress + 0x3DEFB68, cameraMgr);
-            mem.ReadPointer(procId, cameraMgr + 0x488, cameraPtr);
-        }
+        // FIX: Always refresh the pointers. Do not check 'if (cameraPtr == 0)'
+        // Using a local variable for the manager is cleaner but re-reading member is fine.
+
+        // 1. Re-read Camera Manager
+        if (!mem.ReadPointer(procId, baseAddress + 0x3DEFB68, cameraMgr)) return false;
+
+        // 2. Re-read Camera Pointer
+        if (!mem.ReadPointer(procId, cameraMgr + 0x488, cameraPtr)) return false;
+
+        // 3. Safety Check: If ptr is 0, don't try to read floats
+        if (cameraPtr == 0) return false;
 
         // Camera world position
         mem.ReadFloat(procId, cameraPtr + CAMERA_POSITION_X, camPos.x);

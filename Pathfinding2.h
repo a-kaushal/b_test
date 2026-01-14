@@ -54,7 +54,7 @@ const float FMAP_VERTICAL_TOLERANCE = 2.0f;  // Tolerance for floor snapping
 const size_t MAX_CACHE_SIZE = 100;
 const size_t CACHE_CLEANUP_THRESHOLD = 120;
 
-const bool DEBUG_PATHFINDING = true;  // Enable for flight debugging
+const bool DEBUG_PATHFINDING = false;  // Enable for flight debugging
 
 enum FlightSegmentResult {
     SEGMENT_VALID = 0,

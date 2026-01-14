@@ -77,6 +77,7 @@ private:
     std::vector<Vector3> currentPath;
 
     bool groundOverride = false;
+    bool randomClick = false;
 
     int sx, sy;
 
@@ -100,6 +101,7 @@ public:
         pathIndex = 0;
         groundOverride = false;
         currentPath.clear();
+        randomClick = false;
     }
 
     void SetState(InteractState newState) {
@@ -240,7 +242,9 @@ public:
                 }
                 else {
                     offsetIndex++; // Try next offset
-                    currentState = STATE_SCAN_MOUSE;
+                    // currentState = STATE_SCAN_MOUSE;
+                    currentState = STATE_CLICK;
+                    randomClick = true;
                 }
             }
             return false;
@@ -255,7 +259,8 @@ public:
             mouse.Click(click);
 
             stateTimer = GetTickCount();
-            currentState = STATE_POST_INTERACT_WAIT;
+            if (randomClick) currentState = STATE_SCAN_MOUSE;
+            else currentState = STATE_POST_INTERACT_WAIT;
             return false;
 
         case STATE_POST_INTERACT_WAIT:

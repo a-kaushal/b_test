@@ -12,6 +12,12 @@
 #include <tlhelp32.h>
 #include <cstdint>
 
+struct HashNode {
+    ULONG_PTR GuidLow;
+    ULONG_PTR GuidHigh;
+    ULONG_PTR EntityIndex;
+};
+
 // IOCTL code - must match driver
 #define IOCTL_READ_MEMORY CTL_CODE(FILE_DEVICE_UNKNOWN, 0x8B3, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_ENUMERATE_MEMORY CTL_CODE(FILE_DEVICE_UNKNOWN, 0x8B4, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -248,6 +254,12 @@ public:
         }
 
         return operation.BytesProcessed > 0;
+    }
+
+    // Wrapper for ReadMemory to support bulk buffer reading
+    bool ReadBuffer(DWORD processId, ULONG_PTR address, void* buffer, SIZE_T size) {
+        // Just call the existing ReadMemory function which handles the DeviceIoControl
+        return ReadMemory(processId, address, buffer, size);
     }
 
     // Update your template helper too
