@@ -54,7 +54,7 @@ const float FMAP_VERTICAL_TOLERANCE = 2.0f;  // Tolerance for floor snapping
 const size_t MAX_CACHE_SIZE = 100;
 const size_t CACHE_CLEANUP_THRESHOLD = 120;
 
-const bool DEBUG_PATHFINDING = false;  // Enable for flight debugging
+const bool DEBUG_PATHFINDING = true;  // Enable for flight debugging
 
 enum FlightSegmentResult {
     SEGMENT_VALID = 0,
@@ -176,6 +176,10 @@ public:
     }
 
     void Put(const PathCacheKey& key, const std::vector<PathNode>& path) {
+        if (lruMap.find(key) != lruMap.end()) {
+            lruList.erase(lruMap[key]);
+            lruMap.erase(key);
+        }
         if (cache.size() >= CACHE_CLEANUP_THRESHOLD) {
             while (cache.size() >= MAX_CACHE_SIZE && !lruList.empty()) {
                 PathCacheKey oldest = lruList.back();
@@ -275,14 +279,14 @@ public:
     // Enhanced flight point validation using FMap
     bool CheckFlightPoint(const Vector3& pos, int mapId, bool allowGroundProximity = false) {
         if (DEBUG_PATHFINDING) {
-            //log << "[CheckFlightPoint] Testing " << mapId << " (" << pos.x << ", " << pos.y << ", " << pos.z << ")\n";
+            //log << "[CheckFlightPoint] Testing " << mapId << " (" << pos.x << ", " << pos.y << ", " << pos.z << ")" << std::endl;
         }
 
         // First check if we're in flyable space using FMap
         bool flyable = CanFlyAt(mapId, pos.x, pos.y, pos.z);
         if (!flyable) {
             if (DEBUG_PATHFINDING) {
-                //log << "  ? Not flyable according to FMap\n";
+                //log << "  ? Not flyable according to FMap" << std::endl;
             }
             return false;
         }
@@ -290,7 +294,7 @@ public:
         // Check for collision in a small sphere around the point
         if (CheckFMapLine(mapId, pos.x, pos.y, pos.z - 0.5f, pos.x, pos.y, pos.z + 0.5f)) {
             if (DEBUG_PATHFINDING) {
-                //log << "  ? Vertical collision detected\n";
+                //log << "  ? Vertical collision detected" << std::endl;
             }
             return false;
         }
@@ -304,13 +308,13 @@ public:
         float gZ = GetLocalGroundHeight(pos);
         if (gZ > -90000.0f && pos.z < gZ + MIN_CLEARANCE) {
             if (DEBUG_PATHFINDING) {
-                //log << "  ? Too close to ground: floor=" << gZ << ", clearance=" << (pos.z - gZ) << "\n";
+                //log << "  ? Too close to ground: floor=" << gZ << ", clearance=" << (pos.z - gZ) << "" << std::endl;
             }
             return false;
         }
 
         if (DEBUG_PATHFINDING) {
-            //log << "  ? Valid flight point\n";
+            //log << "  ? Valid flight point" << std::endl;
         }
         return true;
     }
@@ -355,7 +359,7 @@ public:
     FlightSegmentResult CheckFlightSegmentDetailed(const Vector3& start, const Vector3& end, int mapId, Vector3& outFailPos, bool isFlying, bool strict = true, bool verbose = false) {
         if (verbose && DEBUG_PATHFINDING) {
             g_LogFile << "   [CheckSegment] Checking " << start.x << "," << start.y << "," << start.z
-                << " -> " << end.x << "," << end.y << "," << end.z << "\n";
+                << " -> " << end.x << "," << end.y << "," << end.z << "" << std::endl;
         }
 
         Vector3 dir = end - start;
@@ -367,7 +371,7 @@ public:
 
         if (verbose && DEBUG_PATHFINDING) {
             g_LogFile << "      Starting from ground: " << startingFromGround
-                << " (playerZ=" << start.z << ", groundZ=" << startGroundZ << ")\n";
+                << " (playerZ=" << start.z << ", groundZ=" << startGroundZ << ")" << std::endl;
         }
 
         // Multi-ray collision check
@@ -399,7 +403,7 @@ public:
                     clearancePoint.z + offsets[i].z,
                     e.x, e.y, e.z)) {
                     if (verbose && DEBUG_PATHFINDING) {
-                        g_LogFile << "      FAIL: Ray " << i << " hit obstacle after takeoff.\n";
+                        g_LogFile << "      FAIL: Ray " << i << " hit obstacle after takeoff." << std::endl;
                     }
                     return SEGMENT_COLLISION;
                 }
@@ -408,7 +412,7 @@ public:
             else if (skipCollisionDist == 0.0f || totalDist <= skipCollisionDist) {
                 if (CheckFMapLine(mapId, s.x, s.y, s.z, e.x, e.y, e.z)) {
                     if (verbose && DEBUG_PATHFINDING) {
-                        g_LogFile << "      FAIL: Ray " << i << " hit obstacle (Wall/Tree/Building).\n";
+                        g_LogFile << "      FAIL: Ray " << i << " hit obstacle (Wall/Tree/Building)." << std::endl;
                     }
                     return SEGMENT_COLLISION;
                 }
@@ -428,7 +432,7 @@ public:
             if (!CanFlyAt(mapId, pt.x, pt.y, pt.z)) {
                 outFailPos = pt;
                 if (verbose && DEBUG_PATHFINDING) {
-                    g_LogFile << "      FAIL: Point in No-Fly Zone at " << pt.x << "," << pt.y << "," << pt.z << "\n";
+                    g_LogFile << "      FAIL: Point in No-Fly Zone at " << pt.x << "," << pt.y << "," << pt.z << "" << std::endl;
                 }
                 return SEGMENT_NO_FLY_ZONE; // Blocked by invisible wall/zone
             }
@@ -445,7 +449,7 @@ public:
                     if (pt.z < gZ - 0.5f) {
                         outFailPos = pt;
                         if (verbose && DEBUG_PATHFINDING) {
-                            g_LogFile << "      FAIL: Below ground during takeoff (Z=" << pt.z << " < Ground=" << gZ << ")\n";
+                            g_LogFile << "      FAIL: Below ground during takeoff (Z=" << pt.z << " < Ground=" << gZ << ")" << std::endl;
                         }
                         return SEGMENT_COLLISION;
                     }
@@ -458,7 +462,7 @@ public:
                     if (pt.z < gZ - 0.5f) { // Only fail if below ground
                         outFailPos = pt;
                         if (verbose && DEBUG_PATHFINDING) {
-                            g_LogFile << "      FAIL: Below ground during landing (Z=" << pt.z << " < Ground=" << gZ << ")\n";
+                            g_LogFile << "      FAIL: Below ground during landing (Z=" << pt.z << " < Ground=" << gZ << ")" << std::endl;
                         }
                         return SEGMENT_COLLISION;
                     }
@@ -473,13 +477,13 @@ public:
                     outFailPos = pt;
                     if (verbose && DEBUG_PATHFINDING) {
                         g_LogFile << "      FAIL: Too close to ground (Z=" << pt.z << " < Limit=" << limit
-                            << ") at dist " << distFromStart << "\n";
+                            << ") at dist " << distFromStart << "" << std::endl;
                     }
                     return SEGMENT_COLLISION;
                 }
             }
         }
-        if (verbose && DEBUG_PATHFINDING) g_LogFile << "      PASS: Segment Clear.\n";
+        if (verbose && DEBUG_PATHFINDING) g_LogFile << "      PASS: Segment Clear." << std::endl;
         return SEGMENT_VALID;
     }
 
@@ -881,13 +885,11 @@ inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, 
 
 // ANGLED FLIGHT PATHFINDING - Natural diagonal ascent/descent
 inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const Vector3& end, int mapId, bool isFlying) {
-    std::ofstream g_LogFile;
     // Always open log for this specific debug request, or keep using DEBUG_PATHFINDING flag
     if (DEBUG_PATHFINDING) {
-        g_LogFile.open("C:\\Driver\\SMM_Debug.log", std::ios::app);
-        g_LogFile << "\n=== CALCULATE 3D FLIGHT PATH ===\n";
-        g_LogFile << "Start: (" << start.x << ", " << start.y << ", " << start.z << ")\n";
-        g_LogFile << "End:   (" << end.x << ", " << end.y << ", " << end.z << ")\n";
+        g_LogFile << "\n=== CALCULATE 3D FLIGHT PATH ===" << std::endl;
+        g_LogFile << "Start: (" << start.x << ", " << start.y << ", " << start.z << ")" << std::endl;
+        g_LogFile << "End:   (" << end.x << ", " << end.y << ", " << end.z << ")" << std::endl;
     }
 
     float GROUND_HEIGHT_THRESHOLD = 15.0f;
@@ -900,7 +902,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
     if (groundZ > -90000.0f && start.z < groundZ + MIN_CLEARANCE) {
         actualStart.z = groundZ + MIN_CLEARANCE;
         if (DEBUG_PATHFINDING) {
-            g_LogFile << "Adjusted start height to: " << actualStart.z << " (ground: " << groundZ << ")\n";
+            g_LogFile << "Adjusted start height to: " << actualStart.z << " (ground: " << groundZ << ")" << std::endl;
         }
     }
 
@@ -908,7 +910,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
     if (groundZ > -90000.0f && end.z < groundZ + MIN_CLEARANCE) {
         actualEnd.z = groundZ + MIN_CLEARANCE;
         if (DEBUG_PATHFINDING) {
-            g_LogFile << "Adjusted end height to: " << actualEnd.z << " (ground: " << groundZ << ")\n";
+            g_LogFile << "Adjusted end height to: " << actualEnd.z << " (ground: " << groundZ << ")" << std::endl;
         }
     }
 
@@ -920,12 +922,12 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
         actualEnd.z = groundZ + 1.0f; // Changed from MIN_CLEARANCE + 1.0f
         if (DEBUG_PATHFINDING) {
             g_LogFile << "Goal is on ground, adjusted end height to: " << actualEnd.z
-                << " (ground: " << groundZ << ")\n";
+                << " (ground: " << groundZ << ")" << std::endl;
         }
     }
 
     // 2. TRY DIRECT PATH FIRST (Optimization)
-    if (DEBUG_PATHFINDING) g_LogFile << "Checking direct path...\n";
+    if (DEBUG_PATHFINDING) g_LogFile << "Checking direct path..." << std::endl;
 
     // REPLACED: Use Detailed check to handle No-Fly Zones gracefully
     // Pass isFlying flag to collision check
@@ -935,15 +937,15 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
 
     if (directCheck == SEGMENT_VALID) {
         if (DEBUG_PATHFINDING) {
-            g_LogFile << "✓ Direct path clear!\n";
+            g_LogFile << "✓ Direct path clear!" << std::endl;
         }
         return { PathNode(actualStart, PATH_AIR), PathNode(actualEnd, PATH_AIR) };
     }
     else if (directCheck == SEGMENT_NO_FLY_ZONE) {
         // --- SMART RECOVERY FOR NO-FLY ZONES ---
         if (DEBUG_PATHFINDING) {
-            g_LogFile << "⚠ Direct path hit No-Fly Zone at (" << failPos.x << ", " << failPos.y << ", " << failPos.z << ")\n";
-            g_LogFile << "  Attempting to find nearest valid flyable point...\n";
+            g_LogFile << "⚠ Direct path hit No-Fly Zone at (" << failPos.x << ", " << failPos.y << ", " << failPos.z << ")" << std::endl;
+            g_LogFile << "  Attempting to find nearest valid flyable point..." << std::endl;
         }
 
         Vector3 detourPoint = globalNavMesh.FindNearestFlyablePoint(failPos, mapId);
@@ -951,8 +953,8 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
         // If we found a valid detour point (not 0,0,0)
         if (detourPoint.x != 0 || detourPoint.y != 0 || detourPoint.z != 0) {
             if (DEBUG_PATHFINDING) {
-                g_LogFile << "  Found detour point: (" << detourPoint.x << ", " << detourPoint.y << ", " << detourPoint.z << ")\n";
-                g_LogFile << "  Validating legs: Start->Detour and Detour->End...\n";
+                g_LogFile << "  Found detour point: (" << detourPoint.x << ", " << detourPoint.y << ", " << detourPoint.z << ")" << std::endl;
+                g_LogFile << "  Validating legs: Start->Detour and Detour->End..." << std::endl;
             }
 
             // Validate the legs
@@ -960,20 +962,20 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
                 globalNavMesh.CheckFlightSegment(detourPoint, actualEnd, mapId, isFlying, true, true)) {
 
                 if (DEBUG_PATHFINDING) {
-                    g_LogFile << "✓ Smart Recovery Successful! Created detour path.\n";
+                    g_LogFile << "✓ Smart Recovery Successful! Created detour path." << std::endl;
                 }
                 return { PathNode(actualStart, PATH_AIR), PathNode(detourPoint, PATH_AIR), PathNode(actualEnd, PATH_AIR) };
             }
             else {
                 // --- NEW LOGIC: DETOUR LEGS BLOCKED (CHECK END POINT) ---
                 if (DEBUG_PATHFINDING) {
-                    g_LogFile << "  ✗ Detour legs were blocked. Checking if End Point is the issue...\n";
+                    g_LogFile << "  ✗ Detour legs were blocked. Checking if End Point is the issue..." << std::endl;
                 }
 
                 // Check if the destination itself is inside a No-Fly Zone
                 if (!CanFlyAt(mapId, actualEnd.x, actualEnd.y, actualEnd.z)) {
                     if (DEBUG_PATHFINDING) {
-                        g_LogFile << "  ! END POINT is in a No-Fly Zone. Searching for nearest safe destination...\n";
+                        g_LogFile << "  ! END POINT is in a No-Fly Zone. Searching for nearest safe destination..." << std::endl;
                     }
 
                     Vector3 safeEnd = globalNavMesh.FindNearestFlyablePoint(actualEnd, mapId);
@@ -981,8 +983,8 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
                     // If we found a safe replacement for the destination
                     if (safeEnd.x != 0 || safeEnd.y != 0 || safeEnd.z != 0) {
                         if (DEBUG_PATHFINDING) {
-                            g_LogFile << "  Found safe destination: (" << safeEnd.x << ", " << safeEnd.y << ", " << safeEnd.z << ")\n";
-                            g_LogFile << "  Retrying with safe destination...\n";
+                            g_LogFile << "  Found safe destination: (" << safeEnd.x << ", " << safeEnd.y << ", " << safeEnd.z << ")" << std::endl;
+                            g_LogFile << "  Retrying with safe destination..." << std::endl;
                         }
 
                         // Retry the path: Start -> Detour -> SafeEnd
@@ -990,7 +992,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
                             globalNavMesh.CheckFlightSegment(detourPoint, safeEnd, mapId, isFlying, true, true)) {
 
                             if (DEBUG_PATHFINDING) {
-                                g_LogFile << "✓ Smart Recovery (Modified End) Successful!\n";
+                                g_LogFile << "✓ Smart Recovery (Modified End) Successful!" << std::endl;
                             }
                             return { PathNode(actualStart, PATH_AIR), PathNode(detourPoint, PATH_AIR), PathNode(safeEnd, PATH_AIR) };
                         }
@@ -1000,7 +1002,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
         }
         else {
             if (DEBUG_PATHFINDING) {
-                g_LogFile << "  ✗ Could not find a valid flyable point nearby.\n";
+                g_LogFile << "  ✗ Could not find a valid flyable point nearby." << std::endl;
             }
         }
     }
@@ -1032,7 +1034,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
         // Pass the existing vector to the queue wrapper
         IndexPriorityQueue openSet(&nodes);
         if (DEBUG_PATHFINDING) {
-            g_LogFile << ">>> A* Attempt " << attempt << " / 5 <<<\n";
+            g_LogFile << ">>> A* Attempt " << attempt << " / 5 <<<" << std::endl;
         }
 
         // --- RELAXATION PARAMETERS ---
@@ -1055,7 +1057,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
 
         if (DEBUG_PATHFINDING) {
             g_LogFile << "   Grid: " << currentGridSize << " | Strict: " << strictCollision
-                << " | MaxNodes: " << maxNodes << " | Radius: " << currentSearchRadius << "\n";
+                << " | MaxNodes: " << maxNodes << " | Radius: " << currentSearchRadius << std::endl;
         }
 
         // Helper to track failures for logging (don't log every single one, just summary/examples)
@@ -1124,8 +1126,8 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
         // Check if end is in a no-fly zone
         if (!CanFlyAt(mapId, actualEnd.x, actualEnd.y, actualEnd.z)) {
             if (DEBUG_PATHFINDING) {
-                g_LogFile << "⚠ WARNING: Goal position is in a no-fly zone!\n";
-                g_LogFile << "  Searching for nearest valid position...\n";
+                g_LogFile << "⚠ WARNING: Goal position is in a no-fly zone!" << std::endl;
+                g_LogFile << "  Searching for nearest valid position..." << std::endl;
             }
 
             Vector3 nearestValid = globalNavMesh.FindNearestFlyablePoint(actualEnd, mapId);
@@ -1133,13 +1135,13 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
                 actualEnd = nearestValid;
                 nodes[endIdx].pos = actualEnd;
                 if (DEBUG_PATHFINDING) {
-                    g_LogFile << "  Adjusted goal to: (" << actualEnd.x << "," << actualEnd.y << "," << actualEnd.z << ")\n";
+                    g_LogFile << "  Adjusted goal to: (" << actualEnd.x << "," << actualEnd.y << "," << actualEnd.z << ")" << std::endl;
                 }
             }
             else {
                 endIsValid = false;
                 if (DEBUG_PATHFINDING) {
-                    g_LogFile << "  ✗ Could not find valid goal position!\n";
+                    g_LogFile << "  ✗ Could not find valid goal position!" << std::endl;
                 }
             }
         }
@@ -1148,7 +1150,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
         if (endIsValid && CheckFMapLine(mapId, actualEnd.x, actualEnd.y, actualEnd.z - 0.5f,
             actualEnd.x, actualEnd.y, actualEnd.z + 0.5f)) {
             if (DEBUG_PATHFINDING) {
-                g_LogFile << "⚠ WARNING: Goal position has collision!\n";
+                g_LogFile << "⚠ WARNING: Goal position has collision!" << std::endl;
             }
             endIsValid = false;
         }
@@ -1160,7 +1162,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
         }
         else {
             if (DEBUG_PATHFINDING) {
-                g_LogFile << "⚠ End node marked as invalid - will try to get as close as possible\n";
+                g_LogFile << "⚠ End node marked as invalid - will try to get as close as possible" << std::endl;
             }
         }
 
@@ -1187,7 +1189,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
 
         while (!openSet.empty() && iterations < maxNodes * 2) {
             if (nodes.size() >= maxNodes) {
-                if (DEBUG_PATHFINDING) g_LogFile << "   ! Max nodes reached (" << maxNodes << ")\n";
+                if (DEBUG_PATHFINDING) g_LogFile << "   ! Max nodes reached (" << maxNodes << ")" << std::endl;
                 break;
             }
 
@@ -1204,7 +1206,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
             if (currentIdx == endIdx) {
                 goalIdx = endIdx;
                 if (DEBUG_PATHFINDING) {
-                    g_LogFile << "   ✓ Reached goal node (was in open set)!\n";
+                    g_LogFile << "   ✓ Reached goal node (was in open set)!" << std::endl;
                 }
                 break;
             }
@@ -1216,7 +1218,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
                 if (DEBUG_PATHFINDING) {
                     g_LogFile << "   Attempting final connection from (" << current.pos.x << ","
                         << current.pos.y << "," << current.pos.z << ") to goal (dist="
-                        << distToGoal << ")\n";
+                        << distToGoal << ")" << std::endl;
                 }
 
                 // Use NON-STRICT check for final connection
@@ -1231,7 +1233,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
                     nodes[endIdx].gScore = current.gScore + distToGoal;
                     goalIdx = endIdx;
                     if (DEBUG_PATHFINDING) {
-                        g_LogFile << "   ✓ Successfully connected to goal!\n";
+                        g_LogFile << "   ✓ Successfully connected to goal!" << std::endl;
                     }
                     break;
                 }
@@ -1239,7 +1241,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
                     if (DEBUG_PATHFINDING) {
                         g_LogFile << "   ✗ Final connection blocked - Reason: "
                             << (result == SEGMENT_COLLISION ? "Collision" : "No-Fly Zone")
-                            << " at (" << failPos.x << "," << failPos.y << "," << failPos.z << ")\n";
+                            << " at (" << failPos.x << "," << failPos.y << "," << failPos.z << ")" << std::endl;
                     }
                 }
             }
@@ -1286,19 +1288,19 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
 
         //DIAGNOSTICS
         if (goalIdx < 0 && DEBUG_PATHFINDING) {
-            g_LogFile << "\n   [DIAGNOSTIC] Why did A* fail?\n";
+            g_LogFile << "\n   [DIAGNOSTIC] Why did A* fail?" << std::endl;
 
             // Check if end node exists
             if (endIdx < nodes.size()) {
-                g_LogFile << "   - End node exists at index " << endIdx << "\n";
+                g_LogFile << "   - End node exists at index " << endIdx << "" << std::endl;
                 g_LogFile << "   - End node position: (" << nodes[endIdx].pos.x << ","
-                    << nodes[endIdx].pos.y << "," << nodes[endIdx].pos.z << ")\n";
-                g_LogFile << "   - End node gScore: " << nodes[endIdx].gScore << "\n";
-                g_LogFile << "   - End node parent: " << nodes[endIdx].parentIdx << "\n";
+                    << nodes[endIdx].pos.y << "," << nodes[endIdx].pos.z << ")" << std::endl;
+                g_LogFile << "   - End node gScore: " << nodes[endIdx].gScore << "" << std::endl;
+                g_LogFile << "   - End node parent: " << nodes[endIdx].parentIdx << "" << std::endl;
 
                 // Check if it was ever added to open set
                 bool inClosed = closedSet.count(endIdx);
-                g_LogFile << "   - End node in closed set: " << inClosed << "\n";
+                g_LogFile << "   - End node in closed set: " << inClosed << "" << std::endl;
 
                 // Find closest node that WAS explored
                 float closestDist = 1e9f;
@@ -1313,8 +1315,8 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
 
                 if (closestIdx >= 0) {
                     g_LogFile << "   - Closest explored node: (" << nodes[closestIdx].pos.x << ","
-                        << nodes[closestIdx].pos.y << "," << nodes[closestIdx].pos.z << ")\n";
-                    g_LogFile << "   - Distance from closest to goal: " << closestDist << "\n";
+                        << nodes[closestIdx].pos.y << "," << nodes[closestIdx].pos.z << ")" << std::endl;
+                    g_LogFile << "   - Distance from closest to goal: " << closestDist << "" << std::endl;
 
                     // Try to connect them
                     Vector3 failPos;
@@ -1322,13 +1324,13 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
                         nodes[closestIdx].pos, actualEnd, mapId, failPos, isFlying, false, true);
 
                     g_LogFile << "   - Can connect closest to goal: "
-                        << (testResult == SEGMENT_VALID ? "YES" : "NO") << "\n";
+                        << (testResult == SEGMENT_VALID ? "YES" : "NO") << "" << std::endl;
                     if (testResult != SEGMENT_VALID) {
-                        g_LogFile << "   - Blockage at: (" << failPos.x << "," << failPos.y << "," << failPos.z << ")\n";
+                        g_LogFile << "   - Blockage at: (" << failPos.x << "," << failPos.y << "," << failPos.z << ")" << std::endl;
                     }
                 }
             }
-            g_LogFile << "\n";
+            g_LogFile << "" << std::endl;
         }
 
         // --- RESULT CHECK ---
@@ -1361,16 +1363,16 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
             }
 
             if (DEBUG_PATHFINDING) {
-                g_LogFile << "✓ A* SUCCESS on Attempt " << attempt << " (" << finalPath.size() << " wps)\n";
+                g_LogFile << "✓ A* SUCCESS on Attempt " << attempt << " (" << finalPath.size() << " wps)" << std::endl;
             }
             return finalPath; // RETURN SUCCESS
         }
         else {
             if (DEBUG_PATHFINDING) {
-                g_LogFile << "✗ A* Failed Attempt " << attempt << ".\n";
-                g_LogFile << "   Nodes Exp: " << closedSet.size() << " | Nodes Created: " << nodes.size() << "\n";
-                g_LogFile << "   Invalid Points (Wall/Ground): " << invalidPoints << "\n";
-                g_LogFile << "   Blocked Segments: " << blockedSegments << "\n";
+                g_LogFile << "✗ A* Failed Attempt " << attempt << "." << std::endl;
+                g_LogFile << "   Nodes Exp: " << closedSet.size() << " | Nodes Created: " << nodes.size() << "" << std::endl;
+                g_LogFile << "   Invalid Points (Wall/Ground): " << invalidPoints << "" << std::endl;
+                g_LogFile << "   Blocked Segments: " << blockedSegments << "" << std::endl;
 
                 // If this was the last attempt, log nearest node
                 if (attempt == 5) {
@@ -1381,7 +1383,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
                         if (d < closest) { closest = d; closestPos = node.pos; }
                     }
                     g_LogFile << "   Closest approach to goal: " << closest << " yds at ("
-                        << closestPos.x << "," << closestPos.y << "," << closestPos.z << ")\n";
+                        << closestPos.x << "," << closestPos.y << "," << closestPos.z << ")" << std::endl;
                 }
             }
         }
@@ -1389,7 +1391,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(const Vector3& start, const V
 
     // 5. ALL ATTEMPTS FAILED
     if (DEBUG_PATHFINDING) {
-        g_LogFile << "!!! CRITICAL: All 5 pathfinding attempts failed. Stopping script.\n";
+        g_LogFile << "!!! CRITICAL: All 5 pathfinding attempts failed. Stopping script." << std::endl;
     }
 
     return {};
@@ -1485,7 +1487,7 @@ inline std::vector<PathNode> CreateHybridPath(const Vector3& start, const Vector
     std::ofstream g_LogFile;
     if (DEBUG_PATHFINDING) {
         g_LogFile.open("C:\\Driver\\SMM_Debug.log", std::ios::app);
-        g_LogFile << "\n[HYBRID] Checking for no-fly zones between start and end\n";
+        g_LogFile << "\n[HYBRID] Checking for no-fly zones between start and end" << std::endl;
     }
     g_LogFile << start.x << " " << start.y << " " << start.z << std::endl;
     g_LogFile << end.x << " " << end.y << " " << end.z << std::endl;
@@ -1495,15 +1497,15 @@ inline std::vector<PathNode> CreateHybridPath(const Vector3& start, const Vector
     if (!flying || !DetectNoFlyZone(start, end, mapId, tunnelEntry, tunnelExit)) {
         // No tunnel detected, use normal pathfinding
         if (DEBUG_PATHFINDING) {
-            g_LogFile << "[HYBRID] No tunnel detected, using standard pathfinding\n";
+            g_LogFile << "[HYBRID] No tunnel detected, using standard pathfinding" << std::endl;
         }
         return {};
     }
 
     if (DEBUG_PATHFINDING) {
-        g_LogFile << "[HYBRID] ✓ Tunnel detected!\n";
-        g_LogFile << "  Entry: (" << tunnelEntry.x << "," << tunnelEntry.y << "," << tunnelEntry.z << ")\n";
-        g_LogFile << "  Exit:  (" << tunnelExit.x << "," << tunnelExit.y << "," << tunnelExit.z << ")\n";
+        g_LogFile << "[HYBRID] ✓ Tunnel detected!" << std::endl;
+        g_LogFile << "  Entry: (" << tunnelEntry.x << "," << tunnelEntry.y << "," << tunnelEntry.z << ")" << std::endl;
+        g_LogFile << "  Exit:  (" << tunnelExit.x << "," << tunnelExit.y << "," << tunnelExit.z << ")" << std::endl;
     }
 
     std::vector<PathNode> hybridPath;
@@ -1514,12 +1516,12 @@ inline std::vector<PathNode> CreateHybridPath(const Vector3& start, const Vector
         if (!approachPath.empty()) {
             hybridPath.insert(hybridPath.end(), approachPath.begin(), approachPath.end());
             if (DEBUG_PATHFINDING) {
-                g_LogFile << "[HYBRID] Approach flight: " << approachPath.size() << " waypoints\n";
+                g_LogFile << "[HYBRID] Approach flight: " << approachPath.size() << " waypoints" << std::endl;
             }
         }
         else {
             if (DEBUG_PATHFINDING) {
-                g_LogFile << "[HYBRID] ✗ Failed to create approach path\n";
+                g_LogFile << "[HYBRID] ✗ Failed to create approach path" << std::endl;
             }
             return {};
         }
@@ -1530,7 +1532,7 @@ inline std::vector<PathNode> CreateHybridPath(const Vector3& start, const Vector
 
     // SEGMENT 2: Walk through tunnel (GROUND PATHFINDING)
     if (DEBUG_PATHFINDING) {
-        g_LogFile << "[HYBRID] Computing ground path through tunnel...\n";
+        g_LogFile << "[HYBRID] Computing ground path through tunnel..." << std::endl;
     }
 
     // Pass ignoreWater to FindPath
@@ -1544,13 +1546,13 @@ inline std::vector<PathNode> CreateHybridPath(const Vector3& start, const Vector
             hybridPath.insert(hybridPath.end(), tunnelPath.begin(), tunnelPath.end());
         }
         if (DEBUG_PATHFINDING) {
-            g_LogFile << "[HYBRID] Tunnel walk: " << tunnelPath.size() << " waypoints\n";
+            g_LogFile << "[HYBRID] Tunnel walk: " << tunnelPath.size() << " waypoints" << std::endl;
         }
     }
     else {
         // Fallback: straight line through tunnel
         if (DEBUG_PATHFINDING) {
-            g_LogFile << "[HYBRID] ⚠ NavMesh failed, using straight line through tunnel\n";
+            g_LogFile << "[HYBRID] ⚠ NavMesh failed, using straight line through tunnel" << std::endl;
         }
         hybridPath.push_back(PathNode(tunnelEntry, PATH_GROUND));
         hybridPath.push_back(PathNode(tunnelExit, PATH_GROUND));
@@ -1568,7 +1570,7 @@ inline std::vector<PathNode> CreateHybridPath(const Vector3& start, const Vector
                 hybridPath.insert(hybridPath.end(), exitPath.begin(), exitPath.end());
             }
             if (DEBUG_PATHFINDING) {
-                g_LogFile << "[HYBRID] Exit flight: " << exitPath.size() << " waypoints\n";
+                g_LogFile << "[HYBRID] Exit flight: " << exitPath.size() << " waypoints" << std::endl;
             }
         }
     }
@@ -1577,9 +1579,9 @@ inline std::vector<PathNode> CreateHybridPath(const Vector3& start, const Vector
     }
 
     if (DEBUG_PATHFINDING) {
-        g_LogFile << "[HYBRID] ✓ Complete hybrid path: " << hybridPath.size() << " total waypoints\n";
+        g_LogFile << "[HYBRID] ✓ Complete hybrid path: " << hybridPath.size() << " total waypoints" << std::endl;
         g_LogFile << "  Structure: Fly(" << (start.Dist3D(tunnelEntry) > 5.0f ? "yes" : "no")
-            << ") → Walk(tunnel) → Fly(" << (tunnelExit.Dist3D(end) > 5.0f ? "yes" : "no") << ")\n";
+            << ") → Walk(tunnel) → Fly(" << (tunnelExit.Dist3D(end) > 5.0f ? "yes" : "no") << ")" << std::endl;
     }
 
     return hybridPath;

@@ -58,6 +58,7 @@ struct PlayerInfo : EntityInfo {
 	bool flyingMounted;
     bool isMounted;
     bool isDead;
+    int bagFreeSlots;
     ULONG_PTR inCombatGuidLow;
     ULONG_PTR inCombatGuidHigh;
     ULONG_PTR targetGuidLow;

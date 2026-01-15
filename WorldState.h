@@ -11,12 +11,12 @@ struct ActionState {
 
     // Common variables moved here
     std::vector<PathNode> activePath = {};
+    std::mutex pathMutex;
     int activeIndex = 0;
     bool actionChange = 0;
     bool flyingPath = true;
     bool inMotion = false;
     bool ignoreUnderWater = true;
-    int bagFreeSlots;
 };
 
 struct GlobalState : public ActionState {

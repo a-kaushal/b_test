@@ -41,6 +41,23 @@
 std::atomic<bool> g_HasCrashed = false;
 
 LONG WINAPI CrashHandler(EXCEPTION_POINTERS* pExceptionInfo) {
+    DWORD code = pExceptionInfo->ExceptionRecord->ExceptionCode;
+    // --- FIX START: FILTER EXCEPTIONS ---
+    // Ignore RPC errors (0x6BA), C++ Exceptions (0xE06D7363), and Debugger signals
+    if (code == 0x000006BA || code == 0xE06D7363 || code == 0x40010006) {
+        // Return EXCEPTION_CONTINUE_SEARCH to let Windows handle it normally
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    // Only handle FATAL memory errors
+    if (code != EXCEPTION_ACCESS_VIOLATION &&         // 0xC0000005
+        code != EXCEPTION_ARRAY_BOUNDS_EXCEEDED &&    // 0xC000008C
+        code != EXCEPTION_STACK_OVERFLOW &&           // 0xC00000FD
+        code != EXCEPTION_ILLEGAL_INSTRUCTION) {      // 0xC000001D
+
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    // --- FIX END ---
     // If another thread is already handling a crash, sleep and let it finish
     if (g_HasCrashed.exchange(true)) {
         Sleep(10000);
@@ -261,9 +278,26 @@ void GUIDBreakdown(uint32_t& low_counter, uint32_t& type_field, uint32_t& instan
 
 void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray, int hashArrayMaximum, ULONG_PTR entityArray, int entityArraySize, PlayerInfo& playerInfo, 
     std::vector<GameEntity>& entityList, GoapAgent& agent, bool playerOnly = false) {
+
+    // [LOGGING] Start of frame (Helpful to see if we crash immediately upon entering)
+    // Uncomment the next line only if you need extreme spam debugging, otherwise keep it off to save disk I/O
+    // if (g_LogFile.is_open()) g_LogFile << "[Extract] Frame Start. HashMax: " << hashArrayMaximum << " EntSize: " << entityArraySize << std::endl;
+
+    // --- SANITY CHECK 1: INVALID SIZES ---
+    // If these values are garbage (negative or unreasonably huge), we MUST abort.
+    // WoW Classic Object Manager rarely exceeds 10,000 objects.
+    if (entityArraySize < 0 || entityArraySize > 100000) {
+        if (g_LogFile.is_open()) g_LogFile << "[CRITICAL] Garbage EntityArraySize detected: " << entityArraySize << ". Skipping frame." << std::endl;
+        return;
+    }
+    if (hashArrayMaximum < 0 || hashArrayMaximum > 100000) {
+        if (g_LogFile.is_open()) g_LogFile << "[CRITICAL] Garbage HashArrayMaximum detected: " << hashArrayMaximum << ". Skipping frame." << std::endl;
+        return;
+    }
+
     if (!playerOnly) {
-        entityList.clear(); // Reuse memory capacity
-        entityList.reserve(500); // Prevent re-allocations during push_back
+        entityList.clear(); 
+        entityList.reserve(500); 
     }
     PlayerInfo newPlayer = {};
 
@@ -292,17 +326,20 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                 playerInfo = newPlayer;
                 return;
             }
-            else {
-                std::cerr << "Player pointer is invalid, reading all entities!" << std::endl;
-            }
         }
-        // 1. Bulk Read Hash Array
+        // --- STEP 1: BULK READ HASH ARRAY ---
         std::vector<HashNode> buffer(hashArrayMaximum);
-        analyzer.ReadBuffer(procId, hashArray, buffer.data(), hashArrayMaximum * sizeof(HashNode));
-
-        // 2. [NEW] Bulk Read Entity Pointers (Saves 2000+ driver calls/sec)
+        if (!analyzer.ReadBuffer(procId, hashArray, buffer.data(), hashArrayMaximum * sizeof(HashNode))) {
+            if (g_LogFile.is_open()) g_LogFile << "[ERROR] Failed to bulk read HashArray at: " << std::hex << hashArray << std::dec << std::endl;
+            return; // Abort safely
+        }
+        
+        // --- STEP 2: BULK READ ENTITY PTR ARRAY ---
         std::vector<DWORD_PTR> ptrBuffer(entityArraySize);
-        analyzer.ReadBuffer(procId, entityArray, ptrBuffer.data(), entityArraySize * sizeof(DWORD_PTR));
+        if (!analyzer.ReadBuffer(procId, entityArray, ptrBuffer.data(), entityArraySize * sizeof(DWORD_PTR))) {
+            if (g_LogFile.is_open()) g_LogFile << "[ERROR] Failed to bulk read EntityArray at: " << std::hex << entityArray << std::dec << std::endl;
+            return; // Abort safely
+        }
 
         // 1. Read the WHOLE array in one shot
         for (int i = 0; i < hashArrayMaximum; ++i) {
@@ -316,29 +353,58 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
 
             long EntInd = EntityIndex & 0x3FFFFFFF;
 
+            // --- SANITY CHECK 2: INDEX BOUNDS ---
             if (EntInd < 0 || EntInd >= entityArraySize) {
-                continue; // Skip invalid indices prevents reading out of bounds
+                // This is normal for empty hash slots, but if it happens for VALID guids, it's a problem.
+                // We just continue silently to avoid spam, or log if it looks suspicious.
+                continue;
             }
 
             // Valid check
             if (!(EntryGuidHigh == 0 && EntryGuidLow == 0) && !(EntryGuidLow == 1 && EntryGuidHigh == 0x400000000000000)) {
 
                 DWORD_PTR entityBuilderPtr = ptrBuffer[EntInd];
+
+                // --- SANITY CHECK 3: NULL OR INVALID POINTERS ---
+                if (entityBuilderPtr == 0) continue;
+                // Pointers in 64-bit windows are generally 8-byte aligned. 
+                // If it's odd, it's definitely garbage.
+                if (entityBuilderPtr % 8 != 0) {
+                    if (g_LogFile.is_open()) g_LogFile << "[WARN] Unaligned EntityPointer at Index " << i << ": " << std::hex << entityBuilderPtr << std::endl;
+                    continue;
+                }
+
                 DWORD_PTR entity_ptr = 0;
                 int32_t objType = 0;
                 ULONG_PTR guidLow = 0, guidHigh = 0;
 
-                //if (!analyzer.ReadPointer(procId, entityArray + ((int)EntInd * ENTITY_BUILDER_ARRAY_ITEM), entityBuilderPtr)) continue;
-                if (entityBuilderPtr == 0) continue;
-                if (!analyzer.ReadPointer(procId, entityBuilderPtr + ENTITY_ENTRY_OFFSET, entity_ptr)) continue;
-                if (!analyzer.ReadInt32(procId, entity_ptr + ENTITY_OBJECT_TYPE_OFFSET, objType)) continue;
+                // READ ENTITY BASE
+                if (!analyzer.ReadPointer(procId, entityBuilderPtr + ENTITY_ENTRY_OFFSET, entity_ptr)) {
+                    if (g_LogFile.is_open()) g_LogFile << "[WARN] Read fail: EntityBase at " << std::hex << entityBuilderPtr << std::endl;
+                    continue;
+                }
+                // READ TYPE
+                if (!analyzer.ReadInt32(procId, entity_ptr + ENTITY_OBJECT_TYPE_OFFSET, objType)) {
+                    // Fail silently or log
+                    continue;
+                }
+                // [DEBUG] Log suspicious types if you suspect corruption
+                if (objType < 0 || objType > 1000) {
+                    if (g_LogFile.is_open()) g_LogFile << "[WARN] Garbage ObjType: " << objType << " at ptr " << std::hex << entity_ptr << std::endl;
+                    continue;
+                }
+                // READ GUIDs
                 analyzer.ReadPointer(procId, entity_ptr + ENTITY_GUID_LOW_OFFSET, guidLow);
                 analyzer.ReadPointer(procId, entity_ptr + ENTITY_GUID_HIGH_OFFSET, guidHigh);
+
                 uint32_t low_counter, type_field, instance, id, map_id, server_id;
                 GUIDBreakdown(low_counter, type_field, instance, id, map_id, server_id, guidLow, guidHigh);
 
                 // Filter for specific types
                 if ((objType == 3) || (objType == 7) || (objType == 33) || (objType == 225) || (objType == 257)) {
+                    // --- SAFETY BLOCK FOR LOGGING ---
+                    // Log before processing complex entities if you suspect a specific one crashes it
+                    //if (g_LogFile.is_open()) g_LogFile << "Processing Type " << objType << " ID: " << id << std::endl; 
 
                     // 3. Store the data in our struct
                     GameEntity newEntity;
@@ -379,9 +445,16 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                         auto enemyInfo = std::make_shared<EnemyInfo>();
                         newEntity.info = enemyInfo;
 
-                        analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_X_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.x);
+                        // Use robust reads
+                        if (!analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_X_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.x)) continue;
                         analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Y_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.y);
                         analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Z_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.z);
+                        // Fix NaN positions immediately
+                        auto& pos = std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position;
+                        if (std::isnan(pos.x) || std::isnan(pos.y) || std::isnan(pos.z)) {
+                            if (g_LogFile.is_open()) g_LogFile << "[WARN] NaN Position for NPC " << id << ". Skipping." << std::endl;
+                            continue;
+                        }
                         analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_LOW, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidLow);
                         analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_HIGH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidHigh);
                         analyzer.ReadBool(procId, entity_ptr + ENTITY_ENEMY_ATTACKING, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->inCombat);
@@ -495,7 +568,7 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
             analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x30, guidLowBag4);
             analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x38, guidHighBag4);
 
-            g_GameState->globalState.bagFreeSlots = 0;
+            g_GameState->player.bagFreeSlots = 0;
             for (auto& entity : entityList) {
                 if (entity.entityPtr != newPlayer.playerPtr && entity.info) {
                     // Use std::dynamic_pointer_cast for shared_ptr
@@ -556,7 +629,7 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                                 }
                             }
                         }
-                        g_GameState->globalState.bagFreeSlots += bag->freeSlots;
+                        g_GameState->player.bagFreeSlots += bag->freeSlots;
                     }
                 }
                 // If in repair mode update npc Guid when in range
@@ -571,8 +644,11 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
             }
         }
     }
+    catch (const std::exception& e) {
+        if (g_LogFile.is_open()) g_LogFile << "[EXCEPTION] In ExtractEntities: " << e.what() << std::endl;
+    }
     catch (...) {
-        g_LogFile << "Memory Read Failed" << std::endl;
+        if (g_LogFile.is_open()) g_LogFile << "[CRITICAL] Unknown Exception in ExtractEntities!" << std::endl;
     }
 
     return;
@@ -637,7 +713,7 @@ void MainThread(HMODULE hModule) {
         // Write to global file
         if (g_LogFile.is_open()) {
             g_LogFile << msg << std::endl;
-            // g_LogFile.flush(); // Only flush if debugging a crash, otherwise remove for speed
+            g_LogFile.flush(); // Only flush if debugging a crash, otherwise remove for speed
         }
         std::cout << msg << std::endl;
         };
@@ -824,6 +900,9 @@ void MainThread(HMODULE hModule) {
                             if (g_GameState->gatherState.enabled == true) {
                                 UpdateGatherTarget(g_GameStateInstance);
                             }
+                            if (g_GameState->player.bagFreeSlots <= 2) {
+                                Resupply(530, 1, Vector3{ 228.16f, 7933.88f, 25.08f }, 18245);
+                            }
                         }
 
                         // Sync Overlay Position
@@ -838,15 +917,15 @@ void MainThread(HMODULE hModule) {
                         // 2. Update Camera with ACTUAL window size
                         cam.UpdateScreenSize(width, height);
 
-                        //overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
-                        //for (size_t i = g_GameState->globalState.activeIndex; i < min(g_GameState->globalState.activeIndex + 6, g_GameState->globalState.activePath.size()); ++i) {
-                        //    int screenPosx, screenPosy;
-                        //    if (i >= g_GameState->globalState.activePath.size()) break;
-                        //    if (cam.WorldToScreen(g_GameState->globalState.activePath[i].pos, screenPosx, screenPosy)) {
-                        //        // Draw a line using your overlay's draw list
-                        //        overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
-                        //    }
-                        //}
+                        overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
+                        for (size_t i = g_GameState->globalState.activeIndex; i < min(g_GameState->globalState.activeIndex + 6, g_GameState->globalState.activePath.size()); ++i) {
+                            int screenPosx, screenPosy;
+                            if (i >= g_GameState->globalState.activePath.size()) break;
+                            if (cam.WorldToScreen(g_GameState->globalState.activePath[i].pos, screenPosx, screenPosy)) {
+                                // Draw a line using your overlay's draw list
+                                overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
+                            }
+                        }
                         
 						uint32_t repairId = 0;
                         uint32_t mapId = 0;
@@ -892,7 +971,7 @@ void MainThread(HMODULE hModule) {
                             break;
 						}*/
 
-                        Sleep(50); // Prevent high CPU usage
+                        Sleep(10); // Prevent high CPU usage
                         try {
                             if (!isPaused) agent.Tick();
                         }
@@ -935,11 +1014,6 @@ void MainThread(HMODULE hModule) {
     }
 
     log("Unloading...");
-    
-    // 1. Wait for GUI thread to close naturally
-    if (guiThread.joinable()) {
-        guiThread.join();
-    }
 
     // 2. Clean up Console Streams
     if (fDummy) fclose(fDummy);

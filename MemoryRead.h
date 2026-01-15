@@ -245,10 +245,10 @@ public:
             nullptr
         );
 
-        if (!result) {
+        if (!result || operation.BytesProcessed != size) {
             // ONLY print error if NOT quiet
             if (!quiet) {
-                std::cerr << "DeviceIoControl failed. Error: " << GetLastError() << std::endl;
+                g_LogFile << "DeviceIoControl failed. Error: " << GetLastError() << std::endl;
             }
             return false;
         }

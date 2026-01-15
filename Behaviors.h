@@ -50,3 +50,10 @@ void FollowPath(int mapId, string myPath, bool looping, bool flyingPath) {
     g_GameState->pathFollowState.hasPath = true;
     g_GameState->pathFollowState.flyingPath = flyingPath;
 }
+
+void Resupply(int mapId, int numTimes, Vector3 vendorPosition, int vendorId) {
+    g_GameState->interactState.location = { vendorPosition };
+    g_GameState->interactState.interactId = vendorId;
+    g_GameState->interactState.interactTimes = numTimes;
+    g_GameState->interactState.interactActive = true;
+}

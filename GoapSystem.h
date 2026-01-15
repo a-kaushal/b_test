@@ -153,8 +153,8 @@ public:
 
         case STATE_CREATE_PATH:
             // Assuming CalculatePath is available globally or via included header
-            currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530, player.isFlying, g_GameState->globalState.ignoreUnderWater);
             g_LogFile << "Target Pos x: " << targetPos.x << " | Target Pos y: " << targetPos.y << " | Target Pos z: " << targetPos.z << std::endl;
+            currentPath = CalculatePath({ targetPos }, player.position, 0, fly, 530, player.isFlying, g_GameState->globalState.ignoreUnderWater);
             if (currentPath.empty()) {
                 g_LogFile << "Path is empty" << std::endl;
                 failedPath = true;
@@ -1709,15 +1709,18 @@ public:
                 std::vector<Vector3> empty = {};
                 if (state.pathFollowState.path.size() > 0) {
                     state.waypointReturnState.savedPath = state.pathFollowState.path;
-                    //state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.pathFollowState.path, state.player.position);
+                    state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.pathFollowState.path, state.player.position);
+                    g_LogFile << "Closest Waypoint: " << state.waypointReturnState.savedIndex;
                     state.waypointReturnState.savedIndex = state.pathFollowState.index;
+                    g_LogFile << "Closest Waypoint: " << state.pathFollowState.path.size() << std::endl;
                 }
             }
             else if (bestAction->GetName() == "Repair Equipment") {
                 std::vector<Vector3> empty = {};
                 if (state.interactState.path.size() > 0) {
                     state.waypointReturnState.savedPath = state.interactState.path;
-                    state.waypointReturnState.savedIndex = state.interactState.index;
+                    state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.interactState.path, state.player.position);
+                    //state.waypointReturnState.savedIndex = state.interactState.index;
                 }
             }
             /*if (bestAction->GetName() == "Gather Node") {

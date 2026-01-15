@@ -201,20 +201,36 @@ void StartGuiThread(HMODULE hDllInst) {
         return;
     }
 
-    ShowWindow(hwnd, SW_SHOW);
+    try {
 
-    // 4. MESSAGE LOOP
-    MSG msg = { 0 };
-    while (g_IsRunning) {
-        while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) {
-                g_IsRunning = false;
-                break;
+        ShowWindow(hwnd, SW_SHOW);
+
+        // 4. MESSAGE LOOP
+        MSG msg = { 0 };
+        while (g_IsRunning) {
+            while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
+                if (msg.message == WM_QUIT) {
+                    g_IsRunning = false;
+                    break;
+                }
+                TranslateMessage(&msg);
+                DispatchMessageA(&msg);
             }
-            TranslateMessage(&msg);
-            DispatchMessageA(&msg);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    catch (const std::exception& e) {
+        // Log the error safely
+        if (FILE* f = fopen("C:\\Driver\\SMM_Crash_GUI.log", "a")) {
+            fprintf(f, "[GUI CRASH] Exception: %s\n", e.what());
+            fclose(f);
+        }
+    }
+    catch (...) {
+        if (FILE* f = fopen("C:\\Driver\\SMM_Crash_GUI.log", "a")) {
+            fprintf(f, "[GUI CRASH] Unknown exception.\n");
+            fclose(f);
+        }
     }
 
     // 5. CLEANUP SEQUENCE (CRITICAL)

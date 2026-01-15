@@ -179,8 +179,8 @@ inline Matrix4x4 MatrixPerspectiveFovRH(float fovY, float aspect, float zn, floa
 
 // Finds the closest waypoint in a path to the input position
 inline int FindClosestWaypoint(std::vector<Vector3>& path, std::vector<PathNode>& pathNode, Vector3& position) {
-
-    if (path.empty()) return -1;
+    std::ofstream log("C:\\Driver\\SMM_Debug.log", std::ios::app);
+    if (path.empty() && pathNode.empty()) return -1;
 
     int closestIndex = 0;
     float minDistance = (std::numeric_limits<float>::max)();
@@ -188,7 +188,7 @@ inline int FindClosestWaypoint(std::vector<Vector3>& path, std::vector<PathNode>
     if (path.size() > 0) {
         for (size_t i = 0; i < path.size(); ++i) {
             float dist = position.Dist3D(path[i]);
-            //g_LogFile << "Distance : " << dist << " | minDistance: " << minDistance << " | closestIndex: " << closestIndex << std::endl;
+            //log << "Distance : " << dist << " | minDistance: " << minDistance << " | closestIndex: " << closestIndex << std::endl;
             if (dist < minDistance) {
                 minDistance = dist;
                 closestIndex = (int)i;
@@ -198,13 +198,14 @@ inline int FindClosestWaypoint(std::vector<Vector3>& path, std::vector<PathNode>
     else if (pathNode.size() > 0) {
         for (size_t i = 0; i < pathNode.size(); ++i) {
             float dist = position.Dist3D(pathNode[i].pos);
-            //g_LogFile << "Distance : " << dist << " | minDistance: " << minDistance << " | closestIndex: " << closestIndex << std::endl;
+            //log << "Distance : " << dist << " | minDistance: " << minDistance << " | closestIndex: " << closestIndex << std::endl;
             if (dist < minDistance) {
                 minDistance = dist;
                 closestIndex = (int)i;
             }
         }
     }
+    log.close();
 
     return closestIndex;
 }
