@@ -1625,7 +1625,6 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
 
     std::vector<PathNode> stitchedPath;
     std::vector<Vector3> modifiedInput;
-    g_LogFile << "A" << std::endl;
     if (inputPath.empty() || currentIndex < 0 || currentIndex >= inputPath.size()) return {};
 
     if (!path_loop) {
@@ -1724,9 +1723,7 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
             else {
                 // Normal logic: use requested path type
                 if (flying) {
-                    g_LogFile << "A" << std::endl;
                     segment = Calculate3DFlightPath(start, end, mapId, isFlying);
-                    g_LogFile << "A" << std::endl;
                     if (segment.empty()) {
                         // segment = FindPath(start, end, ignoreWater);
                         return segment;
@@ -1764,7 +1761,6 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
 
     // Don't subdivide hybrid paths - they're already properly segmented
     if (flying) {
-        g_LogFile << "C" << std::endl;
         // Check if this is a hybrid path (has both high and low altitude sections)
         bool isHybrid = false;
         if (stitchedPath.size() > 5) {
@@ -1778,12 +1774,10 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
             isHybrid = (maxZ - minZ) > 30.0f && stitchedPath.size() > 20;
         }
 
-        g_LogFile << "C" << std::endl;
         if (!isHybrid) {
             stitchedPath = SubdivideFlightPath(stitchedPath, mapId);
         }
 
-        g_LogFile << "C" << std::endl;
         // NEW: Only clean GROUND nodes in flight paths
         for (auto& node : stitchedPath) {
             if (node.type == PATH_GROUND) {
@@ -1794,14 +1788,11 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
             }
         }
 
-        g_LogFile << "C" << std::endl;
         return stitchedPath;
     }
     else {
-        g_LogFile << "D" << std::endl;
         stitchedPath = globalNavMesh.SubdivideOnMesh(stitchedPath);
         CleanPathGroundZ(stitchedPath, mapId);
-        g_LogFile << "D" << std::endl;
         return stitchedPath;
     }
 }

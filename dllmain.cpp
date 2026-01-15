@@ -259,7 +259,7 @@ void GUIDBreakdown(uint32_t& low_counter, uint32_t& type_field, uint32_t& instan
     server_id = (uint32_t)get_bits_u128(guidLow, guidHigh, 106, 16);  // bits 106..121
 }
 
-void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray, int hashArrayMaximum, ULONG_PTR entityArray, PlayerInfo& playerInfo, 
+void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray, int hashArrayMaximum, ULONG_PTR entityArray, int entityArraySize, PlayerInfo& playerInfo, 
     std::vector<GameEntity>& entityList, GoapAgent& agent, bool playerOnly = false) {
     if (!playerOnly) {
         entityList.clear(); // Reuse memory capacity
@@ -296,265 +296,275 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                 std::cerr << "Player pointer is invalid, reading all entities!" << std::endl;
             }
         }
+        // 1. Bulk Read Hash Array
+        std::vector<HashNode> buffer(hashArrayMaximum);
+        analyzer.ReadBuffer(procId, hashArray, buffer.data(), hashArrayMaximum * sizeof(HashNode));
+
+        // 2. [NEW] Bulk Read Entity Pointers (Saves 2000+ driver calls/sec)
+        std::vector<DWORD_PTR> ptrBuffer(entityArraySize);
+        analyzer.ReadBuffer(procId, entityArray, ptrBuffer.data(), entityArraySize * sizeof(DWORD_PTR));
 
         // 1. Read the WHOLE array in one shot
-        std::vector<HashNode> buffer(hashArrayMaximum);
-        if (analyzer.ReadBuffer(procId, hashArray, buffer.data(), hashArrayMaximum * sizeof(HashNode))) {
-            for (int i = 0; i < hashArrayMaximum; ++i) {
-                ULONG_PTR EntryGuidLow = buffer[i].GuidLow;
-                ULONG_PTR EntryGuidHigh = buffer[i].GuidHigh;
-                ULONG_PTR EntityIndex = buffer[i].EntityIndex;
+        for (int i = 0; i < hashArrayMaximum; ++i) {
+            ULONG_PTR EntryGuidLow = buffer[i].GuidLow;
+            ULONG_PTR EntryGuidHigh = buffer[i].GuidHigh;
+            ULONG_PTR EntityIndex = buffer[i].EntityIndex;
 
-                //analyzer.ReadPointer(procId, hashArray + (i * 24), EntryGuidLow);
-                //analyzer.ReadPointer(procId, hashArray + (i * 24) + 0x8, EntryGuidHigh);
-                //analyzer.ReadPointer(procId, hashArray + (i * 24) + 0x10, EntityIndex);
+            //analyzer.ReadPointer(procId, hashArray + (i * 24), EntryGuidLow);
+            //analyzer.ReadPointer(procId, hashArray + (i * 24) + 0x8, EntryGuidHigh);
+            //analyzer.ReadPointer(procId, hashArray + (i * 24) + 0x10, EntityIndex);
 
-                long EntInd = EntityIndex & 0x3FFFFFFF;
+            long EntInd = EntityIndex & 0x3FFFFFFF;
 
-                // Valid check
-                if (!(EntryGuidHigh == 0 && EntryGuidLow == 0) && !(EntryGuidLow == 1 && EntryGuidHigh == 0x400000000000000)) {
+            if (EntInd < 0 || EntInd >= entityArraySize) {
+                continue; // Skip invalid indices prevents reading out of bounds
+            }
 
-                    DWORD_PTR entityBuilderPtr = 0, entity_ptr = 0;
-                    int32_t objType = 0;
-                    ULONG_PTR guidLow = 0, guidHigh = 0;
+            // Valid check
+            if (!(EntryGuidHigh == 0 && EntryGuidLow == 0) && !(EntryGuidLow == 1 && EntryGuidHigh == 0x400000000000000)) {
 
-                    if (!analyzer.ReadPointer(procId, entityArray + ((int)EntInd * ENTITY_BUILDER_ARRAY_ITEM), entityBuilderPtr)) continue;
-                    if (!analyzer.ReadPointer(procId, entityBuilderPtr + ENTITY_ENTRY_OFFSET, entity_ptr)) continue;
-                    if (!analyzer.ReadInt32(procId, entity_ptr + ENTITY_OBJECT_TYPE_OFFSET, objType)) continue;
-                    analyzer.ReadPointer(procId, entity_ptr + ENTITY_GUID_LOW_OFFSET, guidLow);
-                    analyzer.ReadPointer(procId, entity_ptr + ENTITY_GUID_HIGH_OFFSET, guidHigh);
-                    uint32_t low_counter, type_field, instance, id, map_id, server_id;
-                    GUIDBreakdown(low_counter, type_field, instance, id, map_id, server_id, guidLow, guidHigh);
+                DWORD_PTR entityBuilderPtr = ptrBuffer[EntInd];
+                DWORD_PTR entity_ptr = 0;
+                int32_t objType = 0;
+                ULONG_PTR guidLow = 0, guidHigh = 0;
 
-                    // Filter for specific types
-                    if ((objType == 3) || (objType == 7) || (objType == 33) || (objType == 225) || (objType == 257)) {
+                //if (!analyzer.ReadPointer(procId, entityArray + ((int)EntInd * ENTITY_BUILDER_ARRAY_ITEM), entityBuilderPtr)) continue;
+                if (entityBuilderPtr == 0) continue;
+                if (!analyzer.ReadPointer(procId, entityBuilderPtr + ENTITY_ENTRY_OFFSET, entity_ptr)) continue;
+                if (!analyzer.ReadInt32(procId, entity_ptr + ENTITY_OBJECT_TYPE_OFFSET, objType)) continue;
+                analyzer.ReadPointer(procId, entity_ptr + ENTITY_GUID_LOW_OFFSET, guidLow);
+                analyzer.ReadPointer(procId, entity_ptr + ENTITY_GUID_HIGH_OFFSET, guidHigh);
+                uint32_t low_counter, type_field, instance, id, map_id, server_id;
+                GUIDBreakdown(low_counter, type_field, instance, id, map_id, server_id, guidLow, guidHigh);
 
-                        // 3. Store the data in our struct
-                        GameEntity newEntity;
-                        newEntity.guidLow = EntryGuidLow;
-                        newEntity.guidHigh = EntryGuidHigh;
-                        newEntity.entityIndex = EntInd;
-                        newEntity.entityPtr = entity_ptr;
-                        newEntity.type = objType;
-                        if (objType == 3) {
-                            newEntity.objType = "Item";
-                            auto itemInfo = std::make_shared<ItemInfo>();
-                            newEntity.info = itemInfo;
+                // Filter for specific types
+                if ((objType == 3) || (objType == 7) || (objType == 33) || (objType == 225) || (objType == 257)) {
 
-                            analyzer.ReadInt32(procId, entity_ptr + PLAYER_ITEM_QUANTITY, std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->stackCount);
-                            analyzer.ReadPointer(procId, entity_ptr + PLAYER_BAG_LOW_GUID, std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->bagGuidLow);
-                            analyzer.ReadPointer(procId, entity_ptr + PLAYER_BAG_HIGH_GUID, std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->bagGuidHigh);
-                            analyzer.ReadUInt32(procId, entity_ptr + PLAYER_BAG_ITEM_ID, std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->id);
+                    // 3. Store the data in our struct
+                    GameEntity newEntity;
+                    newEntity.guidLow = EntryGuidLow;
+                    newEntity.guidHigh = EntryGuidHigh;
+                    newEntity.entityIndex = EntInd;
+                    newEntity.entityPtr = entity_ptr;
+                    newEntity.type = objType;
+                    if (objType == 3) {
+                        newEntity.objType = "Item";
+                        auto itemInfo = std::make_shared<ItemInfo>();
+                        newEntity.info = itemInfo;
 
-                            id = std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->id;
+                        analyzer.ReadInt32(procId, entity_ptr + PLAYER_ITEM_QUANTITY, std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->stackCount);
+                        analyzer.ReadPointer(procId, entity_ptr + PLAYER_BAG_LOW_GUID, std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->bagGuidLow);
+                        analyzer.ReadPointer(procId, entity_ptr + PLAYER_BAG_HIGH_GUID, std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->bagGuidHigh);
+                        analyzer.ReadUInt32(procId, entity_ptr + PLAYER_BAG_ITEM_ID, std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->id);
 
-                            string rawData = item_db.getRawLine(std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->id);
+                        id = std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->id;
+
+                        string rawData = item_db.getRawLine(std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->id);
+                        if (!rawData.empty()) {
+                            std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->name = item_db.getColumn(rawData, ITEM_NAME_COLUMN_INDEX);
+                        }
+                    }
+                    if (objType == 7) {
+                        newEntity.objType = "Bag";
+                        auto bagInfo = std::make_shared<BagInfo>();
+                        newEntity.info = bagInfo;
+
+                        analyzer.ReadUInt32(procId, entity_ptr + PLAYER_BAG_ITEM_ID, std::dynamic_pointer_cast<BagInfo>(newEntity.info)->id);
+                        analyzer.ReadInt32(procId, entity_ptr + PLAYER_BAG_SLOTS, std::dynamic_pointer_cast<BagInfo>(newEntity.info)->bagSlots);
+
+                        id = std::dynamic_pointer_cast<BagInfo>(newEntity.info)->id;
+                    }
+                    if (objType == 33) {
+                        newEntity.objType = "NPC";
+                        auto enemyInfo = std::make_shared<EnemyInfo>();
+                        newEntity.info = enemyInfo;
+
+                        analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_X_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.x);
+                        analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Y_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.y);
+                        analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Z_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.z);
+                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_LOW, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidLow);
+                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_HIGH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidHigh);
+                        analyzer.ReadBool(procId, entity_ptr + ENTITY_ENEMY_ATTACKING, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->inCombat);
+                        analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->health);
+                        analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_MAX_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->maxHealth);
+                        std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id = id;
+
+                        creature_db.getCreatureReaction(std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id, true, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->reaction);
+                        if (id > 0 && id < 200000) {
+                            string rawData = creature_db.getRawLine(id);
+
                             if (!rawData.empty()) {
-                                std::dynamic_pointer_cast<ItemInfo>(newEntity.info)->name = item_db.getColumn(rawData, ITEM_NAME_COLUMN_INDEX);
-                            }
-                        }
-                        if (objType == 7) {
-                            newEntity.objType = "Bag";
-                            auto bagInfo = std::make_shared<BagInfo>();
-                            newEntity.info = bagInfo;
+                                auto enemyInfo = std::dynamic_pointer_cast<EnemyInfo>(newEntity.info);
+                                enemyInfo->name = creature_db.getColumn(rawData, ENEMY_NAME_COLUMN_INDEX);
 
-                            analyzer.ReadUInt32(procId, entity_ptr + PLAYER_BAG_ITEM_ID, std::dynamic_pointer_cast<BagInfo>(newEntity.info)->id);
-                            analyzer.ReadInt32(procId, entity_ptr + PLAYER_BAG_SLOTS, std::dynamic_pointer_cast<BagInfo>(newEntity.info)->bagSlots);
-
-                            id = std::dynamic_pointer_cast<BagInfo>(newEntity.info)->id;
-                        }
-                        if (objType == 33) {
-                            newEntity.objType = "NPC";
-                            auto enemyInfo = std::make_shared<EnemyInfo>();
-                            newEntity.info = enemyInfo;
-
-                            analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_X_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.x);
-                            analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Y_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.y);
-                            analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Z_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.z);
-                            analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_LOW, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidLow);
-                            analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_HIGH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidHigh);
-                            analyzer.ReadBool(procId, entity_ptr + ENTITY_ENEMY_ATTACKING, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->inCombat);
-                            analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->health);
-                            analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_MAX_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->maxHealth);
-                            std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id = id;
-
-                            creature_db.getCreatureReaction(std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id, true, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->reaction);
-                            if (id > 0 && id < 200000) {
-                                string rawData = creature_db.getRawLine(id);
-
-                                if (!rawData.empty()) {
-                                    auto enemyInfo = std::dynamic_pointer_cast<EnemyInfo>(newEntity.info);
-                                    enemyInfo->name = creature_db.getColumn(rawData, ENEMY_NAME_COLUMN_INDEX);
-
-                                    // SAFE PARSING REPLACEMENT
-                                    try {
-                                        std::string flagStr = creature_db.getColumn(rawData, NPC_FLAG_COLUMN_INDEX);
-                                        if (!flagStr.empty()) {
-                                            enemyInfo->npcFlag = std::stoi(flagStr);
-                                        }
-                                        else {
-                                            enemyInfo->npcFlag = 0; // Default value
-                                        }
+                                // SAFE PARSING REPLACEMENT
+                                try {
+                                    std::string flagStr = creature_db.getColumn(rawData, NPC_FLAG_COLUMN_INDEX);
+                                    if (!flagStr.empty()) {
+                                        enemyInfo->npcFlag = std::stoi(flagStr);
                                     }
-                                    catch (...) {
-                                        enemyInfo->npcFlag = 0; // Fallback on error
+                                    else {
+                                        enemyInfo->npcFlag = 0; // Default value
                                     }
+                                }
+                                catch (...) {
+                                    enemyInfo->npcFlag = 0; // Fallback on error
                                 }
                             }
                         }
-                        if (objType == 225) {
-                            newEntity.objType = "Player";
-                            newEntity.info = nullptr;
-                            newPlayer.playerPtr = entity_ptr;
-
-                            analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_X_OFFSET, newPlayer.position.x);
-                            analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Y_OFFSET, newPlayer.position.y);
-                            analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Z_OFFSET, newPlayer.position.z);
-                            analyzer.ReadFloat(procId, entity_ptr + ENTITY_ROTATION_OFFSET, newPlayer.rotation);
-                            analyzer.ReadFloat(procId, entity_ptr + ENTITY_VERTICAL_ROTATION_OFFSET, newPlayer.vertRotation);
-                            analyzer.ReadUInt32(procId, entity_ptr + ENTITY_PLAYER_STATE_OFFSET, newPlayer.state);
-                            analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_IN_COMBAT_GUID_LOW, newPlayer.inCombatGuidLow);
-                            analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_IN_COMBAT_GUID_HIGH, newPlayer.inCombatGuidLow);
-                            analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_TARGET_GUID_LOW, newPlayer.targetGuidLow);
-                            analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_TARGET_GUID_HIGH, newPlayer.targetGuidHigh);
-
-                            (((newPlayer.state & (1 << 11)) >> 11) == 1) ? newPlayer.inAir = true : newPlayer.inAir = false;
-                            (((newPlayer.state & (1 << 24)) >> 24) == 1) ? newPlayer.isFlying = true : newPlayer.isFlying = false;
-                            (((newPlayer.state & (1 << 26)) >> 26) == 1) ? newPlayer.isDead = true : newPlayer.isDead = false;
-                            (((newPlayer.state & (1 << 23)) >> 23) == 1) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
-                            (((newPlayer.state & (1 << 20)) >> 20) == 1) ? newPlayer.inWater = true : newPlayer.inWater = false;
-
-                            if (newPlayer.isFlying == false) {
-                                newPlayer.onGround = true;
-                            }
-
-                            analyzer.ReadUInt32(procId, entity_ptr + ENTITY_PLAYER_MOUNT_STATE, newPlayer.mountState);
-                            //(newPlayer.mountState == 2) ? newPlayer.groundMounted = true : newPlayer.groundMounted = false;
-                            (newPlayer.mountState == 1) ? newPlayer.isMounted = true : newPlayer.isMounted = false;
-
-                            analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_HEALTH, newPlayer.health);
-                            analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_MAX_HEALTH, newPlayer.maxHealth);
-                            analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_LEVEL, newPlayer.level);
-                            std::cout << "Player Health: " << std::dec << newPlayer.health << std::fixed << std::setprecision(2) << "  Player Rotation: " << newPlayer.rotation << "  Player Pos: ("
-                                << newPlayer.position.x << ", " << newPlayer.position.y << ", " << newPlayer.position.z << ")" << "  Player Flying: " << std::dec << newPlayer.isFlying << "  Player Water: "
-                                << newPlayer.inWater << "  Player Ground Mount: " << newPlayer.groundMounted << "  Player Flying Mount: " << newPlayer.flyingMounted << std::endl;
-
-                            newPlayer.playerGuidLow = guidLow;
-                            newPlayer.playerGuidHigh = guidHigh;
-                            newPlayer.mapId = map_id;
-
-                            playerInfo = newPlayer;
-                        }
-                        if (objType == 257) {
-                            if (id == 0)
-                                continue;
-                            newEntity.objType = "Object";
-                            auto objInfo = std::make_shared<ObjectInfo>();
-                            newEntity.info = objInfo;
-
-                            analyzer.ReadFloat(procId, entity_ptr + OBJECT_POSITION_X_OFFSET, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->position.x);
-                            analyzer.ReadFloat(procId, entity_ptr + OBJECT_POSITION_Y_OFFSET, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->position.y);
-                            analyzer.ReadFloat(procId, entity_ptr + OBJECT_POSITION_Z_OFFSET, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->position.z);
-                            analyzer.ReadInt32(procId, entity_ptr + OBJECT_COLLECTED_OFFSET, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->nodeActive);
-                            std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->id = id;
-                            object_db.getGatherInfo(std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->id, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->skillLevel, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->type);
-                            string rawData = object_db.getRawLine(id);
-
-                            if (!rawData.empty()) {
-                                std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->name = object_db.getColumn(rawData, OBJ_NAME_COLUMN_INDEX);
-                            }
-                        }
-                        newEntity.id = id;
-                        newEntity.mapId = map_id;
-
-                        // Add to our list
-                        entityList.push_back(newEntity);
                     }
+                    if (objType == 225) {
+                        newEntity.objType = "Player";
+                        newEntity.info = nullptr;
+                        newPlayer.playerPtr = entity_ptr;
+
+                        analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_X_OFFSET, newPlayer.position.x);
+                        analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Y_OFFSET, newPlayer.position.y);
+                        analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Z_OFFSET, newPlayer.position.z);
+                        analyzer.ReadFloat(procId, entity_ptr + ENTITY_ROTATION_OFFSET, newPlayer.rotation);
+                        analyzer.ReadFloat(procId, entity_ptr + ENTITY_VERTICAL_ROTATION_OFFSET, newPlayer.vertRotation);
+                        analyzer.ReadUInt32(procId, entity_ptr + ENTITY_PLAYER_STATE_OFFSET, newPlayer.state);
+                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_IN_COMBAT_GUID_LOW, newPlayer.inCombatGuidLow);
+                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_IN_COMBAT_GUID_HIGH, newPlayer.inCombatGuidLow);
+                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_TARGET_GUID_LOW, newPlayer.targetGuidLow);
+                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_TARGET_GUID_HIGH, newPlayer.targetGuidHigh);
+
+                        (((newPlayer.state & (1 << 11)) >> 11) == 1) ? newPlayer.inAir = true : newPlayer.inAir = false;
+                        (((newPlayer.state & (1 << 24)) >> 24) == 1) ? newPlayer.isFlying = true : newPlayer.isFlying = false;
+                        (((newPlayer.state & (1 << 26)) >> 26) == 1) ? newPlayer.isDead = true : newPlayer.isDead = false;
+                        (((newPlayer.state & (1 << 23)) >> 23) == 1) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
+                        (((newPlayer.state & (1 << 20)) >> 20) == 1) ? newPlayer.inWater = true : newPlayer.inWater = false;
+
+                        if (newPlayer.isFlying == false) {
+                            newPlayer.onGround = true;
+                        }
+
+                        analyzer.ReadUInt32(procId, entity_ptr + ENTITY_PLAYER_MOUNT_STATE, newPlayer.mountState);
+                        //(newPlayer.mountState == 2) ? newPlayer.groundMounted = true : newPlayer.groundMounted = false;
+                        (newPlayer.mountState == 1) ? newPlayer.isMounted = true : newPlayer.isMounted = false;
+
+                        analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_HEALTH, newPlayer.health);
+                        analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_MAX_HEALTH, newPlayer.maxHealth);
+                        analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_LEVEL, newPlayer.level);
+                        std::cout << "Player Health: " << std::dec << newPlayer.health << std::fixed << std::setprecision(2) << "  Player Rotation: " << newPlayer.rotation << "  Player Pos: ("
+                            << newPlayer.position.x << ", " << newPlayer.position.y << ", " << newPlayer.position.z << ")" << "  Player Flying: " << std::dec << newPlayer.isFlying << "  Player Water: "
+                            << newPlayer.inWater << "  Player Ground Mount: " << newPlayer.groundMounted << "  Player Flying Mount: " << newPlayer.flyingMounted << std::endl;
+
+                        newPlayer.playerGuidLow = guidLow;
+                        newPlayer.playerGuidHigh = guidHigh;
+                        newPlayer.mapId = map_id;
+
+                        playerInfo = newPlayer;
+                    }
+                    if (objType == 257) {
+                        if (id == 0)
+                            continue;
+                        newEntity.objType = "Object";
+                        auto objInfo = std::make_shared<ObjectInfo>();
+                        newEntity.info = objInfo;
+
+                        analyzer.ReadFloat(procId, entity_ptr + OBJECT_POSITION_X_OFFSET, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->position.x);
+                        analyzer.ReadFloat(procId, entity_ptr + OBJECT_POSITION_Y_OFFSET, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->position.y);
+                        analyzer.ReadFloat(procId, entity_ptr + OBJECT_POSITION_Z_OFFSET, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->position.z);
+                        analyzer.ReadInt32(procId, entity_ptr + OBJECT_COLLECTED_OFFSET, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->nodeActive);
+                        std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->id = id;
+                        object_db.getGatherInfo(std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->id, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->skillLevel, std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->type);
+                        string rawData = object_db.getRawLine(id);
+
+                        if (!rawData.empty()) {
+                            std::dynamic_pointer_cast<ObjectInfo>(newEntity.info)->name = object_db.getColumn(rawData, OBJ_NAME_COLUMN_INDEX);
+                        }
+                    }
+                    newEntity.id = id;
+                    newEntity.mapId = map_id;
+
+                    // Add to our list
+                    entityList.push_back(newEntity);
                 }
             }
-            ULONG_PTR guidLowBag1, guidHighBag1, guidLowBag2, guidHighBag2, guidLowBag3, guidHighBag3, guidLowBag4, guidHighBag4;
-            if (newPlayer.position.x != 0) {
+        }
+        ULONG_PTR guidLowBag1, guidHighBag1, guidLowBag2, guidHighBag2, guidLowBag3, guidHighBag3, guidLowBag4, guidHighBag4;
+        if (newPlayer.position.x != 0) {
 
-                analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET, guidLowBag1);
-                analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x8, guidHighBag1);
-                analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x10, guidLowBag2);
-                analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x18, guidHighBag2);
-                analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x20, guidLowBag3);
-                analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x28, guidHighBag3);
-                analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x30, guidLowBag4);
-                analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x38, guidHighBag4);
+            analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET, guidLowBag1);
+            analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x8, guidHighBag1);
+            analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x10, guidLowBag2);
+            analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x18, guidHighBag2);
+            analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x20, guidLowBag3);
+            analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x28, guidHighBag3);
+            analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x30, guidLowBag4);
+            analyzer.ReadPointer(procId, newPlayer.playerPtr + ENTITY_PLAYER_BAG_OFFSET + 0x38, guidHighBag4);
 
-                g_GameState->globalState.bagFreeSlots = 0;
-                for (auto& entity : entityList) {
-                    if (entity.entityPtr != newPlayer.playerPtr && entity.info) {
-                        // Use std::dynamic_pointer_cast for shared_ptr
-                        if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
-                            playerInfo.mapId = entity.mapId;
-                            enemy->distance = enemy->position.Dist3D(newPlayer.position);
+            g_GameState->globalState.bagFreeSlots = 0;
+            for (auto& entity : entityList) {
+                if (entity.entityPtr != newPlayer.playerPtr && entity.info) {
+                    // Use std::dynamic_pointer_cast for shared_ptr
+                    if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
+                        playerInfo.mapId = entity.mapId;
+                        enemy->distance = enemy->position.Dist3D(newPlayer.position);
 
-                            string rawdata = creature_db.getRawLine(enemy->id);
-                            // Fast Lookup
-                            CreatureTemplateEntry* c = creature_db.getCreatureTemplate(enemy->id);
-                            if (c == nullptr) {
-                                g_LogFile << "Creature Template Entry with ID " << enemy->id << " not found." << std::endl;
-                            }
-                            else {
-                                // 1. Check Reaction
-                                if (enemy->reaction == REACTION_HOSTILE) {
-                                    // 3. Calculate Range
-                                    float range = 20.0f - (float)(newPlayer.level - enemy->level);
-                                    // 2. Check Passive Flag (0x0200 = UNIT_FLAG_PASSIVE)
-                                    if (c->UnitFlags & 512); //g_LogFile << "Creature Template Entry with ID " << enemy->id << " passive flag." << std::endl;
-                                    else {
-                                        // 4. Elite/Boss Bonus
-                                        if (c->Rank >= 1) range += 10.0f; // Elite
-                                        if (c->Rank == 3) range = 100.0f; // Boss
-                                        // 5. Clamp
-                                        if (range < 5.0f) range = 5.0f;
-                                        if (range > 45.0f && c->Rank < 3) range = 45.0f;
-                                    }
-                                    enemy->agroRange = range;
+                        string rawdata = creature_db.getRawLine(enemy->id);
+                        // Fast Lookup
+                        CreatureTemplateEntry* c = creature_db.getCreatureTemplate(enemy->id);
+                        if (c == nullptr) {
+                            g_LogFile << "Creature Template Entry with ID " << enemy->id << " not found." << std::endl;
+                        }
+                        else {
+                            // 1. Check Reaction
+                            if (enemy->reaction == REACTION_HOSTILE) {
+                                // 3. Calculate Range
+                                float range = 20.0f - (float)(newPlayer.level - enemy->level);
+                                // 2. Check Passive Flag (0x0200 = UNIT_FLAG_PASSIVE)
+                                if (c->UnitFlags & 512); //g_LogFile << "Creature Template Entry with ID " << enemy->id << " passive flag." << std::endl;
+                                else {
+                                    // 4. Elite/Boss Bonus
+                                    if (c->Rank >= 1) range += 10.0f; // Elite
+                                    if (c->Rank == 3) range = 100.0f; // Boss
+                                    // 5. Clamp
+                                    if (range < 5.0f) range = 5.0f;
+                                    if (range > 45.0f && c->Rank < 3) range = 45.0f;
                                 }
-                                enemy->rank = c->Rank;
+                                enemy->agroRange = range;
                             }
-
-                        }
-                        else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(entity.info)) {
-                            object->distance = object->position.Dist3D(newPlayer.position);
+                            enemy->rank = c->Rank;
                         }
 
-                        if (auto bag = std::dynamic_pointer_cast<BagInfo>(entity.info)) {
-
-                            bag->freeSlots = bag->bagSlots;
-                            if ((entity.guidLow == guidLowBag1) && (entity.guidHigh == guidHighBag1))
-                                bag->id = 1;
-                            else if ((entity.guidLow == guidLowBag2) && (entity.guidHigh == guidHighBag2))
-                                bag->id = 2;
-                            else if ((entity.guidLow == guidLowBag3) && (entity.guidHigh == guidHighBag3))
-                                bag->id = 3;
-                            else if ((entity.guidLow == guidLowBag4) && (entity.guidHigh == guidHighBag4))
-                                bag->id = 4;
-                            else
-                                bag->id = 0;
-
-                            for (auto& itemList : entityList) {
-                                if (auto item = std::dynamic_pointer_cast<ItemInfo>(itemList.info)) {
-                                    if ((item->bagGuidLow == entity.guidLow) && (item->bagGuidHigh == entity.guidHigh)) {
-                                        bag->freeSlots = bag->freeSlots - 1;
-                                        item->bagID = bag->id;
-                                    }
-                                }
-                            }
-                            g_GameState->globalState.bagFreeSlots += bag->freeSlots;
-                        }
                     }
-                    // If in repair mode update npc Guid when in range
-                    if ((g_GameState->interactState.interactActive == true) && (g_GameState->interactState.targetGuidLow == 0) && (g_GameState->interactState.targetGuidHigh == 0)) {
-                        if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
-                            if (npc->id == g_GameState->interactState.interactId) {
-                                g_GameState->interactState.targetGuidLow = entity.guidLow;
-                                g_GameState->interactState.targetGuidHigh = entity.guidHigh;
+                    else if (auto object = std::dynamic_pointer_cast<ObjectInfo>(entity.info)) {
+                        object->distance = object->position.Dist3D(newPlayer.position);
+                    }
+
+                    if (auto bag = std::dynamic_pointer_cast<BagInfo>(entity.info)) {
+
+                        bag->freeSlots = bag->bagSlots;
+                        if ((entity.guidLow == guidLowBag1) && (entity.guidHigh == guidHighBag1))
+                            bag->id = 1;
+                        else if ((entity.guidLow == guidLowBag2) && (entity.guidHigh == guidHighBag2))
+                            bag->id = 2;
+                        else if ((entity.guidLow == guidLowBag3) && (entity.guidHigh == guidHighBag3))
+                            bag->id = 3;
+                        else if ((entity.guidLow == guidLowBag4) && (entity.guidHigh == guidHighBag4))
+                            bag->id = 4;
+                        else
+                            bag->id = 0;
+
+                        for (auto& itemList : entityList) {
+                            if (auto item = std::dynamic_pointer_cast<ItemInfo>(itemList.info)) {
+                                if ((item->bagGuidLow == entity.guidLow) && (item->bagGuidHigh == entity.guidHigh)) {
+                                    bag->freeSlots = bag->freeSlots - 1;
+                                    item->bagID = bag->id;
+                                }
                             }
+                        }
+                        g_GameState->globalState.bagFreeSlots += bag->freeSlots;
+                    }
+                }
+                // If in repair mode update npc Guid when in range
+                if ((g_GameState->interactState.interactActive == true) && (g_GameState->interactState.targetGuidLow == 0) && (g_GameState->interactState.targetGuidHigh == 0)) {
+                    if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
+                        if (npc->id == g_GameState->interactState.interactId) {
+                            g_GameState->interactState.targetGuidLow = entity.guidLow;
+                            g_GameState->interactState.targetGuidHigh = entity.guidHigh;
                         }
                     }
                 }
@@ -749,9 +759,9 @@ void MainThread(HMODULE hModule) {
                     bool lastF3State = false;
 
                     std::vector<GameEntity> persistentEntityList;
-                    persistentEntityList.reserve(1000);
+                    persistentEntityList.reserve(3000);
 
-                    ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, g_GameState->player, persistentEntityList, agent);
+                    ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, entityArraySize, g_GameState->player, persistentEntityList, agent);
                     g_GameState->entities = persistentEntityList;
 
                     std::string temp = "(-358.46, 6509.65, 116.46), (-395.20, 6475.67, 116.46), (-438.96, 6449.58, 116.46), (-482.82, 6425.01, 116.46), (-508.78, 6381.19, 116.46), (-529.89, 6335.85, 116.46), (-547.69, 6288.27, 116.46), (-568.29, 6241.66, 116.46), (-591.41, 6196.38, 116.46), (-630.93, 6164.87, 116.46), (-679.63, 6150.37, 116.46), (-728.66, 6137.20, 116.46), (-777.38, 6122.58, 116.46), (-826.50, 6112.96, 116.46), (-876.56, 6103.19, 116.46), (-926.79, 6102.21, 116.46), (-974.92, 6115.97, 116.46), (-1021.64, 6135.66, 116.46), (-1070.59, 6147.56, 116.46), (-1108.42, 6114.36, 116.46), (-1116.81, 6064.22, 116.46), (-1112.63, 6023.29, 145.06), (-1083.49, 5987.18, 164.99), (-1046.92, 5952.05, 164.99), (-1006.52, 5922.57, 164.99), (-965.26, 5892.46, 164.99), (-924.46, 5861.86, 164.99), (-915.96, 5812.52, 164.99), (-916.19, 5761.44, 164.99), (-908.62, 5711.04, 164.99), (-899.11, 5661.90, 164.99), (-855.82, 5636.18, 164.99), (-806.45, 5628.13, 164.99), (-756.05, 5619.92, 164.96), (-721.15, 5614.23, 129.60), (-682.91, 5608.00, 97.27), (-632.02, 5605.64, 97.27), (-583.31, 5593.95, 97.27), (-533.39, 5584.45, 97.27), (-483.33, 5592.52, 97.27), (-436.47, 5611.26, 97.27), (-389.20, 5630.16, 97.27), (-342.72, 5648.75, 97.27), (-295.78, 5667.52, 97.27), (-251.82, 5692.99, 97.27), (-213.12, 5725.18, 97.27), (-174.67, 5757.16, 97.27), (-125.34, 5769.89, 97.27), (-74.43, 5771.82, 97.27), (-23.49, 5774.45, 97.27), (6.49, 5734.40, 97.27), (21.24, 5686.60, 97.27), (36.31, 5637.81, 97.27), (45.13, 5588.17, 97.27), (53.44, 5538.02, 97.27), (56.05, 5487.54, 97.27), (41.91, 5438.62, 97.27), (19.79, 5392.02, 97.27), (-16.80, 5356.57, 97.27), (-51.41, 5319.75, 97.27), (-67.72, 5271.60, 97.30), (-54.05, 5223.70, 107.79), (-25.12, 5182.87, 107.79), (12.66, 5148.95, 107.79), (49.14, 5113.51, 107.79), (99.49, 5106.84, 107.79), (150.01, 5100.33, 107.79), (200.39, 5094.32, 107.79), (251.19, 5090.80, 107.79), (302.10, 5089.47, 107.79), (351.49, 5080.94, 107.79), (400.78, 5072.43, 107.79), (450.40, 5063.53, 107.79), (497.86, 5047.46, 107.79), (546.30, 5031.06, 107.79), (593.44, 5014.39, 107.79), (643.58, 5005.99, 107.79), (693.62, 5015.84, 107.79), (742.61, 5026.80, 107.79), (791.43, 5037.73, 107.79), (841.04, 5041.72, 98.02), (866.62, 5066.11, 62.65), (894.69, 5093.29, 31.05), (928.30, 5131.29, 31.05), (948.19, 5177.60, 31.05), (959.67, 5226.44, 31.05), (960.40, 5276.46, 31.05), (949.54, 5325.44, 31.05), (915.60, 5363.38, 31.05), (870.56, 5386.79, 31.05), (820.35, 5393.04, 31.05), (770.97, 5405.88, 31.05), (726.76, 5429.27, 31.05), (677.55, 5442.15, 31.05), (627.63, 5438.95, 31.05), (577.35, 5430.87, 31.05), (527.26, 5425.94, 31.05), (495.91, 5466.19, 31.05), (463.93, 5505.60, 31.05), (433.48, 5538.86, 53.98), (398.98, 5569.29, 75.79), (364.08, 5605.63, 75.79), (354.80, 5655.29, 75.79), (346.35, 5705.41, 75.79), (335.31, 5754.00, 69.02), (326.02, 5803.92, 69.02), (354.10, 5845.89, 69.02), (392.51, 5879.17, 69.02), (432.32, 5909.69, 73.53), (466.07, 5947.63, 73.53), (496.15, 5988.32, 73.53), (533.36, 6022.97, 73.53), (572.06, 6055.46, 73.53), (610.36, 6087.62, 73.53), (649.48, 6120.47, 73.53), (688.10, 6152.90, 73.53), (726.40, 6185.06, 73.53), (761.76, 6220.58, 73.53), (758.20, 6270.69, 73.53), (742.82, 6319.40, 73.53), (738.70, 6369.91, 73.53), (739.20, 6419.92, 73.53), (739.70, 6469.94, 73.53), (740.20, 6519.95, 73.53), (740.70, 6570.99, 73.53), (749.73, 6620.66, 73.53), (770.46, 6666.99, 73.53), (776.16, 6717.08, 73.53), (788.34, 6766.65, 73.53), (800.30, 6815.34, 73.53), (813.85, 6864.03, 73.53), (844.40, 6904.35, 73.53), (878.85, 6941.42, 73.53), (913.24, 6978.05, 73.53), (927.41, 7026.19, 73.53), (923.96, 7077.05, 73.53), (882.31, 7105.08, 73.53), (832.27, 7114.13, 73.53), (783.90, 7100.69, 73.53), (733.14, 7095.72, 73.53), (682.66, 7089.52, 73.53), (634.71, 7074.09, 73.53), (584.68, 7066.22, 73.53), (536.03, 7050.79, 73.53), (492.98, 7024.58, 73.53), (450.26, 6998.57, 73.53), (402.57, 6980.30, 73.53), (352.86, 6968.60, 73.53), (302.46, 6962.74, 73.53), (252.19, 6962.96, 73.53), (202.11, 6963.19, 73.53), (151.04, 6963.41, 73.53), (100.86, 6963.64, 73.53), (49.79, 6963.87, 73.53), (-0.26, 6972.52, 73.53), (-50.24, 6976.64, 73.53), (-100.09, 6980.74, 73.53), (-150.18, 6988.99, 73.53), (-198.67, 7004.94, 73.53), (-247.72, 7018.33, 73.53), (-298.02, 7014.87, 73.53), (-320.93, 6970.22, 73.53), (-334.14, 6921.07, 73.53)";
@@ -828,21 +838,23 @@ void MainThread(HMODULE hModule) {
                         // 2. Update Camera with ACTUAL window size
                         cam.UpdateScreenSize(width, height);
 
-                        overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
-                        for (size_t i = g_GameState->globalState.activeIndex; i < g_GameState->globalState.activeIndex + 6; ++i) {
-                            int screenPosx, screenPosy;
-                            if (i >= g_GameState->globalState.activePath.size()) break;
-                            if (cam.WorldToScreen(g_GameState->globalState.activePath[i].pos, screenPosx, screenPosy)) {
-                                // Draw a line using your overlay's draw list
-                                overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
-                            }
-                        }
+                        //overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
+                        //for (size_t i = g_GameState->globalState.activeIndex; i < min(g_GameState->globalState.activeIndex + 6, g_GameState->globalState.activePath.size()); ++i) {
+                        //    int screenPosx, screenPosy;
+                        //    if (i >= g_GameState->globalState.activePath.size()) break;
+                        //    if (cam.WorldToScreen(g_GameState->globalState.activePath[i].pos, screenPosx, screenPosy)) {
+                        //        // Draw a line using your overlay's draw list
+                        //        overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
+                        //    }
+                        //}
                         
 						uint32_t repairId = 0;
                         uint32_t mapId = 0;
 						Vector3 repairPos = {};
 
                         // --- FIX START: REFRESH POINTERS HERE ---
+                        // Re-read the Object Manager Base itself, because it can move too!
+                        analyzer.ReadPointer(procId, objMan_Entry + OBJECT_MANAGER_FIRST_OBJECT_OFFSET, objMan_Base);
                         // The ObjectManager may reallocate these arrays at ANY time.
                         // We must re-read the pointers every frame to ensure they are valid.
                         analyzer.ReadPointer(procId, objMan_Base + ENTITY_ARRAY_OFFSET, entityArray);
@@ -851,16 +863,27 @@ void MainThread(HMODULE hModule) {
                         analyzer.ReadPointer(procId, objMan_Base + HASH_ARRAY_OFFSET, hashArray);
                         analyzer.ReadInt32(procId, objMan_Base + HASH_ARRAY_SIZE_OFFSET, hashArraySize);
 
+                        // --- [RECOMMENDED] Sanity Check to prevent Driver Crash on bad reads ---
+                        if (hashArrayMaximum > 100000 || hashArrayMaximum < 0) {
+                            g_LogFile << "[WARNING] Garbage Hash Size: " << hashArrayMaximum << ". Skipping frame." << std::endl;
+                            continue; // Skip the rest of this loop iteration
+                        }
+
                         // 1. Extract Data
                         // LOCK before writing
                         std::lock_guard<std::mutex> lock(g_EntityMutex);
 
                         // Now it is safe to update the vector
-                        ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, g_GameState->player, persistentEntityList, agent);
+                        ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, entityArraySize, g_GameState->player, persistentEntityList, agent);
                         g_GameState->entities = persistentEntityList;
 
                         // UpdateGuiData usually reads entities too, so keep it inside the lock
-                        UpdateGuiData(g_GameState->entities);
+                        try {
+                            UpdateGuiData(g_GameState->entities);
+                        }
+                        catch (...) {
+                            g_LogFile << "[WARNING] GUI Update failed. Skipping frame." << std::endl;
+                        }
 
                         // 3. Logic (Rotation/Console Print)
                         //g_LogFile << nextKey << std::endl;
@@ -869,7 +892,7 @@ void MainThread(HMODULE hModule) {
                             break;
 						}*/
 
-                        Sleep(10); // Prevent high CPU usage
+                        Sleep(50); // Prevent high CPU usage
                         try {
                             if (!isPaused) agent.Tick();
                         }

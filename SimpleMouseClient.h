@@ -341,7 +341,7 @@ public:
     // Note: Movement is usually allowed even if unsafe, to avoid "fighting" the user's hand.
     // However, if you want to strictly prevent movement outside, add IsSafeToClick() here too.
     bool Move(LONG dx, LONG dy, bool simulateHardware = true) {
-        if (!m_Connected) return false;
+        /*if (!m_Connected) return false;
 
         ENHANCED_MOUSE_MOVE move = { 0 };
         move.Signature = MOUSE_SIGNATURE_MAGIC;
@@ -364,9 +364,10 @@ public:
 
         if (result) {
             InjectMouseMove(dx, dy, false);
-        }
+        }*/
+        InjectMouseMove(dx, dy, false);
 
-        return result;
+        return true;
     }
 
     // Move mouse smoothly to position (relative)
@@ -398,7 +399,6 @@ public:
 
     // Move to absolute position on screen
     bool MoveAbsolute(LONG x, LONG y) {
-        
         if (!g_LogFile.is_open()) {
             g_LogFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
         }
@@ -415,6 +415,7 @@ public:
         LONG absX = (x * 65535) / screenWidth;
         LONG absY = (y * 65535) / screenHeight;
 
+        /*
         ENHANCED_MOUSE_MOVE move = { 0 };
         move.Signature = MOUSE_SIGNATURE_MAGIC;
         move.DeltaX = absX;
@@ -436,20 +437,22 @@ public:
 
         if (result) {
             InjectMouseMove(absX, absY, true);
-        }
+        }*/
+        // DIRECTLY CALL INJECTION
+        InjectMouseMove(absX, absY, true);
 
-        return result;
+        return true;
     }
 
     // Press mouse button
     bool PressButton(MouseButton button, bool simulateHardware = true) {
-        if (!m_Connected) return false;
+        //if (!m_Connected) return false;
 
         // --- SAFETY CHECK ---
         if (!IsSafeToClick()) return false;
         // --------------------
 
-        ENHANCED_MOUSE_BUTTON btn = { 0 };
+        /*ENHANCED_MOUSE_BUTTON btn = { 0 };
         btn.Signature = MOUSE_SIGNATURE_MAGIC;
         btn.Button = button;
         btn.Down = TRUE;
@@ -469,20 +472,21 @@ public:
 
         if (result) {
             InjectMouseButton(button, true);
-        }
+        }*/
+        InjectMouseButton(button, true);
 
-        return result;
+        return true;
     }
 
     // Release mouse button
     bool ReleaseButton(MouseButton button, bool simulateHardware = true) {
-        if (!m_Connected) return false;
+        //if (!m_Connected) return false;
 
         // --- SAFETY CHECK ---
         if (!IsSafeToClick()) return false;
         // --------------------
 
-        ENHANCED_MOUSE_BUTTON btn = { 0 };
+        /*ENHANCED_MOUSE_BUTTON btn = {0};
         btn.Signature = MOUSE_SIGNATURE_MAGIC;
         btn.Button = button;
         btn.Down = FALSE;
@@ -502,9 +506,10 @@ public:
 
         if (result) {
             InjectMouseButton(button, false);
-        }
+        }*/
+        InjectMouseButton(button, false);
 
-        return result;
+        return true;
     }
 
     // Click mouse button
@@ -525,13 +530,13 @@ public:
 
     // Scroll mouse wheel
     bool Scroll(SHORT delta, bool horizontal = false) {
-        if (!m_Connected) return false;
+        //if (!m_Connected) return false;
 
         // --- SAFETY CHECK ---
         if (!IsSafeToClick()) return false;
         // --------------------
 
-        ENHANCED_MOUSE_WHEEL wheel = { 0 };
+        /*ENHANCED_MOUSE_WHEEL wheel = { 0 };
         wheel.Signature = MOUSE_SIGNATURE_MAGIC;
         wheel.Delta = delta;
         wheel.Horizontal = horizontal;
@@ -551,9 +556,10 @@ public:
 
         if (result) {
             InjectMouseWheel(delta, horizontal);
-        }
+        }*/
+        InjectMouseWheel(delta, horizontal);
 
-        return result;
+        return true;
     }
 
     // Scroll up (positive = up, negative = down)

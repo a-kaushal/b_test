@@ -10,7 +10,7 @@ struct ActionState {
     virtual ~ActionState() = default; // Virtual destructor ensures proper cleanup
 
     // Common variables moved here
-    std::vector<PathNode> activePath;
+    std::vector<PathNode> activePath = {};
     int activeIndex = 0;
     bool actionChange = 0;
     bool flyingPath = true;

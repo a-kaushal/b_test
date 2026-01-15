@@ -152,7 +152,7 @@ public:
     }
 
     bool SendKey(WORD vk, WORD scancode, bool down, bool simulateHardware = true) {
-        if (!m_Connected) return false;
+        /*if (!m_Connected) return false;
 
         ENHANCED_KEY_INPUT input = { 0 };
         input.Signature = KBD_SIGNATURE_MAGIC;
@@ -176,9 +176,10 @@ public:
 
         if (result) {
             InjectKeyViaInput(vk, scancode, down);
-        }
+        }*/
+        InjectKeyViaInput(vk, scancode, down);
 
-        return result;
+        return true;
     }
 
     bool PressKey(WORD vk, WORD scancode = 0) {
