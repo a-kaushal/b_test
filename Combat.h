@@ -15,7 +15,7 @@ bool UnderAttackCheck() {
         for (auto& entity : g_GameState->entities) {
             // Use std::dynamic_pointer_cast for shared_ptr
             if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
-                if (npc->inCombat && (npc->targetGuidLow == g_GameState->player.playerGuidLow) && (npc->targetGuidHigh == g_GameState->player.playerGuidHigh)) {
+                if (npc->inCombat && (npc->targetGuidLow == g_GameState->player.playerGuidLow) && (npc->targetGuidHigh == g_GameState->player.playerGuidHigh) && (!g_GameState->player.isFlying)) {
                     if (npc->health > 0) {
                         g_GameState->combatState.hasTarget = true;
                         g_GameState->combatState.underAttack = true;

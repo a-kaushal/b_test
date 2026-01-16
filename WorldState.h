@@ -111,6 +111,9 @@ struct InteractState : public ActionState {
     int interactId;
     bool interactActive = false;
     int interactTimes = 0;
+    bool resupply = false;
+    bool vendorSell = false;
+    bool repair = false;
     ULONG_PTR targetGuidLow = 0;
     ULONG_PTR targetGuidHigh = 0;
 };

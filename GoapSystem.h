@@ -415,6 +415,8 @@ private:
     SimpleKeyboardClient& keyboard;
     ConsoleInput input; // Used to send the Lua command
 
+    DWORD interactPause = 0;
+
     bool failedPath = false;
 
 public:
@@ -441,6 +443,9 @@ public:
         g_GameState->interactState.index = 0;
         g_GameState->interactState.targetGuidHigh = 0;
         g_GameState->interactState.targetGuidLow = 0;
+        g_GameState->interactState.repair = false;
+        g_GameState->interactState.vendorSell = false;
+        g_GameState->interactState.resupply = false;
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
@@ -474,25 +479,31 @@ public:
 
         // 2. Perform Repair Logic
         if (complete) {
-            // Send Lua command to repair all items
-            // "RepairAllItems()" is the standard WoW API, passed via ConsoleInput
-            input.SendDataRobust(std::wstring(L"/run RepairAllItems()"));
+            if (ws.interactState.repair) {
+                // Send Lua command to repair all items
+                // "RepairAllItems()" is the standard WoW API, passed via ConsoleInput
+                input.SendDataRobust(std::wstring(L"/run RepairAllItems()"));
+                ws.interactState.repair = false;
+                interactPause = GetTickCount();
+            }
+            if (ws.interactState.vendorSell) {
+                // Selects the vendor shop gossip action
+                input.SendDataRobust(std::wstring(L"/run local o=C_GossipInfo.GetOptions() if o then for _,v in ipairs(o) do if v.icon==132060 then C_GossipInfo.SelectOption(v.gossipOptionID) return end end end"));
+                //ws.interactState.
+            }
 
             // Wait a moment for the transaction (optional, helps prevent instant state flip)
-            Sleep(500);
+            if (GetTickCount() - interactPause > 500) {
+                // Mark repair as done
+                ws.interactState.interactActive = false;
+                // Cleanup
+                interact.Reset();
+                failedPath = false;
+                // Close the window (Optional: prevents clutter)
+                // input.SendDataRobust(std::wstring(L"/run CloseGossip() CloseMerchant()"));
 
-            // Mark repair as done
-            ws.interactState.interactActive = false;
-
-            // Cleanup
-            interact.Reset();
-
-            failedPath = false;
-
-            // Close the window (Optional: prevents clutter)
-            // input.SendDataRobust(std::wstring(L"/run CloseGossip() CloseMerchant()"));
-
-            return true;
+                return true;
+            }
         }
 
         return false;
@@ -1332,7 +1343,10 @@ public:
                     // Wait for 3.8 seconds (3800ms) before verifying
                     if (now - pilot.m_MountAttemptStart > 3800) {
                         // Check if it succeeded
-                        if (ws.player.flyingMounted) {
+                        if (ws.player.areaFlyable) {
+                            pilot.m_IsMounting = false;
+                        }
+                        else if (ws.player.flyingMounted) {
                             pilot.m_IsMounting = false; // Success, proceed to fly
                         }
                         else {
@@ -1710,9 +1724,8 @@ public:
                 if (state.pathFollowState.path.size() > 0) {
                     state.waypointReturnState.savedPath = state.pathFollowState.path;
                     state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.pathFollowState.path, state.player.position);
-                    g_LogFile << "Closest Waypoint: " << state.waypointReturnState.savedIndex;
                     state.waypointReturnState.savedIndex = state.pathFollowState.index;
-                    g_LogFile << "Closest Waypoint: " << state.pathFollowState.path.size() << std::endl;
+                    state.pathFollowState.index = state.waypointReturnState.savedIndex;
                 }
             }
             else if (bestAction->GetName() == "Repair Equipment") {
@@ -1720,6 +1733,7 @@ public:
                 if (state.interactState.path.size() > 0) {
                     state.waypointReturnState.savedPath = state.interactState.path;
                     state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.interactState.path, state.player.position);
+                    state.interactState.index = state.waypointReturnState.savedIndex;
                     //state.waypointReturnState.savedIndex = state.interactState.index;
                 }
             }

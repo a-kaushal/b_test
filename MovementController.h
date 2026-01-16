@@ -24,7 +24,7 @@ private:
     // --- FLIGHT CONTROL CONSTANTS ---
     const float ALIGNMENT_DEADZONE = 0.05f;      // ~3 degrees: Considered "Facing Target"
     const float BANKING_ANGLE = 0.78f;           // ~45 degrees: Max angle to hold 'W' while turning (Prevents wide drifting)
-    const float STEEP_CLIMB_THRESHOLD = 1.3f;    //  degrees: Use Jump/Sit keys for vertical limits
+    const float STEEP_CLIMB_THRESHOLD = 1.4f;    //  degrees: Use Jump/Sit keys for vertical limits
 
     // Distances
     const float PRECISION_DIST = 5.0f;           // Yards: Below this, we prioritize aiming over moving
@@ -356,8 +356,11 @@ public:
             else if (m_IsMounting) {
                 // Wait for 3.8 seconds (3800ms) before verifying
                 if (now - m_MountAttemptStart > 3800) {
+                    if (player.areaFlyable) {
+                        m_IsMounting = false;
+                    }
                     // Check if it succeeded or if failed due to being under attack
-                    if ((player.flyingMounted) || (g_GameState->combatState.underAttack)) {
+                    else if ((player.flyingMounted) || (g_GameState->combatState.underAttack)) {
                         m_IsMounting = false; // Success, proceed to fly
                     }
                     else {
@@ -689,72 +692,3 @@ public:
         return false;
     }
 };
-
-
-// Detect if player is in an enclosed space (tunnel/indoor/cave)
-inline bool IsInTunnel(const Vector3& pos, int mapId) {
-    
-    // Check 1: Is there a LOW CEILING above us?
-    const float TUNNEL_CEILING_HEIGHT = 20.0f;  // Tunnels have ceilings within 20 units
-
-    // Ray cast straight up to find ceiling
-    bool hitCeiling = false;
-    float ceilingHeight = 999.0f;
-
-    for (float testZ = pos.z + 5.0f; testZ < pos.z + TUNNEL_CEILING_HEIGHT; testZ += 2.0f) {
-        Vector3 testPoint(pos.x, pos.y, testZ);
-
-        // Check if this point is blocked (inside geometry)
-        if (CheckFMapLine(mapId, pos.x, pos.y, pos.z, pos.x, pos.y, testZ)) {
-            hitCeiling = true;
-            ceilingHeight = testZ - pos.z;
-            break;
-        }
-    }
-
-    // Check 2: Are we surrounded on multiple sides?
-    const float WALL_CHECK_RADIUS = 10.0f;
-    int blockedDirections = 0;
-
-    Vector3 checkDirs[8] = {
-        Vector3(WALL_CHECK_RADIUS, 0, 0),
-        Vector3(-WALL_CHECK_RADIUS, 0, 0),
-        Vector3(0, WALL_CHECK_RADIUS, 0),
-        Vector3(0, -WALL_CHECK_RADIUS, 0),
-        Vector3(WALL_CHECK_RADIUS, WALL_CHECK_RADIUS, 0),
-        Vector3(-WALL_CHECK_RADIUS, WALL_CHECK_RADIUS, 0),
-        Vector3(WALL_CHECK_RADIUS, -WALL_CHECK_RADIUS, 0),
-        Vector3(-WALL_CHECK_RADIUS, -WALL_CHECK_RADIUS, 0)
-    };
-
-    for (int i = 0; i < 8; ++i) {
-        Vector3 testPoint = pos + checkDirs[i];
-        testPoint.z = pos.z + 1.0f;  // Check at head height
-
-        if (CheckFMapLine(mapId, pos.x, pos.y, pos.z + 1.0f,
-            testPoint.x, testPoint.y, testPoint.z)) {
-            blockedDirections++;
-        }
-    }
-    g_LogFile << hitCeiling << " " << ceilingHeight << std::endl;
-
-    // Decision logic:
-    // - If ceiling is low (< 20 units) AND we're blocked in 4+ directions = TUNNEL
-    // - If blocked in 6+ directions regardless of ceiling = ENCLOSED SPACE
-    bool lowCeiling = hitCeiling && (ceilingHeight < TUNNEL_CEILING_HEIGHT);
-    bool enclosed = (blockedDirections >= 6);
-    bool partiallyEnclosed = (blockedDirections >= 4);
-
-    bool inTunnel = (lowCeiling && partiallyEnclosed) || enclosed;
-
-    if (DEBUG_PATHFINDING && inTunnel) {
-        std::ofstream log("C:\\Driver\\SMM_Debug.log", std::ios::app);
-        log << "[TUNNEL] Detected at (" << pos.x << "," << pos.y << "," << pos.z << ")\n";
-        log << "  Ceiling: " << (hitCeiling ? std::to_string(ceilingHeight) : "none") << " units above\n";
-        log << "  Blocked directions: " << blockedDirections << "/8\n";
-        log << "  Classification: " << (enclosed ? "ENCLOSED" : (lowCeiling ? "LOW CEILING" : "PARTIAL")) << "\n";
-        log.close();
-    }
-
-    return inTunnel;
-}

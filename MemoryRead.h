@@ -110,6 +110,9 @@ inline ULONG_PTR baseAddress;
 #define PLAYER_BAG_HIGH_GUID 0x180 // High part of bag GUID in item structure
 #define PLAYER_BAG_SLOTS 0x478 // Offset from bag entry
 
+
+#define LUA_ADDON_ARRAY_START = 0x0
+
 // Helper function to get minimum of two values
 template<typename T>
 T MinValue(T a, T b) {

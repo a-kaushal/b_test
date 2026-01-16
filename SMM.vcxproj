@@ -188,6 +188,7 @@ _CRT_NONSTDC_NO_DEPRECATE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ClInclude Include="GoapSystem.h" />
     <ClInclude Include="Behaviors.h" />
     <ClInclude Include="Logger.h" />
+    <ClInclude Include="LuaAnchor.h" />
     <ClInclude Include="MemoryRead.h" />
     <ClInclude Include="MovementController.h" />
     <ClInclude Include="OverlayWindow.h" />

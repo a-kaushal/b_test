@@ -58,6 +58,9 @@ struct PlayerInfo : EntityInfo {
 	bool flyingMounted;
     bool isMounted;
     bool isDead;
+    bool areaFlyable; // True if an area is flyable
+    bool isIndoor; // True if player is indoors
+    bool needRepair; // True if player equipment needs repairs
     int bagFreeSlots;
     ULONG_PTR inCombatGuidLow;
     ULONG_PTR inCombatGuidHigh;

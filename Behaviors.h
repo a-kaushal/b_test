@@ -57,3 +57,7 @@ void Resupply(int mapId, int numTimes, Vector3 vendorPosition, int vendorId) {
     g_GameState->interactState.interactTimes = numTimes;
     g_GameState->interactState.interactActive = true;
 }
+
+void VendorInteract() {
+    
+}

@@ -197,5 +197,8 @@
     <ClInclude Include="Behaviors.h">
       <Filter>Behaviors</Filter>
     </ClInclude>
+    <ClInclude Include="LuaAnchor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

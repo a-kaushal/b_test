@@ -22,6 +22,7 @@
 #include "DetourCommon.h"
 
 #include "Vector.h"
+#include "MovementController.h"
 
 // FMap function declarations (replaces VMap)
 extern "C" bool CheckFMapLine(int mapId, float x1, float y1, float z1, float x2, float y2, float z2);
@@ -54,7 +55,7 @@ const float FMAP_VERTICAL_TOLERANCE = 2.0f;  // Tolerance for floor snapping
 const size_t MAX_CACHE_SIZE = 100;
 const size_t CACHE_CLEANUP_THRESHOLD = 120;
 
-const bool DEBUG_PATHFINDING = true;  // Enable for flight debugging
+const bool DEBUG_PATHFINDING = false;  // Enable for flight debugging
 
 enum FlightSegmentResult {
     SEGMENT_VALID = 0,
@@ -458,8 +459,17 @@ public:
 
                 // NEW: Very lenient clearance for landing approach
                 if (isNearEnd && !strict) {
-                    // Allow being very close to ground when landing
-                    if (pt.z < gZ - 0.5f) { // Only fail if below ground
+                    // CALCULATE DISTANCE TO END OF SEGMENT
+                    float distToEnd = totalDist - distFromStart;
+
+                    // FIX: If within 5 yards of the destination, IGNORE ALL GROUND CHECKS.
+                    // This forces the bot to land even if the node is "inside" the floor or in a ditch.
+                    if (distToEnd < 5.0f) {
+                        continue;
+                    }
+
+                    // Otherwise, use standard lenient landing logic (allow grazing ground)
+                    if (pt.z < gZ - 1.0f) { // Increased tolerance from -0.5f to -1.0f
                         outFailPos = pt;
                         if (verbose && DEBUG_PATHFINDING) {
                             g_LogFile << "      FAIL: Below ground during landing (Z=" << pt.z << " < Ground=" << gZ << ")" << std::endl;
@@ -1439,7 +1449,7 @@ inline std::vector<PathNode> SubdivideFlightPath(const std::vector<PathNode>& in
 
 // Detect if a line segment passes through a no-fly zone (tunnel/indoor)
 inline bool DetectNoFlyZone(const Vector3& start, const Vector3& end, int mapId,
-    Vector3& entryPoint, Vector3& exitPoint) {
+    Vector3& entryPoint, Vector3& exitPoint, bool forceStartNoFly = false) {
     Vector3 dir = end - start;
     float dist = dir.Length();
     if (dist < 0.1f) return false;
@@ -1456,7 +1466,14 @@ inline bool DetectNoFlyZone(const Vector3& start, const Vector3& end, int mapId,
         float t = (float)i / (float)NUM_SAMPLES;
         Vector3 testPos = start + (dir * (dist * t));
 
-        bool canFly = CanFlyAt(mapId, testPos.x, testPos.y, testPos.z);
+        // UPDATED CHECK: Rely solely on map flags + Lua override
+        bool mapFlyable = CanFlyAt(mapId, testPos.x, testPos.y, testPos.z);
+        bool canFly = mapFlyable;
+
+        // FORCE START CHECK: If i==0 and we are forcing start to be no-fly (based on Lua), override it.
+        if (i == 0 && forceStartNoFly) {
+            canFly = false;
+        }
 
         if (!canFly && !foundNoFly) {
             // Found entry to no-fly zone
@@ -1483,23 +1500,39 @@ inline bool DetectNoFlyZone(const Vector3& start, const Vector3& end, int mapId,
 
 // Create a hybrid path that handles tunnels
 inline std::vector<PathNode> CreateHybridPath(const Vector3& start, const Vector3& end,
-    int mapId, bool flying, bool isFlying, bool ignoreWater) {
-    std::ofstream g_LogFile;
+    int mapId, bool flying, bool isFlying, bool ignoreWater, bool startInNoFly = false) {
     if (DEBUG_PATHFINDING) {
-        g_LogFile.open("C:\\Driver\\SMM_Debug.log", std::ios::app);
         g_LogFile << "\n[HYBRID] Checking for no-fly zones between start and end" << std::endl;
+        if (startInNoFly) {
+            g_LogFile << "[HYBRID] Forced 'Start is Indoors' based on Lua Data" << std::endl;
+        }
     }
     g_LogFile << start.x << " " << start.y << " " << start.z << std::endl;
     g_LogFile << end.x << " " << end.y << " " << end.z << std::endl;
 
     // Check if path goes through a no-fly zone
     Vector3 tunnelEntry, tunnelExit;
-    if (!flying || !DetectNoFlyZone(start, end, mapId, tunnelEntry, tunnelExit)) {
+    if (!flying || !DetectNoFlyZone(start, end, mapId, tunnelEntry, tunnelExit, startInNoFly)) {
         // No tunnel detected, use normal pathfinding
         if (DEBUG_PATHFINDING) {
             g_LogFile << "[HYBRID] No tunnel detected, using standard pathfinding" << std::endl;
         }
         return {};
+    }
+    
+    // If we are NOT forced to start indoors (meaning we are flying), and the detected tunnel entry 
+    // is high above the ground (> 5 yards), assume it is an AERIAL OBSTACLE (tree/wall), NOT a walkable tunnel.
+    if (!startInNoFly) {
+        // Check floor height at entry
+        float entryGroundZ = globalNavMesh.GetLocalGroundHeight(tunnelEntry);
+
+        if (entryGroundZ > -90000.0f && (tunnelEntry.z - entryGroundZ) > 15.0f) {
+            if (DEBUG_PATHFINDING) {
+                g_LogFile << "[HYBRID] Tunnel detected but Entry is " << (tunnelEntry.z - entryGroundZ)
+                    << " yards above ground. Treating as aerial obstacle (using A* flight)." << std::endl;
+            }
+            return {}; // Abort hybrid path, fall back to standard Flight Path A*
+        }
     }
 
     if (DEBUG_PATHFINDING) {
@@ -1527,7 +1560,9 @@ inline std::vector<PathNode> CreateHybridPath(const Vector3& start, const Vector
         }
     }
     else {
-        hybridPath.push_back(PathNode(start, PATH_AIR));
+        // If start is close to entry (e.g. we are inside), just add start node as ground/air
+        // If we are forcing startInNoFly, the entry is definitely start.
+        hybridPath.push_back(PathNode(start, startInNoFly ? PATH_GROUND : PATH_AIR));
     }
 
     // SEGMENT 2: Walk through tunnel (GROUND PATHFINDING)
@@ -1660,10 +1695,17 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
             bool shouldTryGroundFirst = false;
 
             if (flying) {
+                // Determine if we should force "Start is No Fly" for the hybrid check
+                // This applies mainly to the FIRST segment, or if we assume intermediate points
+                // inherit this property (which is hard to know). 
+                // We use canMountAtStart ONLY for the very first segment (i==0) to avoid
+                // falsely flagging intermediate waypoints as "Indoors" just because we started indoors.
+                bool forceStartNoFly = (i == 0 && !g_GameState->player.areaFlyable);
+
                 // First check for tunnels/no-fly zones
-                // Pass ignoreWater to hybrid path generation
-                // std::vector<PathNode> hybridPath = CreateHybridPath(start, end, mapId, flying, isFlying, ignoreWater);
-                std::vector<PathNode> hybridPath = {};
+                // Pass ignoreWater and forceStartNoFly to hybrid path generation
+                std::vector<PathNode> hybridPath = CreateHybridPath(start, end, mapId, flying, isFlying, ignoreWater, forceStartNoFly);
+                //std::vector<PathNode> hybridPath = {};
                 if (!hybridPath.empty()) {
                     // Found a tunnel, use the hybrid path
                     globalPathCache.Put(key, hybridPath);
@@ -1691,6 +1733,10 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
                 float horizontalDist = start.Dist2D(end);
 
                 // If both on ground and close enough, try ground path first
+                // BUT: If we are indoors (forceStartNoFly), we MUST NOT just try generic ground path
+                // without considering we might want to fly later. However, if CreateHybridPath failed/returned empty,
+                // it means DetectNoFlyZone didn't find a transition. 
+                // So falling back to ground path here is acceptable.
                 if (startOnGround && endOnGround && horizontalDist < 50.0f) {
                     shouldTryGroundFirst = true;
 
@@ -1702,7 +1748,7 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
                 }
             }
             // Dont use ground path
-            shouldTryGroundFirst = false;
+            //shouldTryGroundFirst = false;
 
             // Try ground path first if conditions are met
             if (shouldTryGroundFirst) {
@@ -1725,9 +1771,27 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
             else {
                 // Normal logic: use requested path type
                 if (flying) {
+                    // If we are forced to not fly at start, and Hybrid path returned empty (no transition found),
+                    // it implies the ENTIRE segment is indoor/no-fly.
+                    // So we shouldn't even try Calculate3DFlightPath.
+                    bool forceStartNoFly = (i == 0 && !g_GameState->player.areaFlyable);
+
+                    if (forceStartNoFly) {
+                        // Start is indoors, and no transition found -> Whole path is indoors -> Ground.
+                        segment = FindPath(start, end, ignoreWater);
+                    }
+                    else {
+                        segment = Calculate3DFlightPath(start, end, mapId, isFlying);
+                        if (segment.empty()) {
+                            // Fallback: If flight is blocked (indoors), try ground navmesh
+                            segment = FindPath(start, end, ignoreWater);
+                            return segment;
+                        }
+                    }
                     segment = Calculate3DFlightPath(start, end, mapId, isFlying);
                     if (segment.empty()) {
-                        // segment = FindPath(start, end, ignoreWater);
+                        // Fallback: If flight is blocked (indoors), try ground navmesh
+                        segment = FindPath(start, end, ignoreWater);
                         return segment;
                     }
                 }
