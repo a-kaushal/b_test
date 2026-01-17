@@ -140,9 +140,9 @@ namespace MMAP
             return false;
         }
 
-        // --- DEBUG: Check Header Offsets ---
-        //printf("[DEBUG] Map %u_%u: HeightOffset: %u, TerrainOffset: %u\n",
-            //tileY, tileX, fheader.heightMapOffset, fheader.terrainMapOffset);
+        // [DEBUG] Check if the map file claims to have liquid data
+        printf("[DEBUG] Tile [%u,%u]: LiquidOffset: %u, SkipLiquid: %d\n",
+            tileX, tileY, fheader.liquidMapOffset, m_skipLiquid);
 
         // --- 1. READ TERRAIN ---
         uint8 terrain_type[128][128];
@@ -288,7 +288,8 @@ namespace MMAP
                 // i iterates through the 128x128 grid squares
                 int row = i / 128; // V8_SIZE
                 int col = i % 128;
-                uint8 areaId = terrain_type[row][col] == 1 ? 2 : 1; // 2=Road, 1=Ground (Recast uses 0 for null)
+                //uint8 areaId = terrain_type[row][col] == 1 ? 32 : 1; // 32=Road, 1=Ground (Recast uses 0 for null)
+                uint8 areaId = terrain_type[row][col] > 0 ? 32 : 1;
 
                 for (int j = TOP; j <= BOTTOM; j += 1)
                 {
@@ -309,11 +310,35 @@ namespace MMAP
             if (fread(&lheader, sizeof(map_liquidHeader), 1, mapFile) != 1)
                 printf("TerrainBuilder::loadMap: Failed to read some data expected 1, read 0\n");
 
+            // [DEBUG] Print Liquid Header details
+            printf("[DEBUG] Liquid Header: Flags: 0x%X (NoType=%d, NoHeight=%d), Type: %u, Level: %.2f\n",
+                lheader.flags,
+                (lheader.flags & MAP_LIQUID_NO_TYPE) ? 1 : 0,
+                (lheader.flags & MAP_LIQUID_NO_HEIGHT) ? 1 : 0,
+                lheader.liquidType,
+                lheader.liquidLevel);
+
             float* liquid_map = NULL;
 
             if (!(lheader.flags & MAP_LIQUID_NO_TYPE))
+            {
                 if (fread(liquid_type, sizeof(liquid_type), 1, mapFile) != 1)
                     printf("TerrainBuilder::loadMap: Failed to read some data expected 1, read 0\n");
+                
+                printf("[DEBUG] Read explicit Liquid Type Array. Value at [0][0]: %u\n", liquid_type[0][0]);
+            }
+            else
+            {
+                // [DEBUG] Using default logic
+                uint8 defaultType = (uint8)(lheader.liquidType & 0xFF);
+                printf("[DEBUG] Using Header Default Type: %u\n", defaultType);
+
+                // ... (Your fix code here: converting 0 to 1 if necessary) ...
+                if (defaultType == 0) defaultType = 1; // Forced fix for debug
+                
+                memset(liquid_type, defaultType, sizeof(liquid_type));
+                printf("[DEBUG] Filled liquid_type array with: %u\n", defaultType);
+            }
 
             if (!(lheader.flags & MAP_LIQUID_NO_HEIGHT))
             {
@@ -323,7 +348,8 @@ namespace MMAP
                     printf("TerrainBuilder::loadMap: Failed to read some data expected 1, read 0\n");
             }
 
-            if (liquid_map)
+            // FIX: Allow entry if we have a height map OR if it's flat water (NO_HEIGHT)
+            if (liquid_map || (lheader.flags & MAP_LIQUID_NO_HEIGHT))
             {
                 int count = meshData.liquidVerts.size() / 3;
                 float xoffset = (float(tileX)-32)*GRID_SIZE;
@@ -425,11 +451,26 @@ namespace MMAP
                 else
                 {
                     liquidType = getLiquidType(i, liquid_type);
+
+                    // [DEBUG] Print ONLY if we find something that isn't empty
+                    if (liquidType != 0) {
+                        static bool printedFound = false;
+                        if (!printedFound) {
+                            printf("[DEBUG] Loop index %d: Found Raw Liquid Type %u! Processing...\n", i, liquidType);
+                            printedFound = true;
+                        }
+                    }
+
+                    // [PATCH 1] Fix for "No Type" (0)
+                    // If the type is 0 (NO_WATER) but we have valid liquid geometry, force it to Generic Water (1).
+                    // This fixes the "0" debug values you saw.
+                    if (liquidType == MAP_LIQUID_TYPE_NO_WATER && meshData.liquidVerts.size() > 0)
+                    {
+                        liquidType = MAP_LIQUID_TYPE_WATER;
+                    }
+
                     switch (liquidType)
                     {
-                        default:
-                            useLiquid = false;
-                            break;
                         case MAP_LIQUID_TYPE_WATER:
                         case MAP_LIQUID_TYPE_OCEAN:
                             // merge different types of water
@@ -442,9 +483,16 @@ namespace MMAP
                             liquidType = NAV_SLIME;
                             break;
                         case MAP_LIQUID_TYPE_DARK_WATER:
-                            // players should not be here, so logically neither should creatures
-                            useTerrain = false;
-                            useLiquid = false;
+                            // [PATCH 2] Fix for "Rectangular Holes" in deep water
+                            // Originally, this set useLiquid = false. We change it to NAV_WATER.
+                            // We keep useTerrain = false because usually you can't walk on the sea floor here.
+                            liquidType = NAV_WATER;
+                            useTerrain = true;
+                            break;
+                        default:
+                            // [PATCH] Catch-all for unknown types (like 5, 13, 15, 21)
+                            // Treat them as Water so they generate a mesh.
+                            liquidType = NAV_WATER;
                             break;
                     }
                 }
@@ -518,8 +566,9 @@ namespace MMAP
                     }
 
                     // terrain under the liquid?
-                    if (minLLevel > maxTLevel)
-                        useTerrain = false;
+                    // [PATCH] Commented out to allow sea floor generation
+                    // if (minLLevel > maxTLevel)
+                    //    useTerrain = false;
 
                     //liquid under the terrain?
                     if (minTLevel > maxLLevel)
@@ -539,12 +588,54 @@ namespace MMAP
                     // 1. Calculate Area ID
                     int row = i / 128;
                     int col = i % 128;
-                    // Check for Road (2)
-                    uint8 areaId = terrain_type[row][col] == 2 ? 2 : 1;
+
+                    uint8 areaId = NAV_GROUND; // Default to Ground
+
+                    // Determine if this specific terrain chunk is truly underwater
+                    bool isDeepWater = false;
+                    if (useLiquid)
+                    {
+                        // Calculate Max Terrain Height (Highest point of this ground patch)
+                        float maxT = INVALID_MAP_LIQ_HEIGHT;
+                        for (int x = 0; x < 6; x++)
+                        {
+                            float h = tverts[ttris[x] * 3 + 1];
+                            if (h > maxT) maxT = h;
+                        }
+
+                        // Calculate Min Liquid Height (Lowest point of the water here)
+                        float minL = INVALID_MAP_LIQ_HEIGHT_MAX;
+                        for (int x = 0; x < 3; x++)
+                        {
+                            float h = lverts[ltris[x] * 3 + 1];
+                            if (h < minL) minL = h;
+                        }
+
+                        // STRICT CHECK: Only mark as Underwater if the HIGHEST ground point 
+                        // is BELOW the LOWEST water point by at least 3.0 units.
+                        // This allows the bot to "wade" in shallow water (depth < 3.0) 
+                        // treating it as normal Ground.
+                        if (maxT < (minL - 3.0f))  // <--- Changed from 0.1f to 3.0f
+                        {
+                            isDeepWater = true;
+                        }
+                    }
+                    // PRIORITY 1: Deep Underwater (Sea Floor)
+                    if (isDeepWater)
+                    {
+                        areaId = NAV_UNDERWATER; // 0x10 (16)
+                    }
+                    // PRIORITY 2: Road (Only if dry or shallow)
+                    else if (terrain_type[row][col] == 16)
+                    //else if (terrain_type[row][col] > 0)
+                    {
+                        areaId = NAV_ROAD;       // 0x20 (32)
+                    }
+                    // PRIORITY 3: Ground (Default - set above)
 
                     // --- DEBUG ---
                     static bool printedRoadFound = false;
-                    if (areaId == 2 && !printedRoadFound) {
+                    if (areaId == 32 && !printedRoadFound) {
                         //printf("[DEBUG] Map %u_%u: Applying ROAD area (ID 2) to mesh!\n", tileY, tileX);
                         printedRoadFound = true;
                     }
@@ -765,7 +856,7 @@ namespace MMAP
                         mName.find("road") != std::string::npos || 
                         mName.find("floor") != std::string::npos)
                     {
-                        modelAreaId = 2; // Road (Grey)
+                        modelAreaId = 32; // Road (Grey)
                         isRoad = true;
                     }
 

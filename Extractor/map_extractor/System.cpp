@@ -358,7 +358,27 @@ void ReadLiquidTypeTableDBC()
     memset(LiqType, 0xff, (liqTypeMaxId + 1) * sizeof(uint16));
 
     for (uint32 x = 0; x < liqTypeCount; ++x)
-        LiqType[dbc.getRecord(x).getUInt(0)] = dbc.getRecord(x).getUInt(3);
+    {
+        uint32 rawType = dbc.getRecord(x).getUInt(3);
+        uint16 flagType = 0;
+
+        // FIX: Convert DBC Type IDs (0-3) to Flags (1-8) expected by ConvertADT
+        switch (rawType)
+        {
+        case 0: flagType = 1; break; // Water
+        case 1: flagType = 2; break; // Ocean
+        case 2: flagType = 4; break; // Magma
+        case 3: flagType = 8; break; // Slime
+        default:
+            // CRITICAL FIX: Map ALL unknown types (5, 15, etc.) to Water (1)
+            // This ensures Tile 21,32 (likely a unique water type) is not lost.
+            flagType = 1;
+            break;
+        //default: flagType = rawType; break; // Fallback
+        }
+
+        LiqType[dbc.getRecord(x).getUInt(0)] = flagType;
+    }
 
     SFileCloseFile(dbcFile);
     printf("Done! (%u LiqTypes loaded)\n", (uint32)liqTypeCount);
@@ -1162,13 +1182,11 @@ bool ConvertADT(char* filename, char* filename2, int cell_y, int cell_x, uint32 
                 }
 
                 liquid_entry[i][j] = h->liquidType;
-                switch (LiqType[h->liquidType])
-                {
-                case 1: liquid_flags[i][j] |= MAP_LIQUID_TYPE_WATER; break; // LIQUID_TYPE_WATER
-                case 2: liquid_flags[i][j] |= MAP_LIQUID_TYPE_OCEAN; break; // LIQUID_TYPE_OCEAN
-                case 4: liquid_flags[i][j] |= MAP_LIQUID_TYPE_MAGMA; break; // LIQUID_TYPE_MAGMA
-                case 8: liquid_flags[i][j] |= MAP_LIQUID_TYPE_SLIME; break; // LIQUID_TYPE_SLIME
-                }
+
+                // FIX: Trust the lookup table. We already sanitized LiqType[] in ReadLiquidTypeTableDBC.
+                // This prevents the switch from silently dropping types it doesn't have a case for.
+                liquid_flags[i][j] |= (uint8)LiqType[h->liquidType];
+
                 if (LiqType[h->liquidType] == 2) // LIQUID_TYPE_OCEAN
                 {
                     uint8* lm = h2o->getLiquidLightMap(h);

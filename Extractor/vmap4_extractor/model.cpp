@@ -171,24 +171,6 @@ ModelInstance::ModelInstance(MPQFile& f, char const* ModelInstName, uint32 mapID
                 // printf("[Fixed] Found model after renaming: %s\n", fixName.c_str());
             }
         }
-
-        // 2. If still not found, print DETAILED error
-        if (!input)
-        {
-            if (!input && mapID == 530 && strstr(ModelInstName, "mushroom"))
-            {
-                printf("\n--- MUSHROOM LOAD FAILURE ---\n");
-                printf("Model Name: %s\n", ModelInstName);
-                printf("Attempt 1 (Raw path): %s\n", tempname);
-                printf("Error 1: %s\n", strerror(originalErr));
-
-                if (triedFix) {
-                    printf("Attempt 2 (Fix path): %s\n", fixName.c_str());
-                    printf("Error 2: %s\n", strerror(errno));
-                }
-                printf("-----------------------------\n");
-            }
-        }
     }
 
     if (!input)

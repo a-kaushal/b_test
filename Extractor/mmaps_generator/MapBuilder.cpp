@@ -561,7 +561,8 @@ namespace MMAP
         config.ch = BASE_UNIT_DIM;
         config.walkableSlopeAngle = m_maxWalkableAngle;
         config.tileSize = VERTEX_PER_TILE;
-        config.walkableRadius = m_bigBaseUnit ? 1 : 2;
+        //config.walkableRadius = m_bigBaseUnit ? 1 : 2;
+        config.walkableRadius = m_bigBaseUnit ? 2 : 4;
         config.borderSize = config.walkableRadius + 3;
         config.maxEdgeLen = VERTEX_PER_TILE + 1;        // anything bigger than tileSize
         config.walkableHeight = m_bigBaseUnit ? 3 : 6;
@@ -880,7 +881,7 @@ namespace MMAP
         }
         while (0);
 
-        if (m_debugOutput)
+        if (false)
         {
             // restore padding so that the debug visualization is correct
             for (int i = 0; i < iv.polyMesh->nverts; ++i)
