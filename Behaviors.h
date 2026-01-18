@@ -36,7 +36,7 @@ void FollowPath(int mapId, string myPath, bool looping, bool flyingPath) {
 
     g_GameState->pathFollowState.presetPath = myPathParsed;
     g_GameState->pathFollowState.presetIndex = FindClosestWaypoint(myPathParsed, empty, g_GameState->player.position);
-    g_GameState->pathFollowState.looping = true;
+    g_GameState->pathFollowState.looping = looping;
 
     path = CalculatePath(g_GameState->pathFollowState.presetPath, g_GameState->player.position, g_GameState->pathFollowState.presetIndex, flyingPath, 530, g_GameState->player.isFlying
         , g_GameState->globalState.ignoreUnderWater, g_GameState->pathFollowState.looping);
@@ -58,6 +58,9 @@ void Resupply(int mapId, int numTimes, Vector3 vendorPosition, int vendorId) {
     g_GameState->interactState.interactActive = true;
 }
 
-void VendorInteract() {
-    
+void Repair(int mapId, int numTimes, Vector3 vendorPosition, int vendorId) {
+    g_GameState->interactState.location = { vendorPosition };
+    g_GameState->interactState.interactId = vendorId;
+    g_GameState->interactState.interactTimes = numTimes;
+    g_GameState->interactState.interactActive = true;
 }

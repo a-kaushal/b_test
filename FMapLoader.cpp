@@ -207,6 +207,9 @@ struct VoxelCell {
 
     // Check if we can fly at height Z
     bool canFlyAt(float z) const {
+        // OVERLOADED
+        return true;
+
         std::cout << layers.empty() << std::endl;
         if (layers.empty()) return false;  // Void/solid - can't fly
 

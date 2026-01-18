@@ -34,6 +34,9 @@
     <Filter Include="Behaviors">
       <UniqueIdentifier>{4bfddd62-1bd7-481e-a5ca-fcef621bf5ff}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Web Server">
+      <UniqueIdentifier>{149b64ce-567d-4126-a2ff-4c7ce5982d0c}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
@@ -98,6 +101,9 @@
     </ClCompile>
     <ClCompile Include="FMapLoader.cpp">
       <Filter>VMap</Filter>
+    </ClCompile>
+    <ClCompile Include="WebServer.cpp">
+      <Filter>Web Server</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -199,6 +205,12 @@
     </ClInclude>
     <ClInclude Include="LuaAnchor.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Misc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="WebServer.h">
+      <Filter>Web Server</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

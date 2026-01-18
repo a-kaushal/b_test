@@ -22,7 +22,7 @@ private:
     DWORD lastSteerTime = 0;
 
     // --- FLIGHT CONTROL CONSTANTS ---
-    const float ALIGNMENT_DEADZONE = 0.05f;      // ~3 degrees: Considered "Facing Target"
+    const float ALIGNMENT_DEADZONE = 0.1f;      // ~6 degrees: Considered "Facing Target"
     const float BANKING_ANGLE = 0.78f;           // ~45 degrees: Max angle to hold 'W' while turning (Prevents wide drifting)
     const float STEEP_CLIMB_THRESHOLD = 1.4f;    //  degrees: Use Jump/Sit keys for vertical limits
 
@@ -38,7 +38,7 @@ private:
     const float TWO_PI = 6.28318530f;
     
     const float PIXELS_PER_RADIAN_YAW = 200.0f;
-    const float PIXELS_PER_RADIAN_PITCH = 150.0f;
+    const float PIXELS_PER_RADIAN_PITCH = 100.0f;
 
     const float TURN_THRESHOLD = 0.1f;
 
@@ -138,10 +138,12 @@ public:
 
     // Check if any movement keys are currently being pressed
     bool IsMoving() {
-        return kbd.IsHolding('W') || kbd.IsHolding('S') ||
-            kbd.IsHolding('Q') || kbd.IsHolding('E') ||
-            kbd.IsHolding(KEY_ASCEND) || kbd.IsHolding(KEY_DESCEND) ||
-            mouse.IsButtonDown(MOUSE_RIGHT) || mouse.IsButtonDown(MOUSE_LEFT);
+        if (kbd.IsHolding('W') == 1 || kbd.IsHolding('S') == 1 || kbd.IsHolding('Q') == 1 || kbd.IsHolding('E') == 1 ||
+            kbd.IsHolding(KEY_ASCEND) == 1 || kbd.IsHolding(KEY_DESCEND) == 1) {
+            return true;
+        }
+        return false;
+            //mouse.IsButtonDown(MOUSE_RIGHT) || mouse.IsButtonDown(MOUSE_LEFT);
     }
 
     // --- NEW: CALIBRATION FUNCTION ---
@@ -328,7 +330,7 @@ public:
         return false;
     }
 
-    void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool flyingPath, PlayerInfo& player) {
+    void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool flyingPath, PlayerInfo& player, bool mountDisable = false) {
 
         float dx = targetPos.x - currentPos.x;
         float dy = targetPos.y - currentPos.y;
@@ -340,13 +342,13 @@ public:
 
         // --- 0. MOUNTING LOGIC REPLACEMENT ---
         // Verify state: If we are mounted, reset our internal flags
-        if (player.flyingMounted) {
+        if ((flyingPath && player.flyingMounted) || (!flyingPath && player.groundMounted) || mountDisable) {
             m_IsMounting = false;
         }
 
         // Attempt to mount if: Requested (isFlying), Not Mounted, Not In Tunnel
-        if (flyingPath && !player.flyingMounted && !player.inWater) {
-
+        if (((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && !player.inWater && !mountDisable) {
+            Stop();
             // Check 1: Are we on a cooldown from a previous failure?
             if (now < m_MountDisabledUntil) {
                 // If disabled, we do nothing here and fall through to standard movement (walking).
@@ -354,9 +356,12 @@ public:
             }
             // Check 2: Are we currently waiting for a mount attempt to finish?
             else if (m_IsMounting) {
+                if ((flyingPath && player.flyingMounted) || (!flyingPath && player.groundMounted)) {
+                    m_IsMounting = false;
+                }
                 // Wait for 3.8 seconds (3800ms) before verifying
                 if (now - m_MountAttemptStart > 3800) {
-                    if (player.areaFlyable) {
+                    if (player.areaMountable) {
                         m_IsMounting = false;
                     }
                     // Check if it succeeded or if failed due to being under attack
@@ -377,9 +382,17 @@ public:
                 }
             }
             // Check 3: Start a new attempt
-            else {
+            else if (flyingPath) {
                 // Send command
-                inputCommand.SendDataRobust(std::wstring(L"/run if not(IsFlyableArea()and IsMounted())then CallCompanion(\"Mount\", 1) end "));
+                //inputCommand.SendDataRobust(std::wstring(L"/run if not(IsFlyableArea()and IsMounted())then CallCompanion(\"Mount\", 1) end "));
+                inputCommand.SendDataRobust(std::wstring(L"/mountfly"));
+                m_MountAttemptStart = now;
+                m_IsMounting = true;
+                return; // Stop moving to allow cast
+            }
+            else if (!flyingPath) {
+                // Send command
+                inputCommand.SendDataRobust(std::wstring(L"/mountground"));
                 m_MountAttemptStart = now;
                 m_IsMounting = true;
                 return; // Stop moving to allow cast
@@ -401,6 +414,22 @@ public:
 
         // --- 2. START STEERING INPUT ---
         if (!isSteering) {
+            // --- NEW: CENTER MOUSE BEFORE CLICKING ---
+            // This ensures we have maximum range of motion before hitting an edge.
+
+            // 1. Calculate Center
+            RECT rect;
+            GetClientRect(hGameWindow, &rect);
+            POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+            ClientToScreen(hGameWindow, &center);
+
+            // 2. Release (Safety), Move, Then Press
+            // We release first to prevent the camera from snapping 180 degrees during the move.
+            mouse.ReleaseButton(MOUSE_RIGHT);
+            mouse.MoveAbsolute(center.x, center.y);
+            Sleep(20); // Allow Windows to update cursor position
+
+            // 3. Begin Steering
             mouse.PressButton(MOUSE_RIGHT);
             isSteering = true;
             Sleep(10);
@@ -415,6 +444,10 @@ public:
 
         // Determine if we need "Elevator Mode" (Space/X) for extreme verticality
         bool useElevator = (std::abs(targetPitch) > STEEP_CLIMB_THRESHOLD);
+
+        // -- - DAMPING FACTOR FOR CLOSE RANGE-- -
+        // If within 5 yards, reduce steering aggression by 50% to prevent overshooting
+        float damping = (pitchDiff < 0.5f) ? 0.5f : 1.0f;
 
         if (!isCoasting) {
             // YAW
@@ -435,13 +468,13 @@ public:
 
                         // Still allow mouse pitch alignment so we look where we are going
                         if (std::abs(pitchDiff) > ALIGNMENT_DEADZONE) {
-                            pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
+                            pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH * damping);
                         }
                     }
                     else if (!useElevator) {
                         // Standard Flight
                         if (std::abs(pitchDiff) > ALIGNMENT_DEADZONE) {
-                            pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
+                            pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH * damping);
                         }
 
                         // Release Elevator Keys if we aren't using them
@@ -659,7 +692,7 @@ public:
                 // Time = Distance / Speed
                 float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
                 int durationMs = static_cast<int>(durationSeconds * 1000.0f);
-                durationMs *= 0.5;
+                //durationMs *= 0.5;
 
                 // Min duration to avoid micro-presses
                 if (durationMs > 20) {
@@ -674,7 +707,7 @@ public:
             if (!isTurningRight) {
                 float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
                 int durationMs = static_cast<int>(durationSeconds * 1000.0f);
-                durationMs *= 0.5;
+                //durationMs *= 0.5;
 
                 if (durationMs > 20) {
                     kbd.HoldKeyAsync('D', durationMs);

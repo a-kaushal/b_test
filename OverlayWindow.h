@@ -85,6 +85,17 @@ public:
 
         return true;
     }
+    
+    // --- NEW: Message Pump ---
+    // You MUST call this once per frame in your main loop!
+    void ProcessMessages() {
+        MSG msg;
+        // Process all messages for this thread/window to keep it responsive
+        while (PeekMessageA(&msg, hOverlay, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+    }
 
     void UpdatePosition() {
         if (!hGame || !hOverlay) return;
@@ -95,13 +106,18 @@ public:
         width = rect.right - rect.left;
         height = rect.bottom - rect.top;
         MoveWindow(hOverlay, pt.x, pt.y, width, height, TRUE);
+        // Only move if we have valid dimensions
+        if (width > 0 && height > 0) {
+            MoveWindow(hOverlay, pt.x, pt.y, width, height, TRUE);
+        }
     }
 
     // UPDATED: Now supports accumulating points
     // accumulate = false: Clears screen, adds this point, draws. (Default/Standard behavior)
     // accumulate = true:  Keeps existing points, adds this point, draws everything.
     void DrawFrame(int x, int y, COLORREF color, bool accumulate = false) {
-        if (!hOverlay) return;
+        // SAFETY CHECK: Do not try to draw if window is 0x0 (Minimized)
+        if (!hOverlay || width <= 0 || height <= 0) return;
 
         // 1. Manage Points
         if (!accumulate) {
@@ -112,31 +128,35 @@ public:
         HDC hdc = GetDC(hOverlay);
         if (hdc) {
             HDC memDC = CreateCompatibleDC(hdc);
+            // Safety: Ensure bitmap creation succeeds
             HBITMAP memBitmap = CreateCompatibleBitmap(hdc, width, height);
-            HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
 
-            // 2. Clear Background (Black = Transparent)
-            HBRUSH blackBrush = CreateSolidBrush(RGB(0, 0, 0));
-            RECT r = { 0, 0, width, height };
-            FillRect(memDC, &r, blackBrush);
-            DeleteObject(blackBrush);
+            if (memBitmap) {
+                HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
 
-            // 3. Draw All Points
-            for (const auto& pt : activePoints) {
-                // Bounds check for each point
-                if (pt.x >= 0 && pt.x < width && pt.y >= 0 && pt.y < height) {
-                    HBRUSH targetBrush = CreateSolidBrush(pt.color);
-                    RECT dotRect = { pt.x - 4, pt.y - 4, pt.x + 4, pt.y + 4 };
-                    FillRect(memDC, &dotRect, targetBrush);
-                    DeleteObject(targetBrush);
+                // 2. Clear Background (Black = Transparent)
+                HBRUSH blackBrush = CreateSolidBrush(RGB(0, 0, 0));
+                RECT r = { 0, 0, width, height };
+                FillRect(memDC, &r, blackBrush);
+                DeleteObject(blackBrush);
+
+                // 3. Draw All Points
+                for (const auto& pt : activePoints) {
+                    if (pt.x >= 0 && pt.x < width && pt.y >= 0 && pt.y < height) {
+                        HBRUSH targetBrush = CreateSolidBrush(pt.color);
+                        RECT dotRect = { pt.x - 4, pt.y - 4, pt.x + 4, pt.y + 4 };
+                        FillRect(memDC, &dotRect, targetBrush);
+                        DeleteObject(targetBrush);
+                    }
                 }
+
+                // 4. Blit to Screen
+                BitBlt(hdc, 0, 0, width, height, memDC, 0, 0, SRCCOPY);
+
+                SelectObject(memDC, oldBitmap);
+                DeleteObject(memBitmap);
             }
 
-            // 4. Blit to Screen
-            BitBlt(hdc, 0, 0, width, height, memDC, 0, 0, SRCCOPY);
-
-            SelectObject(memDC, oldBitmap);
-            DeleteObject(memBitmap);
             DeleteDC(memDC);
             ReleaseDC(hOverlay, hdc);
         }

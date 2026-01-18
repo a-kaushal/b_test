@@ -34,8 +34,7 @@ bool BlacklistCheck(WorldState& ws, ULONG_PTR guidLow, ULONG_PTR guidHigh) {
 }
 
 // Helper to find nodes in the entity list
-void UpdateGatherTarget(WorldState& ws) {
-    
+void UpdateGatherTarget(WorldState& ws) {    
 
     float bestDist = GATHERING_RANGE; // Max scan range (yards)
     float secondBestDist = GATHERING_RANGE; // Max scan range (yards)
@@ -52,6 +51,8 @@ void UpdateGatherTarget(WorldState& ws) {
 
         // 1. Check basic object type (Must be GameObject)
         if (entity.objType != "Object") continue;
+
+        if (g_GameState->player.bagFreeSlots == 0) return;
 
         // If we already have a target, check if it's still valid/close
         if ((ws.gatherState.hasNode) && (entity.guidLow == ws.gatherState.guidLow) && (entity.guidHigh == ws.gatherState.guidHigh)) {
@@ -76,7 +77,7 @@ void UpdateGatherTarget(WorldState& ws) {
                     unsigned char area = globalNavMesh.GetAreaID(object->position);
 
                     // Check against our flags (Water Surface or Sea Floor)
-                    if (area == AREA_WATER || area == AREA_UNDERWATER) {
+                    if (area == AREA_UNDERWATER) {
                         continue; // Skip this node
                     }
                 }

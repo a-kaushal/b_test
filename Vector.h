@@ -186,7 +186,7 @@ inline int FindClosestWaypoint(std::vector<Vector3>& path, std::vector<PathNode>
     float minDistance = (std::numeric_limits<float>::max)();
 
     if (path.size() > 0) {
-        for (size_t i = 0; i < path.size(); ++i) {
+        for (size_t i = 0; i < (path.size() - 1); ++i) {
             float dist = position.Dist3D(path[i]);
             //log << "Distance : " << dist << " | minDistance: " << minDistance << " | closestIndex: " << closestIndex << std::endl;
             if (dist < minDistance) {
@@ -196,7 +196,7 @@ inline int FindClosestWaypoint(std::vector<Vector3>& path, std::vector<PathNode>
         }
     }
     else if (pathNode.size() > 0) {
-        for (size_t i = 0; i < pathNode.size(); ++i) {
+        for (size_t i = 0; i < (pathNode.size() - 1); ++i) {
             float dist = position.Dist3D(pathNode[i].pos);
             //log << "Distance : " << dist << " | minDistance: " << minDistance << " | closestIndex: " << closestIndex << std::endl;
             if (dist < minDistance) {

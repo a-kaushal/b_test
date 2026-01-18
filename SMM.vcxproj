@@ -164,6 +164,7 @@ _CRT_NONSTDC_NO_DEPRECATE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ClCompile Include="Movement.h" />
     <ClCompile Include="Repair.h" />
     <ClCompile Include="VMapLoader.cpp" />
+    <ClCompile Include="WebServer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\crc32.h" />
@@ -190,6 +191,7 @@ _CRT_NONSTDC_NO_DEPRECATE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ClInclude Include="Logger.h" />
     <ClInclude Include="LuaAnchor.h" />
     <ClInclude Include="MemoryRead.h" />
+    <ClInclude Include="Misc.h" />
     <ClInclude Include="MovementController.h" />
     <ClInclude Include="OverlayWindow.h" />
     <ClInclude Include="Pathfinding2.h" />
@@ -198,6 +200,7 @@ _CRT_NONSTDC_NO_DEPRECATE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ClInclude Include="SimpleKeyboardClient.h" />
     <ClInclude Include="SimpleMouseClient.h" />
     <ClInclude Include="Vector.h" />
+    <ClInclude Include="WebServer.h" />
     <ClInclude Include="WorldState.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

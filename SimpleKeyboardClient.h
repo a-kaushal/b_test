@@ -329,8 +329,18 @@ public:
     }
 
     bool IsHolding(WORD vk) {
-        std::lock_guard<std::mutex> lock(m_ThreadMutex);
-        return m_HoldFlags.find(vk) != m_HoldFlags.end() && m_HoldFlags[vk].load();
+        // OPTION 1: Check if this software is simulating a hold (Your original logic)
+        /*std::lock_guard<std::mutex> lock(m_ThreadMutex);
+        if (m_HoldFlags.find(vk) != m_HoldFlags.end() && m_HoldFlags[vk].load()) {
+           return true;
+        }*/
+
+        // OPTION 2: Check if the key is physically pressed down by the user
+        // GetAsyncKeyState checks the state of the key at the instant the function is called.
+        // 0x8000 checks the high-order bit, which indicates if the key is currently down.
+        if (GetAsyncKeyState(vk) & 0x8000) {
+            return true;
+        }
     }
 
     bool HoldKeys(const std::vector<WORD>& keys, ULONG durationMs) {

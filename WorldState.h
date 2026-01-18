@@ -14,7 +14,7 @@ struct ActionState {
     std::mutex pathMutex;
     int activeIndex = 0;
     bool actionChange = 0;
-    bool flyingPath = true;
+    bool flyingPath = true; // Defines if flying is enabled
     bool inMotion = false;
     bool ignoreUnderWater = true;
 };

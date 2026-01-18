@@ -33,6 +33,7 @@
 #include "Logger.h"
 #include "Behaviors.h"
 #include "LuaAnchor.h"
+#include "WebServer.h"
 
 #include <DbgHelp.h> // Required for MiniDump
 
@@ -315,12 +316,12 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                 analyzer.ReadUInt32(procId, playerInfo.playerPtr + ENTITY_PLAYER_STATE_OFFSET, newPlayer.state);
 
                 (((newPlayer.state & (1 << 24)) >> 24) == 1) ? newPlayer.isFlying = true : newPlayer.isFlying = false;
-                (((newPlayer.state & (1 << 23)) >> 23) == 1) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
+                //(((newPlayer.state & (1 << 23)) >> 23) == 1) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
                 (((newPlayer.state & (1 << 20)) >> 20) == 1) ? newPlayer.inWater = true : newPlayer.inWater = false;
 
                 analyzer.ReadUInt32(procId, playerInfo.playerPtr + ENTITY_PLAYER_MOUNT_STATE, newPlayer.mountState);
-                //(newPlayer.mountState == 1) ? newPlayer.groundMounted = true : newPlayer.groundMounted = false;
-                (newPlayer.mountState >= 1) ? newPlayer.isMounted = true : newPlayer.isMounted = false;
+                //(newPlayer.mountState == 2) ? newPlayer.groundMounted = true : newPlayer.groundMounted = false;
+                //(newPlayer.mountState >= 1) ? newPlayer.isMounted = true : newPlayer.isMounted = false;
 
                 analyzer.ReadInt32(procId, playerInfo.playerPtr + ENTITY_PLAYER_HEALTH, newPlayer.health);
 
@@ -390,7 +391,7 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                     continue;
                 }
                 // [DEBUG] Log suspicious types if you suspect corruption
-                if (objType < 0 || objType > 1000) {
+                if (objType < 0 || objType > 10000) {
                     if (g_LogFile.is_open()) g_LogFile << "[WARN] Garbage ObjType: " << objType << " at ptr " << std::hex << entity_ptr << std::endl;
                     continue;
                 }
@@ -506,7 +507,7 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                         (((newPlayer.state & (1 << 11)) >> 11) == 1) ? newPlayer.inAir = true : newPlayer.inAir = false;
                         (((newPlayer.state & (1 << 24)) >> 24) == 1) ? newPlayer.isFlying = true : newPlayer.isFlying = false;
                         (((newPlayer.state & (1 << 26)) >> 26) == 1) ? newPlayer.isDead = true : newPlayer.isDead = false;
-                        (((newPlayer.state & (1 << 23)) >> 23) == 1) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
+                        //(((newPlayer.state & (1 << 23)) >> 23) == 1) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
                         (((newPlayer.state & (1 << 20)) >> 20) == 1) ? newPlayer.inWater = true : newPlayer.inWater = false;
 
                         if (newPlayer.isFlying == false) {
@@ -515,7 +516,7 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
 
                         analyzer.ReadUInt32(procId, entity_ptr + ENTITY_PLAYER_MOUNT_STATE, newPlayer.mountState);
                         //(newPlayer.mountState == 2) ? newPlayer.groundMounted = true : newPlayer.groundMounted = false;
-                        (newPlayer.mountState == 1) ? newPlayer.isMounted = true : newPlayer.isMounted = false;
+                        //(newPlayer.mountState == 1) ? newPlayer.isMounted = true : newPlayer.isMounted = false;
 
                         analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_HEALTH, newPlayer.health);
                         analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_MAX_HEALTH, newPlayer.maxHealth);
@@ -729,9 +730,12 @@ void MainThread(HMODULE hModule) {
 
     log("DLL Loaded! Console Attached.");
 
+    WebServer::Start(8080); // Starts web server on http://localhost:8080
+    log("Web Server started at http://localhost:8080");
+
     // Launch GUI in background thread
-    std::thread guiThread(StartGuiThread, hModule);
-	log("GUI Thread Started.");
+    //std::thread guiThread(StartGuiThread, hModule);
+	//log("GUI Thread Started.");
 
     try {
         MemoryAnalyzer analyzer;
@@ -839,6 +843,13 @@ void MainThread(HMODULE hModule) {
                     std::vector<GameEntity> persistentEntityList;
                     persistentEntityList.reserve(3000);
 
+                    /*while (true) {
+                        g_LogFile << pilot.IsMoving() << std::endl; Sleep(20); 
+                        g_LogFile << kbd.IsHolding('W') << kbd.IsHolding('S') <<
+                            kbd.IsHolding('Q') << kbd.IsHolding('E') <<
+                            kbd.IsHolding(VK_SPACE) << kbd.IsHolding('X') << std::endl;
+                    }*/
+
                     ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, entityArraySize, g_GameState->player, persistentEntityList, agent);
                     g_GameState->entities = persistentEntityList;
 
@@ -850,12 +861,40 @@ void MainThread(HMODULE hModule) {
                     std::string temp = "(-358.46, 6509.65, 116.46), (-395.20, 6475.67, 116.46), (-438.96, 6449.58, 116.46), (-482.82, 6425.01, 116.46), (-508.78, 6381.19, 116.46), (-529.89, 6335.85, 116.46), (-547.69, 6288.27, 116.46), (-568.29, 6241.66, 116.46), (-591.41, 6196.38, 116.46), (-630.93, 6164.87, 116.46), (-679.63, 6150.37, 116.46), (-728.66, 6137.20, 116.46), (-777.38, 6122.58, 116.46), (-826.50, 6112.96, 116.46), (-876.56, 6103.19, 116.46), (-926.79, 6102.21, 116.46), (-974.92, 6115.97, 116.46), (-1021.64, 6135.66, 116.46), (-1070.59, 6147.56, 116.46), (-1108.42, 6114.36, 116.46), (-1116.81, 6064.22, 116.46), (-1112.63, 6023.29, 145.06), (-1083.49, 5987.18, 164.99), (-1046.92, 5952.05, 164.99), (-1006.52, 5922.57, 164.99), (-965.26, 5892.46, 164.99), (-924.46, 5861.86, 164.99), (-915.96, 5812.52, 164.99), (-916.19, 5761.44, 164.99), (-908.62, 5711.04, 164.99), (-899.11, 5661.90, 164.99), (-855.82, 5636.18, 164.99), (-806.45, 5628.13, 164.99), (-756.05, 5619.92, 164.96), (-721.15, 5614.23, 129.60), (-682.91, 5608.00, 97.27), (-632.02, 5605.64, 97.27), (-583.31, 5593.95, 97.27), (-533.39, 5584.45, 97.27), (-483.33, 5592.52, 97.27), (-436.47, 5611.26, 97.27), (-389.20, 5630.16, 97.27), (-342.72, 5648.75, 97.27), (-295.78, 5667.52, 97.27), (-251.82, 5692.99, 97.27), (-213.12, 5725.18, 97.27), (-174.67, 5757.16, 97.27), (-125.34, 5769.89, 97.27), (-74.43, 5771.82, 97.27), (-23.49, 5774.45, 97.27), (6.49, 5734.40, 97.27), (21.24, 5686.60, 97.27), (36.31, 5637.81, 97.27), (45.13, 5588.17, 97.27), (53.44, 5538.02, 97.27), (56.05, 5487.54, 97.27), (41.91, 5438.62, 97.27), (19.79, 5392.02, 97.27), (-16.80, 5356.57, 97.27), (-51.41, 5319.75, 97.27), (-67.72, 5271.60, 97.30), (-54.05, 5223.70, 107.79), (-25.12, 5182.87, 107.79), (12.66, 5148.95, 107.79), (49.14, 5113.51, 107.79), (99.49, 5106.84, 107.79), (150.01, 5100.33, 107.79), (200.39, 5094.32, 107.79), (251.19, 5090.80, 107.79), (302.10, 5089.47, 107.79), (351.49, 5080.94, 107.79), (400.78, 5072.43, 107.79), (450.40, 5063.53, 107.79), (497.86, 5047.46, 107.79), (546.30, 5031.06, 107.79), (593.44, 5014.39, 107.79), (643.58, 5005.99, 107.79), (693.62, 5015.84, 107.79), (742.61, 5026.80, 107.79), (791.43, 5037.73, 107.79), (841.04, 5041.72, 98.02), (866.62, 5066.11, 62.65), (894.69, 5093.29, 31.05), (928.30, 5131.29, 31.05), (948.19, 5177.60, 31.05), (959.67, 5226.44, 31.05), (960.40, 5276.46, 31.05), (949.54, 5325.44, 31.05), (915.60, 5363.38, 31.05), (870.56, 5386.79, 31.05), (820.35, 5393.04, 31.05), (770.97, 5405.88, 31.05), (726.76, 5429.27, 31.05), (677.55, 5442.15, 31.05), (627.63, 5438.95, 31.05), (577.35, 5430.87, 31.05), (527.26, 5425.94, 31.05), (495.91, 5466.19, 31.05), (463.93, 5505.60, 31.05), (433.48, 5538.86, 53.98), (398.98, 5569.29, 75.79), (364.08, 5605.63, 75.79), (354.80, 5655.29, 75.79), (346.35, 5705.41, 75.79), (335.31, 5754.00, 69.02), (326.02, 5803.92, 69.02), (354.10, 5845.89, 69.02), (392.51, 5879.17, 69.02), (432.32, 5909.69, 73.53), (466.07, 5947.63, 73.53), (496.15, 5988.32, 73.53), (533.36, 6022.97, 73.53), (572.06, 6055.46, 73.53), (610.36, 6087.62, 73.53), (649.48, 6120.47, 73.53), (688.10, 6152.90, 73.53), (726.40, 6185.06, 73.53), (761.76, 6220.58, 73.53), (758.20, 6270.69, 73.53), (742.82, 6319.40, 73.53), (738.70, 6369.91, 73.53), (739.20, 6419.92, 73.53), (739.70, 6469.94, 73.53), (740.20, 6519.95, 73.53), (740.70, 6570.99, 73.53), (749.73, 6620.66, 73.53), (770.46, 6666.99, 73.53), (776.16, 6717.08, 73.53), (788.34, 6766.65, 73.53), (800.30, 6815.34, 73.53), (813.85, 6864.03, 73.53), (844.40, 6904.35, 73.53), (878.85, 6941.42, 73.53), (913.24, 6978.05, 73.53), (927.41, 7026.19, 73.53), (923.96, 7077.05, 73.53), (882.31, 7105.08, 73.53), (832.27, 7114.13, 73.53), (783.90, 7100.69, 73.53), (733.14, 7095.72, 73.53), (682.66, 7089.52, 73.53), (634.71, 7074.09, 73.53), (584.68, 7066.22, 73.53), (536.03, 7050.79, 73.53), (492.98, 7024.58, 73.53), (450.26, 6998.57, 73.53), (402.57, 6980.30, 73.53), (352.86, 6968.60, 73.53), (302.46, 6962.74, 73.53), (252.19, 6962.96, 73.53), (202.11, 6963.19, 73.53), (151.04, 6963.41, 73.53), (100.86, 6963.64, 73.53), (49.79, 6963.87, 73.53), (-0.26, 6972.52, 73.53), (-50.24, 6976.64, 73.53), (-100.09, 6980.74, 73.53), (-150.18, 6988.99, 73.53), (-198.67, 7004.94, 73.53), (-247.72, 7018.33, 73.53), (-298.02, 7014.87, 73.53), (-320.93, 6970.22, 73.53), (-334.14, 6921.07, 73.53)";
                     
                     //InteractWithObject(530, 1, Vector3{ 258.91f, 7870.72f, 23.01f }, 182567);
+                    //Resupply(530, 1, Vector3{ 228.16f, 7933.88f, 25.08f }, 18245);
                     FollowPath(530, temp, true, true);
+
+                    /*std::vector<Vector3> path11 = { Vector3{ 228.16f, 7933.88f, 25.08f } };
+                    g_GameState->pathFollowState.path = CalculatePath(path11, g_GameState->player.position, 0, false, 530, false, false);
+                    for (int i = 0; i < g_GameState->pathFollowState.path.size(); i++) {
+                        g_LogFile << g_GameState->pathFollowState.path[i].pos.x << " " << g_GameState->pathFollowState.path[i].pos.y << " " << g_GameState->pathFollowState.path[i].pos.z << " | " << g_GameState->pathFollowState.path[i].type << std::endl;
+                    }*/
 
                     g_GameState->globalState.flyingPath = true;
                     
                     // Force disable Click-to-Move to prevent accidental movement on mouse clicks
                     console.SendDataRobust(std::wstring(L"/console autointeract 0"));
+
+
+                    //std::vector<PathNode> path2 = FindPath(g_GameState->player.position, Vector3{ 228.16f, 7933.88f, 25.08f }, 1);
+                    //for (int i = 0; i < path2.size(); i++) {
+                    //    g_LogFile << "PATH2:" << path2[i].pos.x << " " << path2[i].pos.y << " " << path2[i].pos.z << std::endl;
+                    //}
+                    //int index = 0;
+                    //float dist = 0;
+                    //while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
+                    //    ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, entityArraySize, g_GameState->player, persistentEntityList, agent);
+                    //    g_GameState->entities = persistentEntityList;
+                    //    dist = g_GameState->player.position.Dist2D(path2[index].pos);
+                    //    if (dist < 4.0f) {
+                    //        index++;
+                    //    }
+                    //    pilot.SteerTowards(g_GameState->player.position, g_GameState->player.rotation, path2[index].pos, false, g_GameState->player);
+                    //    Sleep(20);
+                    //}
+                    //g_IsRunning = false;
+                    //RaiseException(0xDEADBEEF, 0, 0, nullptr); // Forcibly exit all threads (including GUI)
+
 
                     RECT rect;
                     GetClientRect(hGameWindow, &rect);
@@ -866,6 +905,10 @@ void MainThread(HMODULE hModule) {
                     static DWORD lastTrim = 0;
                     static DWORD overlayUpdate = 0;
                     while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
+                        // -- - FIX: PUMP MESSAGES-- -
+                        // This prevents the overlay from freezing/crashing Windows
+                        overlay.ProcessMessages();
+
                         if (GetTickCount() - lastTrim > 30000) { // Every 30 seconds
                             //SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
                             lastTrim = GetTickCount();
@@ -901,14 +944,27 @@ void MainThread(HMODULE hModule) {
                             g_GameState->pathFollowState.pathIndexChange = false;
                         }
                         if (!isPaused) {
+                            // --- Enforce Window Focus ---
+                            HWND currentForeground = GetForegroundWindow();
+                            if (currentForeground != hGameWindow) {
+                                // If the window is minimized, restore it first
+                                if (IsIconic(hGameWindow)) {
+                                    ShowWindow(hGameWindow, SW_RESTORE);
+                                }
+                                // Force window to foreground
+                                SetForegroundWindow(hGameWindow);
+                            }
                             if (UnderAttackCheck() == true) {
                                 //g_LogFile << "Under Attack Detected!" << std::endl;
                             }
                             if (g_GameState->gatherState.enabled == true) {
                                 UpdateGatherTarget(g_GameStateInstance);
                             }
-                            if (g_GameState->player.bagFreeSlots <= 2) {
+                            if ((g_GameState->player.bagFreeSlots <= 2) && !g_GameState->interactState.interactActive) {
                                 Resupply(530, 1, Vector3{ 228.16f, 7933.88f, 25.08f }, 18245);
+                            }
+                            if (g_GameState->player.needRepair && !g_GameState->interactState.interactActive) {
+                                Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
                             }
                         }
 

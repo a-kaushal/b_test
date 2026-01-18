@@ -101,10 +101,12 @@ public:
 
     static void ReadLuaData(MemoryAnalyzer& analyzer, DWORD pid, const std::string& magicString, ULONG_PTR& entryPtr) {
         std::string rawMemoryString;
+        bool firstRead = false;
         if (entryPtr == 0) {
             // 2. Find the address
+            firstRead = true;
             entryPtr = LuaAnchor::Find(analyzer, pid, magicString);
-            g_LogFile << "Data: [" << g_GameState->player.needRepair << ", " << g_GameState->player.isIndoor << ", " << g_GameState->player.areaFlyable << "]" << std::endl;
+            g_LogFile << ">>> Lua Base Address: 0x" << std::hex << entryPtr << std::dec << std::endl;
         }
 
         if ((entryPtr != 0) && (analyzer.ReadString(pid, entryPtr, rawMemoryString, 60))) {
@@ -125,16 +127,33 @@ public:
                 if (analyzer.ReadPointer(pid, tableAddress + 0x20, arrayPtr)) {
 
                     // Read the first 3 values (Double precision)
-                    double val1, val2, val3;
+                    double val1, val2, val3, val4, val5, val6, val7, val8, val9, val10, val11;
                     analyzer.ReadDouble(pid, arrayPtr + 0x00, val1);
                     analyzer.ReadDouble(pid, arrayPtr + 0x18, val2);
                     analyzer.ReadDouble(pid, arrayPtr + 0x30, val3);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x48, val4);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x60, val5);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x78, val6);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x90, val7);
+                    analyzer.ReadDouble(pid, arrayPtr + 0xA8, val8);
+                    analyzer.ReadDouble(pid, arrayPtr + 0xC0, val9);
+                    analyzer.ReadDouble(pid, arrayPtr + 0xD8, val10);
+                    analyzer.ReadDouble(pid, arrayPtr + 0xF0, val11);
 
                     ((val1 > 0.5) ? g_GameState->player.needRepair = true : g_GameState->player.needRepair = false);
                     ((val2 > 0.5) ? g_GameState->player.isIndoor = true : g_GameState->player.isIndoor = false);
-                    ((val3 > 0.5) ? g_GameState->player.areaFlyable = true : g_GameState->player.areaFlyable = false);
+                    ((val3 > 0.5) ? g_GameState->player.areaMountable = true : g_GameState->player.areaMountable = false);
+                    (((val6 > 0.5) && (val4 > 0.5)) ? g_GameState->player.flyingMounted = true : g_GameState->player.flyingMounted = false);
+                    (((val6 < 0.5) && (val4 > 0.5)) ? g_GameState->player.groundMounted = true : g_GameState->player.groundMounted = false);
+                    ((val7 > 0.5) ? g_GameState->player.isGhost = true : g_GameState->player.isGhost = false);
+                    g_GameState->player.corpsePositionX = float(val8);
+                    g_GameState->player.corpsePositionY = float(val9);
+                    ((val10 > 0.5) ? g_GameState->player.canRespawn = true : g_GameState->player.canRespawn = false);
+                    ((val11 > 0.5) ? g_GameState->player.isDeadBody = true : g_GameState->player.isDeadBody = false);
 
-                    //g_LogFile << "Data: [" << g_GameState->player.needRepair << ", " << g_GameState->player.isIndoor << ", " << g_GameState->player.areaFlyable << "]" << std::endl;
+                    if (firstRead == true) {
+                        g_LogFile << "Data: [" << g_GameState->player.needRepair << ", " << g_GameState->player.isIndoor << ", " << g_GameState->player.areaMountable << ", " << val4 << ", " << val5 << ", " << val6 << "]" << std::endl;
+                    }
                 }
             }
         }
