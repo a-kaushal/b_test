@@ -37,6 +37,9 @@
     <Filter Include="Web Server">
       <UniqueIdentifier>{149b64ce-567d-4126-a2ff-4c7ce5982d0c}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Profile">
+      <UniqueIdentifier>{71b08981-1a82-4b22-96e1-b1092e28d747}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
@@ -211,6 +214,12 @@
     </ClInclude>
     <ClInclude Include="WebServer.h">
       <Filter>Web Server</Filter>
+    </ClInclude>
+    <ClInclude Include="ProfileInterface.h">
+      <Filter>Profile</Filter>
+    </ClInclude>
+    <ClInclude Include="ProfileLoader.h">
+      <Filter>Profile</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

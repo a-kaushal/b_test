@@ -38,7 +38,6 @@ public:
             if ((region.Protect & PAGE_READWRITE) == 0 && (region.Protect & PAGE_WRITECOPY) == 0) {
                 continue;
             }
-
             // Optional: Lua memory is usually MEM_PRIVATE (Private Heap). 
             // However, some custom allocators might use MEM_MAPPED. 
             // Scanning only PRIVATE is faster, but scanning both is safer.
@@ -46,7 +45,7 @@ public:
 
             // 4. Scan this specific region
             ULONG_PTR result = ScanRegion(analyzer, pid, region.BaseAddress, region.RegionSize, pattern);
-            if (result != 0) {
+            if (Validator(analyzer, pid, result)) {
                 std::cout << "[LuaAnchor] Found pattern at: 0x" << std::hex << result << std::dec << std::endl;
                 return result;
             }
@@ -127,18 +126,21 @@ public:
                 if (analyzer.ReadPointer(pid, tableAddress + 0x20, arrayPtr)) {
 
                     // Read the first 3 values (Double precision)
-                    double val1, val2, val3, val4, val5, val6, val7, val8, val9, val10, val11;
-                    analyzer.ReadDouble(pid, arrayPtr + 0x00, val1);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x18, val2);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x30, val3);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x48, val4);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x60, val5);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x78, val6);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x90, val7);
-                    analyzer.ReadDouble(pid, arrayPtr + 0xA8, val8);
-                    analyzer.ReadDouble(pid, arrayPtr + 0xC0, val9);
-                    analyzer.ReadDouble(pid, arrayPtr + 0xD8, val10);
-                    analyzer.ReadDouble(pid, arrayPtr + 0xF0, val11);
+                    double val, val1, val2, val3, val4, val5, val6, val7, val8, val9, val10, val11, val12, val13;
+                    analyzer.ReadDouble(pid, arrayPtr + 0x00, val); // Verification Value
+                    analyzer.ReadDouble(pid, arrayPtr + 0x18, val1);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x30, val2);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x48, val3);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x60, val4);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x78, val5);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x90, val6);
+                    analyzer.ReadDouble(pid, arrayPtr + 0xA8, val7);
+                    analyzer.ReadDouble(pid, arrayPtr + 0xC0, val8);
+                    analyzer.ReadDouble(pid, arrayPtr + 0xD8, val9);
+                    analyzer.ReadDouble(pid, arrayPtr + 0xF0, val10);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x108, val11);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x120, val12);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x138, val13);
 
                     ((val1 > 0.5) ? g_GameState->player.needRepair = true : g_GameState->player.needRepair = false);
                     ((val2 > 0.5) ? g_GameState->player.isIndoor = true : g_GameState->player.isIndoor = false);
@@ -150,9 +152,11 @@ public:
                     g_GameState->player.corpsePositionY = float(val9);
                     ((val10 > 0.5) ? g_GameState->player.canRespawn = true : g_GameState->player.canRespawn = false);
                     ((val11 > 0.5) ? g_GameState->player.isDeadBody = true : g_GameState->player.isDeadBody = false);
+                    ((val12 > 0.5) ? g_GameState->globalState.vendorOpen = true : g_GameState->globalState.vendorOpen = false);
+                    ((val12 > 0.5) ? g_GameState->globalState.chatOpen = true : g_GameState->globalState.chatOpen = false);
 
                     if (firstRead == true) {
-                        g_LogFile << "Data: [" << g_GameState->player.needRepair << ", " << g_GameState->player.isIndoor << ", " << g_GameState->player.areaMountable << ", " << val4 << ", " << val5 << ", " << val6 << "]" << std::endl;
+                        g_LogFile << "Data: [" << g_GameState->player.needRepair << ", " << g_GameState->player.isIndoor << ", " << g_GameState->player.areaMountable << ", " << val4 << ", " << val5 << ", " << val6 << " " << val12 << "]" << std::endl;
                     }
                 }
             }
@@ -209,7 +213,27 @@ private:
 
             offset += (CHUNK_SIZE - patternLen);
         }
-
         return 0;
+    }
+
+    static bool Validator(MemoryAnalyzer& analyzer, DWORD pid, ULONG_PTR entryPtr) {
+        std::string rawMemoryString;
+        if ((entryPtr != 0) && (analyzer.ReadString(pid, entryPtr, rawMemoryString, 60))) {
+            uintptr_t tableAddress = LuaAnchor::ExtractAddressFromLuaString(rawMemoryString);
+            g_LogFile << "tbl" << tableAddress << std::endl;
+            if (tableAddress != 0) {
+                uintptr_t arrayPtr = 0;
+                if (analyzer.ReadPointer(pid, tableAddress + 0x20, arrayPtr)) {
+                    double val1;
+                    analyzer.ReadDouble(pid, arrayPtr + 0x00, val1);
+                    g_LogFile << val1 << std::endl;
+                    if (val1 == 54381046.0) {
+                        g_LogFile << "Found" << std::endl;
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 };

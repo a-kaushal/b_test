@@ -25,6 +25,9 @@ bool UnderAttackCheck() {
                         g_GameState->combatState.entityIndex = count;
                         return true;
                     }
+                    else {
+                        g_GameState->combatState.reset = true;
+                    }
                 }
             }
 			count++;

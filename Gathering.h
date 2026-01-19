@@ -62,7 +62,7 @@ void UpdateGatherTarget(WorldState& ws) {
                 ws.gatherState.nodeActive = false;
             }
             return;
-        }
+        }        
 
         float d = 9999.0f;
         if (auto object = std::dynamic_pointer_cast<ObjectInfo>(entity.info)) {
@@ -133,5 +133,8 @@ void UpdateGatherTarget(WorldState& ws) {
             ws.gatherState.nodeActive = true;
             g_LogFile << "[AGENT] Found Gather Node: " << objInfo->name << " at " << bestDist << "y" << std::endl;
         }
+    }
+    else if (ws.gatherState.hasNode) {
+        ws.gatherState.nodeActive = false;
     }
 }

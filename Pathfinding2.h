@@ -42,6 +42,7 @@ const unsigned short AREA_DEEP_WATER = 0x06; // 6 (Deep Water)
 const float COLLISION_STEP_SIZE = 0.5f;    // Was 0.5f - less sampling
 const float MIN_CLEARANCE = 2.0f;          // Was 1.0f - more safety margin
 const float AGENT_RADIUS = 3.0f;           // CHANGED: Increased from 1.0f to 3.0f for a wider safety buffer
+const float GROUND_AGENT_RADIUS = 1.5f;    // NEW: Ground-specific agent radius for tight spaces
 const float WAYPOINT_STEP_SIZE = 4.0f;
 const int MAX_POLYS = 512;
 const float FLIGHT_GRID_SIZE = 25.0f;  // Optimized for FMap voxels
@@ -51,6 +52,8 @@ const float APPROACH_HEIGHT = 10.0f;
 const float APPROACH_DISTANCE = 15.0f;
 const float LANDING_AGENT_RADIUS = 2.0f;
 const float FMAP_VERTICAL_TOLERANCE = 2.0f;  // Tolerance for floor snapping
+const float GROUND_CLEARANCE_CHECK_RADIUS = 2.0f;  // NEW: Radius for checking clearance around waypoints
+const int GROUND_CLEARANCE_RAYS = 8;  // NEW: Number of rays to check around waypoint
 
 // PATH CACHE LIMITS
 const size_t MAX_CACHE_SIZE = 100;
@@ -351,6 +354,54 @@ public:
                     if (!CheckFMapLine(mapId, test.x, test.y, test.z - 0.2f, test.x, test.y, test.z + 0.2f)) {
                         return test;
                     }
+                }
+            }
+        }
+        return Vector3(0, 0, 0); // Failed
+    }
+
+    // --- NEW: STRICTER SAFETY CHECK FOR ESCAPE LOGIC ---
+// Checks if a point has the full AGENT_RADIUS clearance in all directions
+    bool IsClearSafePoint(const Vector3& pos, int mapId) {
+        float r = AGENT_RADIUS;
+        // Check surrounding sphere using rays
+        Vector3 offsets[] = {
+            Vector3(r,0,0), Vector3(-r,0,0), Vector3(0,r,0), Vector3(0,-r,0), // Horizontal
+            Vector3(0,0,r), Vector3(0,0,-r), // Vertical
+            Vector3(0.7f * r, 0.7f * r, 0), Vector3(-0.7f * r, 0.7f * r, 0), // Diagonals
+            Vector3(0.7f * r, -0.7f * r, 0), Vector3(-0.7f * r, -0.7f * r, 0)
+        };
+
+        for (const auto& off : offsets) {
+            if (CheckFMapLine(mapId, pos.x, pos.y, pos.z, pos.x + off.x, pos.y + off.y, pos.z + off.z)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    Vector3 FindNearestSafePoint(const Vector3& pos, int mapId) {
+        // Quick check center
+        if (IsClearSafePoint(pos, mapId)) return pos;
+
+        const float maxRadius = 15.0f;
+        const float step = 2.0f;
+
+        // Spiral out looking for a point with FULL clearance
+        for (float r = step; r <= maxRadius; r += step) {
+            Vector3 offsets[] = {
+               Vector3(0, 0, r), Vector3(0, 0, -r),               // Up/Down (Highest Priority to clear ground)
+               Vector3(r, 0, 0), Vector3(-r, 0, 0),               // X
+               Vector3(0, r, 0), Vector3(0, -r, 0),               // Y
+               Vector3(r, r, 0), Vector3(-r, -r, 0),              // Diagonals
+               Vector3(r, -r, 0), Vector3(-r, r, 0)
+            };
+
+            for (const auto& off : offsets) {
+                Vector3 test = pos + off;
+                // Must be flyable AND have full safety clearance
+                if (CanFlyAt(mapId, test.x, test.y, test.z)) {
+                    if (IsClearSafePoint(test, mapId)) return test;
                 }
             }
         }
@@ -816,7 +867,27 @@ public:
                 // Snap to FMap floor for precision
                 float fmapFloor = GetFMapFloorHeight(currentMapId, safePoint.x, safePoint.y, safePoint.z);
                 if (fmapFloor > -90000.0f && std::abs(safePoint.z - fmapFloor) < FMAP_VERTICAL_TOLERANCE) {
-                    safePoint.z = fmapFloor;
+                    safePoint.z = fmapFloor + 0.5f; // Add clearance
+                }
+
+                // --- NEW: IMPROVE WAYPOINT PLACEMENT FOR TIGHT SPACES ---
+                // Check if waypoint is too close to obstacles and try to offset it
+                if (!CheckGroundWaypointClearance(safePoint, currentMapId)) {
+                    Vector3 improvedPos = FindSafeWaypointOffset(safePoint, dir, currentMapId, 1.5f);
+                    if (improvedPos.Dist2D(safePoint) > 0.1f) {
+                        // Verify the improved position is still on the navmesh
+                        float testPt[3] = { improvedPos.y, improvedPos.z, improvedPos.x };
+                        float nearestPt[3];
+                        dtPolyRef testPoly;
+                        if (dtStatusSucceed(query->findNearestPoly(testPt, extent, &filter, &testPoly, nearestPt))) {
+                            safePoint = Vector3(nearestPt[2], nearestPt[0], nearestPt[1]);
+                            // Re-snap to floor
+                            fmapFloor = GetFMapFloorHeight(currentMapId, safePoint.x, safePoint.y, safePoint.z);
+                            if (fmapFloor > -90000.0f) {
+                                safePoint.z = fmapFloor + 0.5f;
+                            }
+                        }
+                    }
                 }
 
                 // Subdivided points on mesh are GROUND points
@@ -866,6 +937,28 @@ static NavMesh globalNavMesh;
 
 inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, bool ignoreWater) {
     if (!globalNavMesh.query || !globalNavMesh.mesh) return {};
+
+    // --- ESCAPE LOGIC FOR GROUND PATHS ---
+    // If the start point is inside an obstacle or safety margin, move it out.
+    // This applies to pure ground paths AND ground segments of hybrid paths.
+    Vector3 actualStart = start;
+    int mapId = globalNavMesh.currentMapId; // Use currently loaded map
+
+    if (!globalNavMesh.IsClearSafePoint(actualStart, mapId)) {
+        if (DEBUG_PATHFINDING) {
+            g_LogFile << "[Ground] Start point unsafe/blocked. Seeking escape..." << std::endl;
+        }
+        Vector3 safeStart = globalNavMesh.FindNearestSafePoint(actualStart, mapId);
+
+        // If a safe point was found
+        if (safeStart.x != 0.0f || safeStart.y != 0.0f || safeStart.z != 0.0f) {
+            actualStart = safeStart;
+            if (DEBUG_PATHFINDING) {
+                g_LogFile << "[Ground] Escaped to: " << actualStart.x << ", " << actualStart.y << ", " << actualStart.z << std::endl;
+            }
+        }
+    }
+    // -------------------------------------------
 
     dtQueryFilter filter;
 
@@ -969,6 +1062,31 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         start.z = actualEnd.z;
         if (DEBUG_PATHFINDING) {
             g_LogFile << "Adjusted start height to: " << actualStart.z << " (ground: " << groundZ << ")" << std::endl;
+        }
+    }
+
+    // --- ESCAPE LOGIC (GET OUT OF OBSTACLE) ---
+    // If the start point is within the safety margin of an obstacle, we need to nudge it out.
+    if (!globalNavMesh.IsClearSafePoint(actualStart, mapId)) {
+        if (DEBUG_PATHFINDING) g_LogFile << "[Flight] Start point is inside obstacle safety margin (" << AGENT_RADIUS << "yd). Seeking escape..." << std::endl;
+        Vector3 safeStart = globalNavMesh.FindNearestSafePoint(actualStart, mapId);
+
+        if (safeStart.x != 0.0f || safeStart.y != 0.0f || safeStart.z != 0.0f) {
+            if (DEBUG_PATHFINDING) {
+                g_LogFile << "[Flight] Found escape point at (" << safeStart.x << ", " << safeStart.y << ", " << safeStart.z
+                    << ") - Dist: " << actualStart.Dist3D(safeStart) << std::endl;
+            }
+            // Use the safe point as the start for pathfinding
+            actualStart = safeStart;
+
+            // NOTE: The path returned will start at 'actualStart'. 
+            // The bot is currently at 'start'.
+            // The movement controller will see the first waypoint is 'actualStart' and steer towards it.
+            // This effectively achieves "Get out of obstacle".
+        }
+        else {
+            if (DEBUG_PATHFINDING) g_LogFile << "[Flight] ! Could not find a safe escape point nearby." << std::endl;
+            // We continue with original start, likely to fail, but we tried.
         }
     }
 
@@ -1077,16 +1195,16 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
     AStarAttempt attempts[] = {
         // Base=4.0f means near the target we move in 4yd steps (Very precise).
         // Dynamic=true means when 100yds away, we move in 16yd steps (Very fast).
-        { 4.0f,  true,  50000, "Standard Dynamic", true },
+        { 4.0f,  true,  10000, "Standard Dynamic", true },
 
         // Fallback: Fixed coarse grid if dynamic fails
-        { 15.0f, true,  150000, "Coarse Fixed",     false },
+        { 15.0f, true,  10000, "Coarse Fixed",     false },
 
         // Fallback: Relaxed collision for tight spots
-        { 4.0f,  false, 300000, "Relaxed Precision", true },
+        { 4.0f,  false, 20000, "Relaxed Precision", true },
 
         // Last Resort: Ultra strict/fine for impossible spots
-        { 3.0f,  false, 500000, "Ultra-Precision",   false }
+        { 3.0f,  false, 20000, "Ultra-Precision",   false }
     };
 
     // Pre-allocate containers
@@ -1174,6 +1292,11 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             {1,0,-1}, {-1,0,-1}, {0,1,-1}, {0,-1,-1}
         };
 
+        float totalDistToGoal = actualStart.Dist3D(actualEnd);
+        if (totalDistToGoal > 1000.0f) att.maxNodes *= 32;
+        if (totalDistToGoal > 200.0f) att.maxNodes *= 8;
+        if (totalDistToGoal > 50.0f) att.maxNodes *= 2;
+
         while (!openSet.empty() && iterations < att.maxNodes) {
             int currentIdx = openSet.top();
             openSet.pop();
@@ -1191,9 +1314,9 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             if (att.dynamic) {
                 // If far away, use larger steps to cover ground quickly.
                 // Multipliers must be integers so nodes align with the base grid.
-                if (distToGoal > 1000.0f)  currentStep *= 8.0f; // e.g. 8.0 * 2 = 32 yard steps
-                else if (distToGoal > 200.0f)      currentStep *= 4.0f; // e.g. 4.0 * 4 = 16 yard steps
-                else if (distToGoal > 50.0f)  currentStep *= 2.0f; // e.g. 4.0 * 2 = 8 yard steps
+                if (distToGoal > 1000.0f) { currentStep *= 8.0f; } // e.g. 8.0 * 2 = 32 yard steps
+                else if (distToGoal > 200.0f) { currentStep *= 4.0f; } // e.g. 4.0 * 4 = 16 yard steps
+                else if (distToGoal > 50.0f) { currentStep *= 2.0f; } // e.g. 4.0 * 2 = 8 yard steps
                 // else: < 50 yards, use baseGridSize (4 yards) for precision
             }
 
@@ -1743,6 +1866,66 @@ inline void CleanPathGroundZ(std::vector<PathNode>& path, int mapId) {
     }
 }
 
+// --- PATH POST-PROCESSING (Fixes Doorways/Stairs) ---
+// "Nudges" waypoints away from walls/corners to prevent clipping.
+inline std::vector<PathNode> NudgeGroundPath(std::vector<PathNode> path, float amount, int mapId) {
+    if (path.size() < 3) return path;
+
+    if (DEBUG_PATHFINDING) {
+        g_LogFile << "[PathCleaner] Nudging ground path to prevent corner clipping..." << std::endl;
+    }
+
+    std::vector<PathNode> newPath = path;
+
+    for (size_t i = 1; i < path.size() - 1; ++i) {
+        // Only process ground waypoints
+        if (path[i].type != PATH_GROUND) continue;
+
+        Vector3 prev = path[i - 1].pos;
+        Vector3 curr = path[i].pos;
+        Vector3 next = path[i + 1].pos;
+
+        // Calculate vectors (Ignore Z to ensure horizontal nudging only)
+        Vector3 v1 = (prev - curr);
+        v1.z = 0; v1 = v1.Normalize();
+
+        Vector3 v2 = (next - curr);
+        v2.z = 0; v2 = v2.Normalize();
+
+        // Calculate Bisector: (A-B) + (C-B) gives the vector pointing "inwards" to the open space
+        // for a path wrapping around a corner.
+        Vector3 bisector = (v1 + v2).Normalize();
+
+        // If path is effectively straight, don't nudge
+        if (bisector.Length() < 0.1f) continue;
+
+        // Calculate target position
+        Vector3 nudgeVec = bisector * amount;
+        Vector3 testPos = curr + nudgeVec;
+
+        // --- VALIDATION ---
+        // 1. Check if we pushed into a wall (Line of Sight from old pos to new pos)
+        // Check slightly above ground to avoid curb collision
+        if (!CheckFMapLine(mapId, curr.x, curr.y, curr.z + 1.0f, testPos.x, testPos.y, curr.z + 1.0f)) {
+
+            // 2. Check if there is valid floor at the new position
+            // (Don't nudge off a bridge or stair edge)
+            float floorZ = GetFMapFloorHeight(mapId, testPos.x, testPos.y, curr.z + 2.5f);
+
+            if (floorZ > -90000.0f) {
+                // Ensure the floor isn't too far up/down (e.g., dropped off a cliff)
+                if (std::abs(floorZ - curr.z) < 2.5f) {
+                    // Apply Nudge
+                    newPath[i].pos.x = testPos.x;
+                    newPath[i].pos.y = testPos.y;
+                    newPath[i].pos.z = floorZ + 0.5f; // Snap to new floor with slight clearance
+                }
+            }
+        }
+    }
+    return newPath;
+}
+
 // MODIFIED: CalculatePath accepts ignoreWater and passes it to FindPath/Cache
 inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath, const Vector3& startPos,
     int currentIndex, bool canFly, int mapId, bool isFlying, bool ignoreWater, bool path_loop = false) {
@@ -1860,6 +2043,12 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
             }
         }
     }
+
+    // --- APPLY NUDGE LOGIC (Updated Placement) ---
+    // Apply to BOTH Flight (Hybrid) and Ground paths.
+    // This cleans up ground segments within hybrid paths (e.g., tunnels) and pure ground paths.
+    // The function internally checks node type and only nudges PATH_GROUND nodes.
+    stitchedPath = NudgeGroundPath(stitchedPath, 1.0f, mapId);
 
     // --- SUBDIVISION BASED ON MODE ---
     if (attemptFlight) {

@@ -514,14 +514,19 @@ public:
             }
 
             // Wait a moment for the transaction (optional, helps prevent instant state flip)
-            if (GetTickCount() - interactPause > 500) {
-                // Mark repair as done
-                ws.interactState.interactActive = false;
-                // Cleanup
-                interact.Reset();
-                failedPath = false;
-                // Close the window (Optional: prevents clutter)
-                // input.SendDataRobust(std::wstring(L"/run CloseGossip() CloseMerchant()"));
+            if (GetTickCount() - interactPause > 2500) {
+                if (ws.globalState.vendorOpen) {
+                    input.SendDataRobust(std::wstring(L"/run CloseMerchant()"));
+                }
+                else {
+                    // Mark repair as done
+                    ws.interactState.interactActive = false;
+                    // Cleanup
+                    interact.Reset();
+                    failedPath = false;
+                    // Close the window (Optional: prevents clutter)
+                    // input.SendDataRobust(std::wstring(L"/run CloseGossip() CloseMerchant()"));
+                }
 
                 return true;
             }
@@ -807,6 +812,7 @@ public:
         g_GameState->combatState.inCombat = false;
         failedPath = false;
         inRoutine = false;
+        g_GameState->combatState.reset = false;
         clickCooldown = 0;
     }
 
@@ -817,7 +823,7 @@ public:
         if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
             if ((ws.combatState.targetGuidLow == entity.guidLow) && (ws.combatState.targetGuidHigh == entity.guidHigh)) {
                 //g_LogFile << npc->health << std::endl;
-                if (npc->health == 0) {
+                if ((npc->health == 0) || ws.combatState.reset) {
                     ResetState();
                     return true;
                 }

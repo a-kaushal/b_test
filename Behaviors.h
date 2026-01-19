@@ -2,11 +2,6 @@
 #include <vector>
 #include <iostream>
 
-#include "Vector.h"
-#include "MovementController.h"
-#include "Pathfinding2.h"
-
-#include "MemoryRead.h"
 #include "Profile.h"
 
 void InteractWithObject(int mapId, int numTimes, Vector3 position, int objectId) {
@@ -16,7 +11,7 @@ void InteractWithObject(int mapId, int numTimes, Vector3 position, int objectId)
     g_GameState->interactState.interactActive = true;
 }
 
-void FollowPath(int mapId, string myPath, bool looping, bool flyingPath) {
+void FollowPath(int mapId, std::string myPath, bool looping, bool flyingPath) {
     std::vector<PathNode> empty = {};
     std::vector<PathNode> path = {};
     std::vector<Vector3> myPathParsed = ParsePathString(myPath);

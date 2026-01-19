@@ -904,6 +904,7 @@ void MainThread(HMODULE hModule) {
 
                     static DWORD lastTrim = 0;
                     static DWORD overlayUpdate = 0;
+
                     while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
                         // -- - FIX: PUMP MESSAGES-- -
                         // This prevents the overlay from freezing/crashing Windows
@@ -961,7 +962,8 @@ void MainThread(HMODULE hModule) {
                                 UpdateGatherTarget(g_GameStateInstance);
                             }
                             if ((g_GameState->player.bagFreeSlots <= 2) && !g_GameState->interactState.interactActive) {
-                                Resupply(530, 1, Vector3{ 228.16f, 7933.88f, 25.08f }, 18245);
+                                //Resupply(530, 1, Vector3{ 228.16f, 7933.88f, 25.08f }, 18245);
+                                Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
                             }
                             if (g_GameState->player.needRepair && !g_GameState->interactState.interactActive) {
                                 Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);

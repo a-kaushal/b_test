@@ -20,6 +20,8 @@ struct ActionState {
 };
 
 struct GlobalState : public ActionState {
+    bool vendorOpen = false;
+    bool chatOpen = false;
 };
 
 struct Looting : public ActionState {
@@ -87,6 +89,7 @@ struct Combat : public ActionState {
     int entityIndex;
     bool underAttack = false; // True when bot is under attack from a enemy
     bool hasTarget = false; // True when the bot selects a target to attack, but has not reached within range yet
+    bool reset = false;
     Vector3 enemyPosition;
     ULONG_PTR targetGuidLow;
     ULONG_PTR targetGuidHigh;
