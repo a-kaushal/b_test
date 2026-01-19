@@ -34,6 +34,7 @@
 #include "Behaviors.h"
 #include "LuaAnchor.h"
 #include "WebServer.h"
+#include "ProfileLoader.h"
 
 #include <DbgHelp.h> // Required for MiniDump
 
@@ -41,6 +42,7 @@
 
 // Global atomic flag to ensure only ONE thread writes the crash dump
 std::atomic<bool> g_HasCrashed = false;
+ProfileLoader g_ProfileLoader;
 
 LONG WINAPI CrashHandler(EXCEPTION_POINTERS* pExceptionInfo) {
     DWORD code = pExceptionInfo->ExceptionRecord->ExceptionCode;
@@ -914,6 +916,15 @@ void MainThread(HMODULE hModule) {
                             //SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
                             lastTrim = GetTickCount();
                         }
+
+                        //if (g_ProfileLoader.GetActiveProfile()) {
+                        //    // If we have a dynamic profile loaded, let it drive the bot
+                        //    g_ProfileLoader.GetActiveProfile()->Tick();
+                        //}
+                        //else {
+                        //    // Fallback or "No Profile" state
+                        //    // You can keep your existing logic here or just do nothing
+                        //}
 
                         // HANDLE F3 (PAUSE TOGGLE)
                         bool currentF3State = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;

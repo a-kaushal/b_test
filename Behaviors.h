@@ -4,14 +4,14 @@
 
 #include "Profile.h"
 
-void InteractWithObject(int mapId, int numTimes, Vector3 position, int objectId) {
+inline void InteractWithObject(int mapId, int numTimes, Vector3 position, int objectId) {
     g_GameState->interactState.location = { position };
     g_GameState->interactState.interactId = objectId;
     g_GameState->interactState.interactTimes = numTimes;
     g_GameState->interactState.interactActive = true;
 }
 
-void FollowPath(int mapId, std::string myPath, bool looping, bool flyingPath) {
+inline void FollowPath(int mapId, std::string myPath, bool looping, bool flyingPath) {
     std::vector<PathNode> empty = {};
     std::vector<PathNode> path = {};
     std::vector<Vector3> myPathParsed = ParsePathString(myPath);
@@ -46,14 +46,14 @@ void FollowPath(int mapId, std::string myPath, bool looping, bool flyingPath) {
     g_GameState->pathFollowState.flyingPath = flyingPath;
 }
 
-void Resupply(int mapId, int numTimes, Vector3 vendorPosition, int vendorId) {
+inline void Resupply(int mapId, int numTimes, Vector3 vendorPosition, int vendorId) {
     g_GameState->interactState.location = { vendorPosition };
     g_GameState->interactState.interactId = vendorId;
     g_GameState->interactState.interactTimes = numTimes;
     g_GameState->interactState.interactActive = true;
 }
 
-void Repair(int mapId, int numTimes, Vector3 vendorPosition, int vendorId) {
+inline void Repair(int mapId, int numTimes, Vector3 vendorPosition, int vendorId) {
     g_GameState->interactState.location = { vendorPosition };
     g_GameState->interactState.interactId = vendorId;
     g_GameState->interactState.interactTimes = numTimes;

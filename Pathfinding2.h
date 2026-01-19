@@ -42,7 +42,6 @@ const unsigned short AREA_DEEP_WATER = 0x06; // 6 (Deep Water)
 const float COLLISION_STEP_SIZE = 0.5f;    // Was 0.5f - less sampling
 const float MIN_CLEARANCE = 2.0f;          // Was 1.0f - more safety margin
 const float AGENT_RADIUS = 3.0f;           // CHANGED: Increased from 1.0f to 3.0f for a wider safety buffer
-const float GROUND_AGENT_RADIUS = 1.5f;    // NEW: Ground-specific agent radius for tight spaces
 const float WAYPOINT_STEP_SIZE = 4.0f;
 const int MAX_POLYS = 512;
 const float FLIGHT_GRID_SIZE = 25.0f;  // Optimized for FMap voxels
@@ -52,8 +51,6 @@ const float APPROACH_HEIGHT = 10.0f;
 const float APPROACH_DISTANCE = 15.0f;
 const float LANDING_AGENT_RADIUS = 2.0f;
 const float FMAP_VERTICAL_TOLERANCE = 2.0f;  // Tolerance for floor snapping
-const float GROUND_CLEARANCE_CHECK_RADIUS = 2.0f;  // NEW: Radius for checking clearance around waypoints
-const int GROUND_CLEARANCE_RAYS = 8;  // NEW: Number of rays to check around waypoint
 
 // PATH CACHE LIMITS
 const size_t MAX_CACHE_SIZE = 100;
@@ -867,27 +864,7 @@ public:
                 // Snap to FMap floor for precision
                 float fmapFloor = GetFMapFloorHeight(currentMapId, safePoint.x, safePoint.y, safePoint.z);
                 if (fmapFloor > -90000.0f && std::abs(safePoint.z - fmapFloor) < FMAP_VERTICAL_TOLERANCE) {
-                    safePoint.z = fmapFloor + 0.5f; // Add clearance
-                }
-
-                // --- NEW: IMPROVE WAYPOINT PLACEMENT FOR TIGHT SPACES ---
-                // Check if waypoint is too close to obstacles and try to offset it
-                if (!CheckGroundWaypointClearance(safePoint, currentMapId)) {
-                    Vector3 improvedPos = FindSafeWaypointOffset(safePoint, dir, currentMapId, 1.5f);
-                    if (improvedPos.Dist2D(safePoint) > 0.1f) {
-                        // Verify the improved position is still on the navmesh
-                        float testPt[3] = { improvedPos.y, improvedPos.z, improvedPos.x };
-                        float nearestPt[3];
-                        dtPolyRef testPoly;
-                        if (dtStatusSucceed(query->findNearestPoly(testPt, extent, &filter, &testPoly, nearestPt))) {
-                            safePoint = Vector3(nearestPt[2], nearestPt[0], nearestPt[1]);
-                            // Re-snap to floor
-                            fmapFloor = GetFMapFloorHeight(currentMapId, safePoint.x, safePoint.y, safePoint.z);
-                            if (fmapFloor > -90000.0f) {
-                                safePoint.z = fmapFloor + 0.5f;
-                            }
-                        }
-                    }
+                    safePoint.z = fmapFloor;
                 }
 
                 // Subdivided points on mesh are GROUND points
