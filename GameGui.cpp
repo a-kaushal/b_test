@@ -128,7 +128,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             SetItemText(hListView, i, 5, ent.reaction_safe);
 
             // 7. TYPE ID
-            sprintf_s(buffer, "%d", ent.mapId);
+            sprintf_s(buffer, "%d", ent.type);
             SetItemText(hListView, i, 6, buffer);
 
             // 8. DISTANCE (CRITICAL FIX: Use dist_safe)

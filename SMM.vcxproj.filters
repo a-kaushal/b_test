@@ -221,5 +221,8 @@
     <ClInclude Include="ProfileLoader.h">
       <Filter>Profile</Filter>
     </ClInclude>
+    <ClInclude Include="Mailing.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

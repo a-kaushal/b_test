@@ -37,8 +37,8 @@ private:
     const float PI = 3.14159265f;
     const float TWO_PI = 6.28318530f;
     
-    const float PIXELS_PER_RADIAN_YAW = 200.0f;
-    const float PIXELS_PER_RADIAN_PITCH = 100.0f;
+    const float PIXELS_PER_RADIAN_YAW = 225.036f * 0.3;
+    const float PIXELS_PER_RADIAN_PITCH = 178.772f * 0.3;
 
     const float TURN_THRESHOLD = 0.1f;
 
@@ -214,7 +214,7 @@ public:
 
                 mouse.PressButton(MOUSE_RIGHT);
                 Sleep(50);
-                mouse.Move(100, 0); // Move RIGHT
+                mouse.Move(10, 0); // Move RIGHT
 
                 m_CalibrationLastTime = GetTickCount();
                 m_CalibrationPhase = 1;
@@ -230,11 +230,11 @@ public:
                 // If looking Down (negative pitch), look Up.
                 // This prevents hitting the hard clamp limits.
                 int moveY = 100;
-                if (currentPitch > 0.1f) moveY = 100;   // Look Down (Positive Y moves down usually)
-                else if (currentPitch < -0.1f) moveY = -100; // Look Up
+                if (currentPitch > 0.1f) moveY = 10;   // Look Down (Positive Y moves down usually)
+                else if (currentPitch < -0.1f) moveY = -10; // Look Up
                 else {
                     // If neutral, Alternate: Even steps down, Odd steps up
-                    moveY = (m_CalibrationStep % 2 == 0) ? 100 : -100;
+                    moveY = (m_CalibrationStep % 2 == 0) ? 10 : 10;
                 }
                 // 2. APPLY RETRY FIX
                 // If the previous attempt failed, FLIP the direction
@@ -274,7 +274,7 @@ public:
                 mouse.ReleaseButton(MOUSE_RIGHT);
 
                 if (std::abs(delta) > 0.01f) {
-                    float k = 100.0f / delta;
+                    float k = 10.0f / delta;
                     m_AccumulatedYawK += k;
                     g_LogFile << "[CALIB YAW] Step " << m_CalibrationStep << " | K: " << k << std::endl;
                     m_CalibrationStep++;
@@ -451,7 +451,7 @@ public:
 
         if (!isCoasting) {
             // YAW
-            if (std::abs(yawDiff) > ALIGNMENT_DEADZONE) {
+            if ((std::abs(yawDiff) > ALIGNMENT_DEADZONE) && (flyingPath ? g_GameState->player.position.Dist3D(targetPos) > 2.5f : g_GameState->player.position.Dist2D(targetPos) > 2.5f)) {
                 pixelsYaw = (int)(yawDiff * -PIXELS_PER_RADIAN_YAW);
             }
 

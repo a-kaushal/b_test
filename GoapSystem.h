@@ -213,7 +213,7 @@ public:
         case STATE_SCAN_MOUSE:
             if (offsetIndex >= searchOffsets.size()) {
                 // Failed to find target after checking all offsets
-                g_LogFile << "[INTERACT] Failed to find target GUID." << std::endl;
+                g_LogFile << "[INTERACT] Failed to find target GUID of " << targetGuidLow << " " << targetGuidHigh << std::endl;
                 keyboard.PressKey(VK_HOME);
                 Sleep(20);
                 keyboard.PressKey(VK_END);
@@ -262,9 +262,9 @@ public:
                 }
                 else {
                     offsetIndex++; // Try next offset
-                    // currentState = STATE_SCAN_MOUSE;
-                    currentState = STATE_CLICK;
-                    randomClick = true;
+                    currentState = STATE_SCAN_MOUSE;
+                    //currentState = STATE_CLICK;
+                    //randomClick = true;
                 }
             }
             return false;
@@ -279,7 +279,10 @@ public:
             mouse.Click(click);
 
             stateTimer = GetTickCount();
-            if (randomClick) currentState = STATE_SCAN_MOUSE;
+            if (randomClick) {
+                currentState = STATE_SCAN_MOUSE;
+                randomClick = false;
+            }
             else currentState = STATE_POST_INTERACT_WAIT;
             return false;
 
@@ -524,11 +527,12 @@ public:
                     // Cleanup
                     interact.Reset();
                     failedPath = false;
+                    g_GameState->globalState.bagEmptyTime = GetTickCount();
                     // Close the window (Optional: prevents clutter)
                     // input.SendDataRobust(std::wstring(L"/run CloseGossip() CloseMerchant()"));
+                    return true;
                 }
 
-                return true;
             }
         }
 
@@ -822,7 +826,7 @@ public:
 		const auto& entity = ws.entities[ws.combatState.entityIndex];
         if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
             if ((ws.combatState.targetGuidLow == entity.guidLow) && (ws.combatState.targetGuidHigh == entity.guidHigh)) {
-                //g_LogFile << npc->health << std::endl;
+                g_LogFile << npc->health << std::endl;
                 if ((npc->health == 0) || ws.combatState.reset) {
                     ResetState();
                     return true;
@@ -1790,19 +1794,19 @@ public:
                 std::vector<Vector3> empty = {};
                 if (state.pathFollowState.path.size() > 0) {
                     state.waypointReturnState.savedPath = state.pathFollowState.path;
-                    state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.pathFollowState.path, state.player.position);
-                    g_LogFile << "Prev Index: " << state.pathFollowState.index << " | New Index: " << state.waypointReturnState.savedIndex << " | Size: " << state.pathFollowState.path.size() << std::endl;
-                    //state.waypointReturnState.savedIndex = state.pathFollowState.index;
-                    state.pathFollowState.index = state.waypointReturnState.savedIndex;
+                    //state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.pathFollowState.path, state.player.position);
+                    //g_LogFile << "Prev Index: " << state.pathFollowState.index << " | New Index: " << state.waypointReturnState.savedIndex << " | Size: " << state.pathFollowState.path.size() << std::endl;
+                    //state.pathFollowState.index = state.waypointReturnState.savedIndex;
+                    state.waypointReturnState.savedIndex = state.pathFollowState.index;
                 }
             }
             else if (bestAction->GetName() == "Repair Equipment") {
                 std::vector<Vector3> empty = {};
                 if (state.interactState.path.size() > 0) {
                     state.waypointReturnState.savedPath = state.interactState.path;
-                    state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.interactState.path, state.player.position);
-                    state.interactState.index = state.waypointReturnState.savedIndex;
-                    //state.waypointReturnState.savedIndex = state.interactState.index;
+                    //state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.interactState.path, state.player.position);
+                    //state.interactState.index = state.waypointReturnState.savedIndex;
+                    state.waypointReturnState.savedIndex = state.interactState.index;
                 }
             }
             /*if (bestAction->GetName() == "Gather Node") {

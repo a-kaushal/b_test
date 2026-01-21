@@ -69,6 +69,7 @@ inline ULONG_PTR baseAddress;
 #define ENTITY_PLAYER_LEVEL 0x11C20
 #define ENTITY_PLAYER_EQUIPEMENT_OFFSET 0x14520 // Start of equipment array
 #define ENTITY_PLAYER_BAG_OFFSET 0x14700 // Offset to bag array
+#define ENTITY_PLAYER_MAIN_BAG_OFFSET 0x14750 // Offset to main bag items array
 #define ENTITY_PLAYER_IN_COMBAT_GUID_LOW 0x670 // Attacking Enemy
 #define ENTITY_PLAYER_IN_COMBAT_GUID_HIGH 0x678 // Attacking Enemy
 #define ENTITY_PLAYER_TARGET_GUID_LOW 0x11BF0 // Under attack from enemy

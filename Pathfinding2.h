@@ -42,8 +42,8 @@ const unsigned short AREA_DEEP_WATER = 0x06; // 6 (Deep Water)
 const float COLLISION_STEP_SIZE = 0.5f;    // Was 0.5f - less sampling
 const float MIN_CLEARANCE = 2.0f;          // Was 1.0f - more safety margin
 const float AGENT_RADIUS = 3.0f;           // CHANGED: Increased from 1.0f to 3.0f for a wider safety buffer
-const float WAYPOINT_STEP_SIZE = 4.0f;
-const int MAX_POLYS = 512;
+const float WAYPOINT_STEP_SIZE = 10.0f;
+const int MAX_POLYS = 8192;
 const float FLIGHT_GRID_SIZE = 25.0f;  // Optimized for FMap voxels
 const float FLIGHT_MAX_SEARCH_RADIUS = 500.0f;
 const int FLIGHT_MAX_ITERATIONS = 5000;
@@ -276,6 +276,92 @@ public:
             return nearest[1];
         }
         return -99999.0f;
+    }
+
+    // --- REFINES PATH TO AVOID WALL HUGGING ---
+    // pushes waypoints away from walls if they are too close.
+    // bufferDist: Desired clearance in yards (e.g., 0.8f for humanoids)
+    void RefinePathClearance(std::vector<PathNode>& path, float bufferDist, int mapId) {
+        if (!query || !mesh || path.size() < 3) return;
+
+        if (DEBUG_PATHFINDING) {
+            g_LogFile << "[RefinePath] Checking wall clearance..." << std::endl;
+        }
+
+        dtQueryFilter filter;
+        filter.setIncludeFlags(0xFFFF);
+        filter.setExcludeFlags(0);
+
+        float searchExt[3] = { 2.0f, 5.0f, 2.0f };
+
+        for (size_t i = 1; i < path.size() - 1; ++i) {
+            if (path[i].type != PATH_GROUND) continue;
+
+            Vector3& pos = path[i].pos;
+            Vector3 originalPos = pos; // Backup in case of calculation failure
+
+            float center[3] = { pos.y, pos.z, pos.x }; // WoW -> Recast Coords
+
+            dtPolyRef polyRef = 0;
+            float nearestPt[3] = { 0, 0, 0 };
+
+            // 1. Find nearest polygon
+            dtStatus status = query->findNearestPoly(center, searchExt, &filter, &polyRef, nearestPt);
+
+            if (dtStatusSucceed(status) && polyRef) {
+                float hitDist = 0.0f;
+                float hitPos[3] = { 0, 0, 0 };
+                float hitNormal[3] = { 0, 0, 0 };
+
+                // 2. Find distance to closest wall
+                if (dtStatusSucceed(query->findDistanceToWall(polyRef, nearestPt, 10.0f, &filter, &hitDist, hitPos, hitNormal))) {
+
+                    // 3. NAN / INFINITY CHECKS
+                    bool validMath = std::isfinite(hitDist) &&
+                        std::isfinite(hitNormal[0]) &&
+                        std::isfinite(hitNormal[1]) &&
+                        std::isfinite(hitNormal[2]);
+
+                    if (!validMath) {
+                        if (DEBUG_PATHFINDING) g_LogFile << "[RefinePath] Warning: NaN detected at waypoint " << i << ". Skipping." << std::endl;
+                        continue;
+                    }
+
+                    // 4. Zero Normal Check (Prevent pushing in unknown direction)
+                    float normalLenSq = hitNormal[0] * hitNormal[0] + hitNormal[1] * hitNormal[1] + hitNormal[2] * hitNormal[2];
+                    if (normalLenSq < 1e-6f) {
+                        continue;
+                    }
+
+                    // 5. Apply Push
+                    if (hitDist < bufferDist) {
+                        float pushAmt = bufferDist - hitDist;
+
+                        nearestPt[0] += hitNormal[0] * pushAmt;
+                        nearestPt[2] += hitNormal[2] * pushAmt;
+
+                        // Check result for validity
+                        if (!std::isfinite(nearestPt[0]) || !std::isfinite(nearestPt[2])) {
+                            pos = originalPos; // Revert
+                            continue;
+                        }
+
+                        // Apply
+                        pos.y = nearestPt[0];
+                        pos.x = nearestPt[2];
+
+                        // 6. Fix Z height
+                        float floorZ = GetFMapFloorHeight(mapId, pos.x, pos.y, pos.z + 2.5f);
+                        if (floorZ > -90000.0f) {
+                            pos.z = floorZ + 0.5f;
+                        }
+                        else {
+                            pos.z = nearestPt[1] + 0.5f; // Fallback to NavMesh Z
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Enhanced flight point validation using FMap
@@ -801,7 +887,7 @@ public:
 
         // If we loaded new tiles or reset the map, we need to init the query
         // dtNavMeshQuery::init can be called safely to reset/update
-        if (dtStatusFailed(query->init(mesh, 2048))) return false;
+        if (dtStatusFailed(query->init(mesh, 65535))) return false;
         currentMapId = mapId;
         return true;
     }
@@ -1552,6 +1638,55 @@ inline std::vector<PathNode> SubdivideFlightPath(const std::vector<PathNode>& in
     return output;
 }
 
+// --- PATH OPTIMIZATION (Removes collinear points) ---
+inline std::vector<PathNode> OptimizeFlightPath(const std::vector<PathNode>& path) {
+    if (path.size() < 3) return path;
+
+    std::vector<PathNode> optimized;
+    optimized.reserve(path.size());
+    optimized.push_back(path[0]);
+
+    for (size_t i = 1; i < path.size() - 1; ++i) {
+        const Vector3& prev = optimized.back().pos;
+        const Vector3& curr = path[i].pos;
+        const Vector3& next = path[i + 1].pos;
+
+        // Ensure we don't merge different path types (e.g. Air vs Ground)
+        if (optimized.back().type != path[i].type) {
+            optimized.push_back(path[i]);
+            continue;
+        }
+
+        Vector3 v1 = (curr - prev);
+        Vector3 v2 = (next - curr);
+
+        float dist1 = v1.Length();
+        float dist2 = v2.Length();
+
+        // Keep points if they are extremely close (micro-movements) or very far
+        if (dist1 < 0.1f || dist2 < 0.1f) {
+            optimized.push_back(path[i]);
+            continue;
+        }
+
+        v1 = v1 / dist1; // Normalize
+        v2 = v2 / dist2; // Normalize
+
+        // Dot Product: 1.0 = Perfectly Straight, 0.0 = 90 degrees
+        // 0.999 is ~2.5 degrees of tolerance. 
+        // If the direction barely changes, the middle point is redundant.
+        float dot = v1.Dot(v2);
+
+        if (dot < 0.995f) { // Keep point if there is a meaningful turn/curve
+            optimized.push_back(path[i]);
+        }
+        // Else: Skip 'curr', effectively connecting 'prev' directly to 'next'
+    }
+
+    optimized.push_back(path.back());
+    return optimized;
+}
+
 // Detect if a line segment passes through a no-fly zone (tunnel/indoor)
 inline bool DetectNoFlyZone(const Vector3& start, const Vector3& end, int mapId,
     Vector3& entryPoint, Vector3& exitPoint, bool forceStartNoFly = false) {
@@ -1943,9 +2078,28 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
         for (int i = currentIndex; i < inputPath.size(); ++i) modifiedInput.push_back(inputPath[i]);
         for (int i = 0; i < currentIndex; ++i) modifiedInput.push_back(inputPath[i]);
     }
+
+    std::vector<Vector3> mapLoadPoints;
+    if (!modifiedInput.empty()) {
+        mapLoadPoints.push_back(modifiedInput[0]);
+        for (size_t i = 0; i < modifiedInput.size() - 1; ++i) {
+            Vector3 start = modifiedInput[i];
+            Vector3 end = modifiedInput[i + 1];
+            float dist = start.Dist3D(end);
+            const float LOAD_STEP = 200.0f;
+            if (dist > LOAD_STEP) {
+                int steps = (int)(dist / LOAD_STEP);
+                Vector3 dir = (end - start).Normalize();
+                for (int j = 1; j < steps; ++j) {
+                    mapLoadPoints.push_back(start + (dir * (float)(j * LOAD_STEP)));
+                }
+            }
+            mapLoadPoints.push_back(end);
+        }
+    }
     
     // Sparse loading of only needed tiles
-    if (!globalNavMesh.LoadMap(mmapFolder, mapId, &modifiedInput, true)) {
+    if (!globalNavMesh.LoadMap(mmapFolder, mapId, &mapLoadPoints, true)) {
         g_LogFile << "Load Map failed" << std::endl;
         return {};
     }
@@ -2021,11 +2175,24 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
         }
     }
 
-    // --- APPLY NUDGE LOGIC (Updated Placement) ---
-    // Apply to BOTH Flight (Hybrid) and Ground paths.
-    // This cleans up ground segments within hybrid paths (e.g., tunnels) and pure ground paths.
-    // The function internally checks node type and only nudges PATH_GROUND nodes.
-    stitchedPath = NudgeGroundPath(stitchedPath, 1.0f, mapId);
+    // --- APPLY PATH REFINEMENT (New Logic) ---
+    // 0.8f is a good buffer for standard doorways (approx 2.0y wide). 
+    // It pushes the bot towards the center (1.0y) without blocking the path.
+    // If you use a value > 1.0f, you might block the bot from passing through narrow doors.
+
+    if (!attemptFlight) {
+        for (int i = 0; i < stitchedPath.size(); i++) {
+            g_LogFile << "Pre: " << stitchedPath[i].pos.x << " " << stitchedPath[i].pos.y << " " << stitchedPath[i].pos.z << " " << std::endl;
+        }
+        globalNavMesh.RefinePathClearance(stitchedPath, 0.7f, mapId);
+        for (int i = 0; i < stitchedPath.size(); i++) {
+            g_LogFile << "Post: " << stitchedPath[i].pos.x << " " << stitchedPath[i].pos.y << " " << stitchedPath[i].pos.z << " " << std::endl;
+        }
+    }
+
+    // Optional: Keep NudgeGroundPath only if RefinePathClearance isn't enough, 
+    // but RefinePathClearance is generally superior for wall collisions.
+    // stitchedPath = NudgeGroundPath(stitchedPath, 1.0f, mapId);
 
     // --- SUBDIVISION BASED ON MODE ---
     if (attemptFlight) {
@@ -2041,6 +2208,11 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
                 }
             }
         }
+        // --- CLEAN UP STRAIGHT LINES ---
+        // This removes the excessive waypoint density from Subdivision 
+        // where it isn't needed (straight lines), but keeps it for curves/terrain.
+        //stitchedPath = OptimizeFlightPath(stitchedPath);
+
         return stitchedPath;
     }
     else {

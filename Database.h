@@ -85,6 +85,17 @@ struct CreatureTemplateEntry {
     uint32_t Rank;       // Elite/Boss status
 };
 
+// Represents a row from WorldMapArea.csv
+struct WorldMapAreaEntry {
+    uint32_t MapID;      // Col 1
+    uint32_t AreaID;     // Col 2
+    string AreaName;     // Col 3
+    float LocLeft;       // Col 4 (World Y Max)
+    float LocRight;      // Col 5 (World Y Min)
+    float LocTop;        // Col 6 (World X Max)
+    float LocBottom;     // Col 7 (World X Min)
+};
+
 // Global storage for the DBC data (In a real app, load this from CSV/DBC)
 std::unordered_map<uint32_t, FactionTemplateEntry> sFactionTemplateStore;
 
@@ -117,6 +128,33 @@ private:
 
     // Map: NPC ID -> List of Spawn Locations
     std::unordered_map<uint32_t, std::vector<CreatureSpawn>> creatureSpawnStore;
+
+    // NEW: Map Zone Name -> Map Area Data
+    std::unordered_map<string, WorldMapAreaEntry> sWorldMapAreaStore;
+
+    // REVERSE LOOKUP MAP: Hash -> Zone Name
+    std::unordered_map<uint32_t, string> hashToNameStore;
+
+    // REVERSE LOOKUP MAP: Hash -> WorldMapAreaEntry
+    std::unordered_map<uint32_t, WorldMapAreaEntry> hashToInfoStore;
+
+    // DJB2 Hash Algorithm (Must match your Lua function exactly)
+    uint32_t calculateHash(const string& str) {
+        uint32_t hash = 5381;
+        for (char c : str) {
+            // ((hash << 5) + hash) is the same as (hash * 33)
+            hash = ((hash << 5) + hash) + (unsigned char)c;
+        }
+        return hash;
+    }
+
+    // Helper to remove quotes from CSV strings: "Durotar" -> Durotar
+    string stripQuotes(string input) {
+        if (input.size() >= 2 && input.front() == '"' && input.back() == '"') {
+            return input.substr(1, input.size() - 2);
+        }
+        return input;
+    }
 
     // Helper to parse a specific column from a delimiter-separated string
     string getColumnInternal(const string& line, int index, char delimiter) {
@@ -588,6 +626,146 @@ public:
         }
 
         return "Index Out of Bounds";
+    }
+
+    // ---------------------------------------------------------
+    // LOAD WORLD MAP AREA (CSV)
+    // ---------------------------------------------------------
+    void loadWorldMapArea(const string& filename) {
+        ifstream file(filename);
+        if (!file.is_open()) {
+            cerr << "[Error] Could not open WorldMapArea DB: " << filename << endl;
+            return;
+        }
+        cout << "Loading World Map Areas... ";
+
+        string line;
+        getline(file, line); // Skip header row
+
+        while (getline(file, line)) {
+            try {
+                // Parse Name first to see if it's valid
+                string rawName = getColumnInternal(line, 3, ',');
+                string areaName = stripQuotes(rawName);
+                uint32_t nameHash = calculateHash(areaName);
+
+                if (areaName.empty()) continue;
+
+                // Parse IDs
+                string sMapID = getColumnInternal(line, 1, ',');
+                string sAreaID = getColumnInternal(line, 2, ',');
+
+                // Parse Floats (Coordinates)
+                string sLocLeft = getColumnInternal(line, 4, ',');
+                string sLocRight = getColumnInternal(line, 5, ',');
+                string sLocTop = getColumnInternal(line, 6, ',');
+                string sLocBottom = getColumnInternal(line, 7, ',');
+
+                WorldMapAreaEntry entry;
+                entry.MapID = stoi(sMapID);
+                entry.AreaID = stoi(sAreaID); // usually 0 for the main map
+                entry.AreaName = areaName;
+
+                // Note: Standard DB2 format uses floats
+                entry.LocLeft = stof(sLocLeft);
+                entry.LocRight = stof(sLocRight);
+                entry.LocTop = stof(sLocTop);
+                entry.LocBottom = stof(sLocBottom);
+
+                // STORE IN REVERSE MAPS
+                // We prefer entries where AreaID != 0 (Specific Zones) over MapID (Continents)
+                // because usually we are looking for "Zangarmarsh", not "Outland".
+                if (hashToInfoStore.find(nameHash) == hashToInfoStore.end() || entry.AreaID != 0) {
+                    hashToNameStore[nameHash] = areaName; // Store Name
+                    hashToInfoStore[nameHash] = entry;    // Store Data
+                }
+            }
+            catch (...) { continue; }
+        }
+        cout << "Done. (" << sWorldMapAreaStore.size() << " zones loaded)" << endl;
+    }
+
+    // ---------------------------------------------------------
+    // GET ZONE INFO BY NAME
+    // Returns true if found, fills the references with data
+    // ---------------------------------------------------------
+    bool getZoneInfoByName(string searchName, int& mapId, float& outTop, float& outBottom, float& outLeft, float& outRight, int& areaId, uint32_t& hash) {
+
+        // 1. Try Exact Match via Hash (Fastest)
+        // This simulates exactly what the Lua addon sends
+        hash = calculateHash(searchName);
+        if (hashToInfoStore.find(hash) != hashToInfoStore.end()) {
+            WorldMapAreaEntry& entry = hashToInfoStore[hash];
+            outTop = entry.LocTop;
+            outBottom = entry.LocBottom;
+            outLeft = entry.LocLeft;
+            outRight = entry.LocRight;
+            areaId = entry.AreaID;
+            mapId = entry.MapID;            
+            return true;
+        }
+
+        // 2. Try Partial Search (Iterate all zones)
+        // Useful if you type "Zangar" instead of "Zangarmarsh"
+        cout << "[Search] Exact match not found for '" << searchName << "', looking for partials..." << endl;
+
+        for (auto& [h, entry] : hashToInfoStore) {
+            string dbName = entry.AreaName;
+
+            // Basic substring search (Case-sensitive in this simple version)
+            // You can make this case-insensitive using std::tolower if needed
+            if (dbName.find(searchName) != string::npos) {
+                outTop = entry.LocTop;
+                outBottom = entry.LocBottom;
+                outLeft = entry.LocLeft;
+                outRight = entry.LocRight;
+                cout << "[Search] Found partial match: " << dbName << endl;
+                return true;
+            }
+        }
+
+        cout << "[Search] No zone found matching '" << searchName << "'" << endl;
+        return false;
+    }
+
+    // ---------------------------------------------------------
+    // REVERSE HASH LOOKUP
+    // Input: The uint32 hash from Lua
+    // Output: The Zone Name (and coordinate limits if needed)
+    // ---------------------------------------------------------
+    string reverseHash(uint32_t hash, int& mapId, float& outTop, float& outBottom, float& outLeft, float& outRight, int& areaId, string& name) {
+
+        // 1. Check if hash exists in our map
+        if (hashToInfoStore.find(hash) != hashToInfoStore.end()) {
+            WorldMapAreaEntry& entry = hashToInfoStore[hash];
+
+            // Fill outputs
+            outTop = entry.LocTop;
+            outBottom = entry.LocBottom;
+            outLeft = entry.LocLeft;
+            outRight = entry.LocRight;
+            areaId = entry.AreaID;
+            mapId = entry.MapID;
+            name = entry.AreaName;
+
+            // Return the Name (Reversed!)
+            return entry.AreaName;
+        }
+
+        return "UNKNOWN_ZONE";
+    }
+
+    // Helper to calculate world coordinates from normalized (0-1) coordinates
+    // Using the data retrieved above
+    void convertNormToWorld(float normX, float normY, float top, float bottom, float left, float right, float& outWorldX, float& outWorldY) {
+        // Map X (0-1) corresponds to World Y
+        // Map Y (0-1) corresponds to World X
+
+        float mapHeight = top - bottom;
+        float mapWidth = left - right;
+
+        outWorldX = top - (normY * mapHeight);
+        outWorldY = left - (normX * mapWidth);
     }
 };
 

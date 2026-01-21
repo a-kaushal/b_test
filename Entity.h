@@ -50,6 +50,7 @@ struct PlayerInfo : EntityInfo {
     int32_t maxHealth;
     int32_t level;
     int32_t mapId;
+    int32_t areaId;
     bool isFlying;
     bool onGround;
     bool inWater;
@@ -57,15 +58,9 @@ struct PlayerInfo : EntityInfo {
 	bool groundMounted;
 	bool flyingMounted;
     bool isMounted;
-    bool isDead;
     bool areaMountable; // True if an area is flyable
     bool isIndoor; // True if player is indoors
     bool needRepair; // True if player equipment needs repairs
-    bool isGhost; // Player is dead and a ghost
-    float corpsePositionX; // Player corpse position x
-    float corpsePositionY; // Player corpse position y
-    bool isDeadBody; // Player is dead but not a ghost yet
-    bool canRespawn; // Player ghost in reange of body and able to respawn
     int bagFreeSlots;
     ULONG_PTR inCombatGuidLow;
     ULONG_PTR inCombatGuidHigh;
@@ -74,6 +69,17 @@ struct PlayerInfo : EntityInfo {
     float rotation;
     float vertRotation;
     float distance;
+
+    int32_t corpseMapId;
+    int32_t corpseAreaId; // Local Area ID (lookup from WorldMapArea.csv)
+    std::string corpseMapName;
+    uint32_t corpseMapHash; // Map name hash
+    bool isDead; // Player is dead
+    bool isGhost; // Player is dead and a ghost
+    float corpseX; // Player corpse position x
+    float corpseY; // Player corpse position y
+    bool isDeadBody; // Player is dead but not a ghost yet
+    bool canRespawn; // Player ghost in reange of body and able to respawn
 };
 
 struct EnemyInfo : EntityInfo {
@@ -121,6 +127,13 @@ struct BagInfo : EntityInfo {
     int bagSlots;
     int slotCount;
     int freeSlots;
+};
+
+struct CorpseInfo : EntityInfo {
+    ULONG_PTR objectPtr;
+    Vector3 position;
+    float distance;
+    uint32_t id;
 };
 
  /* Sorts a vector of GameEntities by distance (Ascending).

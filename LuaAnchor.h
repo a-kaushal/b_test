@@ -3,6 +3,7 @@
 #include <string>
 #include <iostream>
 #include "MemoryRead.h" // Ensures we have access to MemoryAnalyzer
+#include "Database.h"
 
 ULONG_PTR LUA_ADDON_ENTRY = 0x0;
 
@@ -98,7 +99,7 @@ public:
         }
     }
 
-    static void ReadLuaData(MemoryAnalyzer& analyzer, DWORD pid, const std::string& magicString, ULONG_PTR& entryPtr) {
+    static void ReadLuaData(MemoryAnalyzer& analyzer, DWORD pid, const std::string& magicString, ULONG_PTR& entryPtr, WoWDataTool& worldMap) {
         std::string rawMemoryString;
         bool firstRead = false;
         if (entryPtr == 0) {
@@ -126,7 +127,7 @@ public:
                 if (analyzer.ReadPointer(pid, tableAddress + 0x20, arrayPtr)) {
 
                     // Read the first 3 values (Double precision)
-                    double val, val1, val2, val3, val4, val5, val6, val7, val8, val9, val10, val11, val12, val13;
+                    double val, val1, val2, val3, val4, val5, val6, val7, val8, val9, val10, val11, val12, val13, val14, val15;
                     analyzer.ReadDouble(pid, arrayPtr + 0x00, val); // Verification Value
                     analyzer.ReadDouble(pid, arrayPtr + 0x18, val1);
                     analyzer.ReadDouble(pid, arrayPtr + 0x30, val2);
@@ -141,6 +142,8 @@ public:
                     analyzer.ReadDouble(pid, arrayPtr + 0x108, val11);
                     analyzer.ReadDouble(pid, arrayPtr + 0x120, val12);
                     analyzer.ReadDouble(pid, arrayPtr + 0x138, val13);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x150, val14);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x168, val15);
 
                     ((val1 > 0.5) ? g_GameState->player.needRepair = true : g_GameState->player.needRepair = false);
                     ((val2 > 0.5) ? g_GameState->player.isIndoor = true : g_GameState->player.isIndoor = false);
@@ -148,15 +151,34 @@ public:
                     (((val6 > 0.5) && (val4 > 0.5)) ? g_GameState->player.flyingMounted = true : g_GameState->player.flyingMounted = false);
                     (((val6 < 0.5) && (val4 > 0.5)) ? g_GameState->player.groundMounted = true : g_GameState->player.groundMounted = false);
                     ((val7 > 0.5) ? g_GameState->player.isGhost = true : g_GameState->player.isGhost = false);
-                    g_GameState->player.corpsePositionX = float(val8);
-                    g_GameState->player.corpsePositionY = float(val9);
                     ((val10 > 0.5) ? g_GameState->player.canRespawn = true : g_GameState->player.canRespawn = false);
                     ((val11 > 0.5) ? g_GameState->player.isDeadBody = true : g_GameState->player.isDeadBody = false);
                     ((val12 > 0.5) ? g_GameState->globalState.vendorOpen = true : g_GameState->globalState.vendorOpen = false);
-                    ((val12 > 0.5) ? g_GameState->globalState.chatOpen = true : g_GameState->globalState.chatOpen = false);
+                    ((val13 > 0.5) ? g_GameState->globalState.chatOpen = true : g_GameState->globalState.chatOpen = false);
+                    //((val14 > 0.5) ? g_LogFile << "Mail Window Open" << std::endl : g_LogFile << "Mail Window Closed" << std::endl);
+                    
+                    g_GameState->player.isDead = g_GameState->player.isGhost || g_GameState->player.isDeadBody;
+                    if (g_GameState->player.isDead) {
+                        float top, bottom, left, right;
+                        worldMap.reverseHash(val15, g_GameState->player.corpseMapId, top, bottom, left, right,
+                            g_GameState->player.corpseAreaId, g_GameState->player.corpseMapName);
+                        worldMap.convertNormToWorld(val8, val9, top, bottom, left, right, g_GameState->player.corpseX, g_GameState->player.corpseY);
+                        g_GameState->player.corpseMapHash = val15;
+                        g_LogFile << g_GameState->player.corpseX << " " << g_GameState->player.corpseY << std::endl;
+                    }
+                    else {
+                        g_GameState->player.corpseMapId = -1;
+                        g_GameState->player.corpseMapName = -1;
+                        g_GameState->player.corpseMapHash = -1; // Map name hash
+                        g_GameState->player.corpseX = -1;
+                        g_GameState->player.corpseY = -1;
+                        g_GameState->player.corpseMapHash = -1;
+                    }
 
                     if (firstRead == true) {
-                        g_LogFile << "Data: [" << g_GameState->player.needRepair << ", " << g_GameState->player.isIndoor << ", " << g_GameState->player.areaMountable << ", " << val4 << ", " << val5 << ", " << val6 << " " << val12 << "]" << std::endl;
+                        g_LogFile << "Data: [" << g_GameState->player.needRepair << ", " << g_GameState->player.isIndoor << ", " << g_GameState->player.areaMountable << ", " << val4 << ", " << val5
+                            << ", " << val6 << " " << val7 << " " << val8 << " " << val9 << " " << val10 << " " << val11 << " " << val12 << " " << val13 << " "
+                            << val14 << " " << val15 << "]" << std::endl;
                     }
                 }
             }

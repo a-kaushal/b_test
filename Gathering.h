@@ -52,7 +52,10 @@ void UpdateGatherTarget(WorldState& ws) {
         // 1. Check basic object type (Must be GameObject)
         if (entity.objType != "Object") continue;
 
-        if (g_GameState->player.bagFreeSlots == 0) return;
+        if (g_GameState->player.bagFreeSlots == 0) {
+            ws.gatherState.nodeActive = false;
+            return;
+        }
 
         // If we already have a target, check if it's still valid/close
         if ((ws.gatherState.hasNode) && (entity.guidLow == ws.gatherState.guidLow) && (entity.guidHigh == ws.gatherState.guidHigh)) {

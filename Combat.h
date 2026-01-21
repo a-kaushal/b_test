@@ -10,6 +10,8 @@
 #include "Entity.h"
 
 bool UnderAttackCheck() {
+    bool targetFound = false;
+    std::vector<Vector3> enemyIndices = {};
 	if ((g_GameState->player.targetGuidLow != 0) && (g_GameState->player.targetGuidHigh != 0)) {
         int count = 0;
         for (auto& entity : g_GameState->entities) {

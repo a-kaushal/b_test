@@ -22,6 +22,12 @@ struct ActionState {
 struct GlobalState : public ActionState {
     bool vendorOpen = false;
     bool chatOpen = false;
+    DWORD bagEmptyTime = 0;
+    int mapId = 0;
+    int areaId = 0; // Local Area ID (lookup from WorldMapArea.csv)
+    std::string mapName;
+    uint32_t mapHash; // Map name hash
+    float top, bottom, left, right = 0; // Local Map coordinates
 };
 
 struct Looting : public ActionState {
