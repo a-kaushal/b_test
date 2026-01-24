@@ -4,6 +4,7 @@
 #include <string>
 #include <memory>
 #include "WorldState.h"
+#include "Profile.h"
 
 // 1. The Generic Task Interface
 struct IProfileTask {
@@ -17,12 +18,17 @@ struct IProfileTask {
 class BotProfile {
 public:
     std::deque<std::shared_ptr<IProfileTask>> taskQueue;
-    WorldState* State = nullptr;
+    WorldState* State = nullptr; 
+    ProfileSettings* Settings = nullptr;
     std::string profileName = "Unnamed Profile";
 
     virtual ~BotProfile() = default;
 
-    virtual void Setup(WorldState* state) { this->State = state; }
+    virtual void Setup(WorldState* state, ProfileSettings* settings) {
+        this->State = state;
+        this->Settings = settings;
+    }
+
     virtual void Tick() = 0;
 
     void SetName(std::string name) { profileName = name; }

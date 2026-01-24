@@ -36,6 +36,7 @@
 #include "WebServer.h"
 #include "ProfileLoader.h"
 #include "Mailing.h"
+#include "Profile.h"
 
 #include <DbgHelp.h> // Required for MiniDump
 
@@ -138,6 +139,7 @@ struct WorldState;
 
 WorldState g_GameStateInstance;
 WorldState* g_GameState = nullptr;
+ProfileSettings g_ProfileSettings;
 
 // ---------------------------------------------------------
 // Heuristic: Brute Force Scan of ASLR Range (Bypasses Enumeration)
@@ -749,7 +751,7 @@ void MainThread(HMODULE hModule) {
 
     log("DLL Loaded! Console Attached.");
 
-    WebServer::Start(8080); // Starts web server on http://localhost:8080
+    WebServer::Start(5678); // Starts web server on http://localhost:5678
     log("Web Server started at http://localhost:8080");
 
     // Launch GUI in background thread
@@ -758,6 +760,7 @@ void MainThread(HMODULE hModule) {
 
     try {
         MemoryAnalyzer analyzer;
+        ULONG_PTR objMan_Direct = 0;
         ULONG_PTR objMan_Entry = 0;
         ULONG_PTR objMan_Base = 0;
         ULONG_PTR entityArray = 0;
@@ -888,6 +891,11 @@ void MainThread(HMODULE hModule) {
                         lastF3State = currentF3State;
 
                         // 2. Refresh Pointers & Entities
+                        analyzer.ReadPointer(procId, baseAddress + OBJECT_MANAGER_OFFSET, objMan_Direct);
+                        if (objMan_Direct == 0x0) {
+                            g_LogFile << "Not in game" << std::endl;
+                            break;
+                        }
                         analyzer.ReadPointer(procId, objMan_Entry + OBJECT_MANAGER_FIRST_OBJECT_OFFSET, objMan_Base);
                         analyzer.ReadPointer(procId, objMan_Base + ENTITY_ARRAY_OFFSET, entityArray);
                         analyzer.ReadInt32(procId, objMan_Base + ENTITY_ARRAY_SIZE_OFFSET, entityArraySize);
@@ -950,6 +958,15 @@ void MainThread(HMODULE hModule) {
                             try {
                                 // Enforce Focus
                                 if (GetForegroundWindow() != hGameWindow) SetForegroundWindow(hGameWindow);
+
+                                // This runs your profile script (once) to populate the queue
+                                if (auto* profile = g_ProfileLoader.GetActiveProfile()) {
+                                    profile->Tick();
+                                }
+
+                                if (UnderAttackCheck() == true) {
+                                    //g_LogFile << "Under Attack Detected!" << std::endl;
+                                }
 
                                 if (g_GameState->gatherState.enabled == true) {
                                     UpdateGatherTarget(g_GameStateInstance);

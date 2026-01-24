@@ -1,47 +1,39 @@
 #pragma once
-#include <thread>
-#include <atomic>
-#include <mutex>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <string>
+#include <vector>
+#include <atomic>
+#include <thread>
+#include <mutex>
+
+#pragma comment(lib, "Ws2_32.lib")
 
 class WebServer {
 public:
-    // Starts the web server in a background thread
-    static void Start(int port = 8080);
-
-    // Stops the server
+    static void Start(int port);
     static void Stop();
 
-    // --- Interface for Main Bot Logic ---
-
-    // Check if the user clicked "Start Bot" in the UI
+    // Getters/Setters
     static bool IsBotActive();
-
-    // Set the state (e.g., if the bot stops itself)
     static void SetBotActive(bool active);
-
-    // Check if a profile load was requested via the UI
     static bool IsProfileLoadRequested();
-
-    // Get the name of the profile to load
     static std::string GetRequestedProfile();
-
-    // Notify the UI that the profile has been loaded
     static void ConfirmProfileLoaded(const std::string& profileName);
+
+    // Dashboard HTML Generator
+    static std::string GetHTML();
 
 private:
     static void ServerThread(int port);
-    static void HandleClient(unsigned __int64 clientSocket); // SOCKET is uint64 on x64
-
-    // Response Builders
-    static std::string BuildJSON();       // Legacy: Map/Entity Data
-    static std::string BuildStatusJSON(); // New: Dashboard Status
-    static std::string GetHTML();         // New: Controller UI
+    static void HandleClient(unsigned __int64 clientSocketRaw);
+    
+    // [FIX] These are now private static members so they can access startTime
+    static std::string GenerateJSONState();
+    static std::string ReadLogFileTail(int charsToRead);
 
     static std::atomic<bool> running;
     static std::thread serverThread;
-
-    // State Variables
     static std::atomic<bool> botActive;
     static std::atomic<bool> profileLoadReq;
     static std::string currentProfile;

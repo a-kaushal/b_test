@@ -36,8 +36,8 @@ bool BlacklistCheck(WorldState& ws, ULONG_PTR guidLow, ULONG_PTR guidHigh) {
 // Helper to find nodes in the entity list
 void UpdateGatherTarget(WorldState& ws) {    
 
-    float bestDist = GATHERING_RANGE; // Max scan range (yards)
-    float secondBestDist = GATHERING_RANGE; // Max scan range (yards)
+    float bestDist = g_ProfileSettings.gatherRange; // Max scan range (yards)
+    float secondBestDist = g_ProfileSettings.gatherRange; // Max scan range (yards)
     int bestIndex = -1;
     int secondBestIndex = -1;
 
@@ -60,7 +60,7 @@ void UpdateGatherTarget(WorldState& ws) {
         // If we already have a target, check if it's still valid/close
         if ((ws.gatherState.hasNode) && (entity.guidLow == ws.gatherState.guidLow) && (entity.guidHigh == ws.gatherState.guidHigh)) {
             float dist = ws.player.position.Dist3D(ws.gatherState.position);
-            if ((dist > GATHERING_RANGE) || (std::dynamic_pointer_cast<ObjectInfo>(entity.info)->nodeActive == 0)) { // Lost it or moved too far
+            if ((dist > g_ProfileSettings.gatherRange) || (std::dynamic_pointer_cast<ObjectInfo>(entity.info)->nodeActive == 0)) { // Lost it or moved too far
                 //ws.gatherState.hasNode = false;
                 ws.gatherState.nodeActive = false;
             }
@@ -72,7 +72,7 @@ void UpdateGatherTarget(WorldState& ws) {
             //if (object->position.z <= 0.0f) continue;
             if (object->nodeActive == 0) continue;
 
-            if (((object->type == 1) && (HERBALISM_ENABLED == true)) || ((object->type == 2) && (MINING_ENABLED == true))) {
+            if (((object->type == 1) && (g_ProfileSettings.herbalismEnabled == true)) || ((object->type == 2) && (g_ProfileSettings.miningEnabled == true))) {
 
                 // --- CLEANER IGNORE WATER LOGIC ---
                 if (g_GameState->globalState.ignoreUnderWater) {

@@ -50,8 +50,12 @@ public:
         path = ParsePathStr(pathStr);
     }
     std::string GetName() const override { return "Follow Path"; }
-    void OnInterrupt() override { started = false; }
+    void OnInterrupt() override { }
     bool Execute(WorldState* state) override {
+        if (started && !state->pathFollowState.enabled) {
+            return true;
+        }
+
         if (!started) {
             std::vector<PathNode> empty = {};
 
@@ -60,12 +64,12 @@ public:
             state->pathFollowState.looping = looping;
             state->pathFollowState.flyingPath = flying;
             state->pathFollowState.enabled = true;
-            if (!state->pathFollowState.hasPath) state->pathFollowState.pathIndexChange = true; // This is only true if an override action disrupts the path
-            else state->pathFollowState.hasPath = true;
+            state->pathFollowState.hasPath = true;
+            state->pathFollowState.pathIndexChange = true;
             started = true;
             return false;
         }
-        return !state->pathFollowState.enabled; // Done when engine disables itself
+        return false; // Done when engine disables itself
     }
 };
 
@@ -80,8 +84,15 @@ public:
         : loc(location), npcId(id), isRepair(repair) {
     }
     std::string GetName() const override { return isRepair ? "Repairing" : "Selling"; }
-    void OnInterrupt() override { started = false; }
+    void OnInterrupt() override { }
     bool Execute(WorldState* state) override {
+        // If interaction is active, but the ID doesn't match ours, 
+        // it means dllmain/Repair triggered a high-priority override.
+        if (state->interactState.interactActive && state->interactState.interactId != npcId) {
+            started = false; // Reset ourselves so we retry later
+            return false;    // Yield immediately
+        }
+
         if (!started) {
             // NOTE: In the DLL, we rely on the generic interact state. 
             // We cannot call global functions like Repair() here because they are in the Main EXE.

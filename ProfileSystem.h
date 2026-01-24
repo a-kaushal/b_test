@@ -5,35 +5,12 @@
 #include "json.hpp"
 #include "Logger.h"
 #include "Vector.h"
+#include "Profile.h"
 
 using json = nlohmann::json;
 
 class MovementController;
 struct WorldState;
-
-// --- Data Structures ---
-struct ProfileSettings {
-    bool sellGrey = false;
-    bool sellWhite = false;
-    bool gatherEnabled = false;
-    bool miningEnabled = false;
-    bool lootMobsEnabled = false;
-    int minFreeSlots = 0;
-
-    float gatheringRange = 300.0f;
-    float lootRange = 75.0f;
-    std::wstring mountName = L"Blue Wind Rider";
-};
-
-struct AvoidMob {
-    int id;
-    std::string name;
-};
-
-struct Blackspot {
-    Vector3 pos;
-    float radius;
-};
 
 // --- The Profile System ---
 class ProfileSystem {

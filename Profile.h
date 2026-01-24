@@ -1,12 +1,44 @@
 #pragma once
+#include <vector>
+#include <string>
+#include "Vector.h"
 
-#define GATHERING_PROFILE true
+struct AvoidMob {
+    int id;
+    std::string name;
+};
 
-#define MINING_ENABLED true
-#define HERBALISM_ENABLED false
-#define LOOT_MOBS_ENABLED false
+struct Blackspot {
+    Vector3 pos;
+    float radius;
+};
 
-#define GATHERING_RANGE 300
-#define LOOT_RANGE 75
+struct ProfileSettings {
+    // Toggles
+    bool gatherEnabled = true;
+    bool miningEnabled = true;
+    bool herbalismEnabled = false;
+    bool skinningEnabled = false;
+    bool lootMobsEnabled = true;
+    bool sellGrey = true;
+    bool sellWhite = false;
+    bool mailBlue = true;
+    bool mailPurple = true;
 
-#define MOUNT_NAME L"Blue Wind Rider"
+    // Thresholds
+    float combatRange = 5.0f;
+    float lootRange = 50.0f;
+    float gatherRange = 300.0f;
+    int minFreeSlots = 2;
+
+    // Lists
+    std::vector<int> blacklistedItems;
+    std::vector<int> blacklistedNodes;
+    std::vector<Blackspot> blackspots;
+    std::vector<AvoidMob> avoidMobs;
+
+    std::string mountName = "Blue Wind Rider";
+};
+
+// Global Declaration (So everyone knows this variable exists)
+extern ProfileSettings g_ProfileSettings;

@@ -2044,7 +2044,6 @@ public:
         }
 
         if (bestAction) {
-            g_LogFile << "New Action" << std::endl;
             if (currentAction == nullptr) {
                 if (bestAction->GetName() == "Follow Path") {
                     std::vector<Vector3> empty = {};

@@ -7,9 +7,12 @@
 #include <vector>
 #include <filesystem>
 #include "ProfileInterface.h"
+#include "Profile.h"
 
 // Defines global log file for the Main EXE
 extern std::ofstream g_LogFile;
+
+extern ProfileSettings g_ProfileSettings;
 
 class ProfileLoader {
 private:
@@ -19,6 +22,7 @@ private:
     // [CONFIG] Directories
     std::string profileDir = "C:\\Driver\\Profiles";
     std::string sourceDir = "Z:\\VSProjects\\source\\repos\\MemoryTest\\SMM";
+    std::string secondarySource = "C:\\Driver";
 
 public:
     BotProfile* GetActiveProfile() { return currentProfile; }
@@ -122,10 +126,12 @@ bool CompileAndLoad(const std::string& profileCode, std::string& outError) {
     out << "#include <Windows.h>\n#include <vector>\n#include <string>\n#include <cmath>\n";
     out << "#include \"Vector.h\"\n";
     out << "#include \"Entity.h\"\n";
+    out << "class ProfileLoader;\n";
     out << "#include \"dllmain.h\"\n";
     out << "#include \"WorldState.h\"\n";
     out << "#include \"Pathfinding2.h\"\n";
-    out << "#include \"MovementController.h\"\n";
+    out << "#include \"MovementController.h\"\n"; 
+    out << "#include \"Profile.h\"\n";
     out << "#include \"ProfileInterface.h\"\n";
     out << "#include \"ProfileSystem.h\"\n"; 
     out << "#include \"Behaviors.h\"\n";
@@ -136,9 +142,9 @@ bool CompileAndLoad(const std::string& profileCode, std::string& outError) {
     // Generate Wrapper
     out << "class ProfileWrapper : public MyProfile {\n";
     out << "public:\n";
-    out << "    void Setup(WorldState* state) override {\n";
+    out << "    void Setup(WorldState* state, ProfileSettings* settings) override {\n";
     out << "        g_GameState = state;\n";
-    out << "        MyProfile::Setup(state);\n";
+    out << "        MyProfile::Setup(state, settings);\n";
     out << "    }\n";
     out << "};\n";
 
@@ -167,7 +173,7 @@ bool CompileAndLoad(const std::string& profileCode, std::string& outError) {
     // 5. BUILD COMMAND
     std::stringstream cmd;
     cmd << "set PATH=" << binDir << ";%PATH% && ";
-    cmd << "cl.exe /nologo /LD /MD /EHsc /O2 /std:c++17 /wd4566 /wd4005 /FI \"ForceHeader.h\" ";
+    cmd << "cl.exe /D COMPILING_PROFILE /nologo /LD /MD /EHsc /O2 /std:c++17 /wd4566 /wd4005 /FI \"ForceHeader.h\" ";
 
     cmd << "/I \"" << incMSVC << "\" ";
     cmd << "/I \"" << incUCRT << "\" ";
@@ -205,8 +211,10 @@ bool CompileAndLoad(const std::string& profileCode, std::string& outError) {
 
     currentProfile = factory();
     if (currentProfile) {
-        extern WorldState* g_GameState;
-        currentProfile->Setup(g_GameState);
+        extern WorldState* g_GameState; 
+        extern ProfileSettings g_ProfileSettings;
+
+        currentProfile->Setup(g_GameState, &g_ProfileSettings);
     }
 
     return true;
@@ -214,5 +222,4 @@ bool CompileAndLoad(const std::string& profileCode, std::string& outError) {
 
 // Config variables for FindAndStage...
 std::string primarySource = "Z:\\VSProjects\\source\\repos\\MemoryTest\\SMM";
-std::string secondarySource = "C:\\Driver";
 };
