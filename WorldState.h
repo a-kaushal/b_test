@@ -160,5 +160,7 @@ struct WorldState {
 
     // Danger / Interrupts
     bool isInDanger = false; // e.g., standing in fire
-    Vector3 dangerPos;       // Where the fire is    
+    Vector3 dangerPos;       // Where the fire is
+
+    bool overrideAction = false; // True if the current profile action is being overridden with the same action
 };

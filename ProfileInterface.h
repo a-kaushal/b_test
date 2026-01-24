@@ -1,74 +1,32 @@
 #pragma once
 #include <vector>
+#include <deque>
 #include <string>
-#include <Windows.h>
-#include "dllmain.h"
-#include "Vector.h"
+#include <memory>
 #include "WorldState.h"
 
-// Abstract Base Class for all Profiles
-class BotProfile {
-public:
-    virtual ~BotProfile() = default;
-
-    // Called once when profile is loaded
-    virtual void Setup(WorldState* state) {
-        this->State = state;
-    }
-
-    // Called every frame (Tick). 
-    // Return true to keep running, false if profile is "finished"
-    virtual void Tick() = 0;
-
-protected:
-    WorldState* State = nullptr; // Helper to access state in Tick()
-    // --- SDK HELPER FUNCTIONS ---
-
-    // Returns true if task is IN PROGRESS, false if COMPLETE
-    bool GrindMobsUntil(int mapId, int targetLevel, std::string taskName, std::string hotspots) {
-        if (g_GameState->player.level >= targetLevel) {
-            // Task Complete
-            g_GameState->combatState.enabled = false;
-            g_GameState->pathFollowState.enabled = false;
-            return false;
-        }
-
-        // Setup State
-        g_GameState->combatState.enabled = true;
-
-        //// Simple Logic: If not fighting and no path, start pathing
-        //if (!g_GameState->combatState.inCombat && !g_GameState->pathFollowState.hasPath) {
-        //    // Parse hotspots string and start following path
-        //    // You can reuse your existing FollowPath logic here
-        //    FollowPath(mapId, hotspots, true, false);
-        //}
-
-        return true; // Task in progress
-    }
-
-    bool MoveTo(int mapId, std::string hotspots) {
-        // Simple distance check to last point
-        std::vector<Vector3> path = ParsePathString(hotspots);
-        if (path.empty()) return false;
-
-        if (g_GameState->player.position.Dist3D(path.back()) < 5.0f) return false; // Arrived
-
-        //if (!g_GameState->pathFollowState.hasPath) {
-        //    FollowPath(mapId, hotspots, false, true); // Non-looping, Flying allowed
-        //}
-        return true;
-    }
-
-    // Wrappers for your lists
-    void AddVendor(int id, std::string name, Vector3 pos, std::string type) {
-        // Add to g_GameState->globalState.vendors (You need to add this vector to WorldState)
-    }
-
-    void AddBlackspot(Vector3 pos, float radius) {
-        // Add to g_GameState->globalState.blackspots (You need to add this vector to WorldState)
-    }
+// 1. The Generic Task Interface
+struct IProfileTask {
+    virtual bool Execute(WorldState* state) = 0;
+    virtual void OnInterrupt() {} // Called if Priority System overrides this task
+    virtual std::string GetName() const = 0;
+    virtual ~IProfileTask() = default;
 };
 
-// Factory typedefs for DLL loading
+// 2. Base Profile Class
+class BotProfile {
+public:
+    std::deque<std::shared_ptr<IProfileTask>> taskQueue;
+    WorldState* State = nullptr;
+    std::string profileName = "Unnamed Profile";
+
+    virtual ~BotProfile() = default;
+
+    virtual void Setup(WorldState* state) { this->State = state; }
+    virtual void Tick() = 0;
+
+    void SetName(std::string name) { profileName = name; }
+    void AddTask(std::shared_ptr<IProfileTask> task) { taskQueue.push_back(task); }
+};
+
 typedef BotProfile* (*CreateProfileFn)();
-typedef void (*DeleteProfileFn)(BotProfile*);
