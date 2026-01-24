@@ -967,7 +967,6 @@ void MainThread(HMODULE hModule) {
                                 if (UnderAttackCheck() == true) {
                                     //g_LogFile << "Under Attack Detected!" << std::endl;
                                 }
-
                                 if (g_GameState->gatherState.enabled == true) {
                                     UpdateGatherTarget(g_GameStateInstance);
                                 }
@@ -975,6 +974,7 @@ void MainThread(HMODULE hModule) {
                                     // If 30 minutes since last resupply mail items
                                     if (((g_GameState->globalState.bagEmptyTime != -1) && (g_GameState->globalState.bagEmptyTime - GetTickCount() < 1800000)) || g_GameState->interactState.mailing) {
                                         MailItems(530, Vector3{ 258.91f, 7870.72f, 23.01f }, 182567);
+                                        g_LogFile << "Mailing Active" << std::endl;
                                     }
                                     //else if (!g_GameState->interactState.interactActive) {
                                     else {

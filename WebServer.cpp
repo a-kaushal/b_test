@@ -241,75 +241,110 @@ void WebServer::ServerThread(int port) {
 void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
     SOCKET clientSocket = (SOCKET)clientSocketRaw;
 
-    const int BUFFER_SIZE = 1024 * 1024; // 1MB
+    const int BUFFER_SIZE = 4096; // 4KB chunks are sufficient for reading
     std::vector<char> buffer(BUFFER_SIZE);
+    std::string requestData;
 
-    int bytesRecv = recv(clientSocket, buffer.data(), BUFFER_SIZE, 0);
+    // 1. Read Headers
+    int bytesRecv;
+    size_t headerEndPos = std::string::npos;
 
-    if (bytesRecv > 0) {
-        std::string request(buffer.data(), bytesRecv);
-        std::string responseBody;
-        std::string contentType = "text/html";
-        int statusCode = 200;
-
-        // --- ROUTING LOGIC ---
-
-        // 1. POST /api/start
-        if (request.find("POST /api/start ") != std::string::npos) {
-            botActive = true;
-            responseBody = "{\"status\":\"ok\"}";
-            contentType = "application/json";
+    while ((bytesRecv = recv(clientSocket, buffer.data(), BUFFER_SIZE, 0)) > 0) {
+        requestData.append(buffer.data(), bytesRecv);
+        headerEndPos = requestData.find("\r\n\r\n");
+        if (headerEndPos != std::string::npos) {
+            break; // Headers fully received
         }
-        // 2. POST /api/stop
-        else if (request.find("POST /api/stop ") != std::string::npos) {
-            botActive = false;
-            responseBody = "{\"status\":\"ok\"}";
-            contentType = "application/json";
-        }
-        // 3. POST /api/upload_profile
-        else if (request.find("POST /api/upload_profile ") != std::string::npos) {
-            size_t bodyPos = request.find("\r\n\r\n");
-            if (bodyPos != std::string::npos) {
-                std::string body = request.substr(bodyPos + 4);
-                std::string error;
-                if (g_ProfileLoader.CompileAndLoad(body, error)) {
-                    responseBody = "{\"status\":\"success\", \"message\":\"Profile Loaded!\"}";
-                    currentProfile = "Uploaded Profile";
-                }
-                else {
-                    responseBody = "{\"status\":\"error\", \"message\":\"" + EscapeJSON(error) + "\"}";
-                }
-                contentType = "application/json";
-            }
-        }
-        // 4. GET /api/state (Complete State for Dashboard)
-        else if (request.find("GET /api/state ") != std::string::npos) {
-            responseBody = GenerateJSONState(); // Calls member function
-            contentType = "application/json";
-        }
-        // 5. GET /api/logs
-        else if (request.find("GET /api/logs ") != std::string::npos) {
-            responseBody = ReadLogFileTail(50000); // Calls member function
-            contentType = "text/plain";
-        }
-        // 6. GET / (Dashboard HTML)
-        else {
-            responseBody = GetHTML();
-        }
-
-        // Send Response
-        std::stringstream ss;
-        ss << "HTTP/1.1 " << statusCode << " OK\r\n"
-            << "Content-Type: " << contentType << "\r\n"
-            << "Access-Control-Allow-Origin: *\r\n"
-            << "Content-Length: " << responseBody.length() << "\r\n"
-            << "Connection: close\r\n"
-            << "\r\n"
-            << responseBody;
-
-        std::string header = ss.str();
-        send(clientSocket, header.c_str(), (int)header.length(), 0);
     }
+
+    if (headerEndPos == std::string::npos) {
+        // Malformed request or connection closed early
+        closesocket(clientSocket);
+        return;
+    }
+
+    // 2. Parse Content-Length to handle the Body
+    size_t contentLength = 0;
+    size_t clPos = requestData.find("Content-Length: ");
+    if (clPos != std::string::npos) {
+        size_t endOfLine = requestData.find("\r\n", clPos);
+        std::string val = requestData.substr(clPos + 16, endOfLine - (clPos + 16));
+        try { contentLength = std::stoull(val); }
+        catch (...) { contentLength = 0; }
+    }
+
+    // 3. Read Remaining Body (if necessary)
+    size_t bodyStart = headerEndPos + 4;
+    size_t currentBodySize = requestData.size() - bodyStart;
+
+    while (currentBodySize < contentLength) {
+        bytesRecv = recv(clientSocket, buffer.data(), BUFFER_SIZE, 0);
+        if (bytesRecv <= 0) break; // Error or closed
+        requestData.append(buffer.data(), bytesRecv);
+        currentBodySize += bytesRecv;
+    }
+
+    std::string responseBody;
+    std::string contentType = "text/html";
+    int statusCode = 200;
+
+    // --- ROUTING LOGIC ---
+
+    // 1. POST /api/start
+    if (requestData.find("POST /api/start ") != std::string::npos) {
+        botActive = true;
+        responseBody = "{\"status\":\"ok\"}";
+        contentType = "application/json";
+    }
+    // 2. POST /api/stop
+    else if (requestData.find("POST /api/stop ") != std::string::npos) {
+        botActive = false;
+        responseBody = "{\"status\":\"ok\"}";
+        contentType = "application/json";
+    }
+    // 3. POST /api/upload_profile
+    else if (requestData.find("POST /api/upload_profile ") != std::string::npos) {
+        size_t bodyPos = requestData.find("\r\n\r\n");
+        if (bodyPos != std::string::npos) {
+            std::string body = requestData.substr(bodyPos + 4);
+            std::string error;
+            if (g_ProfileLoader.CompileAndLoad(body, error)) {
+                responseBody = "{\"status\":\"success\", \"message\":\"Profile Loaded!\"}";
+                currentProfile = "Uploaded Profile";
+            }
+            else {
+                responseBody = "{\"status\":\"error\", \"message\":\"" + EscapeJSON(error) + "\"}";
+            }
+            contentType = "application/json";
+        }
+    }
+    // 4. GET /api/state (Complete State for Dashboard)
+    else if (requestData.find("GET /api/state ") != std::string::npos) {
+        responseBody = GenerateJSONState(); // Calls member function
+        contentType = "application/json";
+    }
+    // 5. GET /api/logs
+    else if (requestData.find("GET /api/logs ") != std::string::npos) {
+        responseBody = ReadLogFileTail(50000); // Calls member function
+        contentType = "text/plain";
+    }
+    // 6. GET / (Dashboard HTML)
+    else {
+        responseBody = GetHTML();
+    }
+
+    // Send Response
+    std::stringstream ss;
+    ss << "HTTP/1.1 " << statusCode << " OK\r\n"
+        << "Content-Type: " << contentType << "\r\n"
+        << "Access-Control-Allow-Origin: *\r\n"
+        << "Content-Length: " << responseBody.length() << "\r\n"
+        << "Connection: close\r\n"
+        << "\r\n"
+        << responseBody;
+
+    std::string header = ss.str();
+    send(clientSocket, header.c_str(), (int)header.length(), 0);
 
     shutdown(clientSocket, SD_SEND);
     closesocket(clientSocket);
