@@ -3,7 +3,7 @@
 #define GATHERING_PROFILE true
 
 #define MINING_ENABLED true
-#define HERBALISM_ENABLED true
+#define HERBALISM_ENABLED false
 #define LOOT_MOBS_ENABLED false
 
 #define GATHERING_RANGE 300

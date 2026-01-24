@@ -2,8 +2,8 @@
 
 #include <vector>
 #include "Vector.h"
-#include "Pathfinding2.h"  // For PathNode
 #include "MemoryRead.h"    // For PlayerInfo, GameEntity
+#include "ProfileSystem.h"
 
 // This allows us to return a pointer to ANY state type
 struct ActionState {
@@ -22,7 +22,7 @@ struct ActionState {
 struct GlobalState : public ActionState {
     bool vendorOpen = false;
     bool chatOpen = false;
-    DWORD bagEmptyTime = 0;
+    DWORD bagEmptyTime = -1;
     int mapId = 0;
     int areaId = 0; // Local Area ID (lookup from WorldMapArea.csv)
     std::string mapName;
@@ -122,14 +122,30 @@ struct InteractState : public ActionState {
     int interactTimes = 0;
     bool resupply = false;
     bool vendorSell = false;
+    bool mailing = false;
     bool repair = false;
     ULONG_PTR targetGuidLow = 0;
     ULONG_PTR targetGuidHigh = 0;
 };
 
+struct RespawnState : public ActionState {
+    bool enabled = true;
+    std::vector<float> possibleZLayers = {}; // Stores all potential Z heights found at corpse X,Y
+    int currentLayerIndex = -1;              // Which layer we are currently navigating to
+    bool isPathingToCorpse = false;
+    Vector3 currentTargetPos = { 0,0,0 };
+    std::vector<PathNode> path;
+    int index;
+    uint32_t mapId;
+    bool hasPath = false;
+    bool isDead = false;
+};
+
 // --- WORLD STATE (The Knowledge) ---
 struct WorldState {
     GlobalState globalState;
+    ProfileSettings settings;
+
     Looting lootState;
     Gathering gatherState;
     PathFollowing pathFollowState;
@@ -137,6 +153,7 @@ struct WorldState {
     Combat combatState;
     StuckState stuckState;
     InteractState interactState;
+    RespawnState respawnState;
 
     std::vector<GameEntity> entities;
     PlayerInfo player;

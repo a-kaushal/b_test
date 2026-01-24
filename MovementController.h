@@ -100,6 +100,10 @@ public:
     }
     bool GetSteering() {
         return isSteering;
+    } 
+
+    void ExecuteLua(std::wstring command) {
+        inputCommand.SendDataRobust(command);
     }
 
     // FORCE reset the mount cooldown (Call this only when safe to mount)
@@ -339,6 +343,33 @@ public:
         float dist3D = std::sqrt(dx * dx + dy * dy + dz * dz);
 
         DWORD now = GetTickCount();
+
+        // --- GLOBAL DISTANCE CHECK FOR GROUND MOUNTS ---
+        // Calculate the TRUE travel distance remaining on the path, not just the distance to the next node.
+        float totalTravelDistance = dist3D; // Default to direct distance
+
+        if (g_GameState && !g_GameState->globalState.activePath.empty()) {
+            size_t idx = g_GameState->globalState.activeIndex;
+            const auto& path = g_GameState->globalState.activePath;
+
+            if (idx < path.size()) {
+                // 1. Distance from Player to Current Waypoint
+                totalTravelDistance = currentPos.Dist3D(path[idx].pos);
+
+                // 2. Sum of all remaining segments
+                for (size_t i = idx; i < path.size() - 1; ++i) {
+                    totalTravelDistance += path[i].pos.Dist3D(path[i + 1].pos);
+                }
+            }
+        }
+
+        // If it's a ground path AND the total trip is < 30 yards, disable mounting.
+        if (!flyingPath && totalTravelDistance < 30.0f) {
+            mountDisable = true;
+        }
+        if (flyingPath && totalTravelDistance < 5.0f) {
+            mountDisable = true;
+        }
 
         // --- 0. MOUNTING LOGIC REPLACEMENT ---
         // Verify state: If we are mounted, reset our internal flags

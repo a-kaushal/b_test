@@ -74,7 +74,7 @@ def find_text_center(text_to_find, instance = 1):
             if currentinstance == instance:
                 x, y, w, h = d['left'][i], d['top'][i], d['width'][i], d['height'][i]
                 return (x + w // 2, y + h // 2)
-            instance+=1
+            currentinstance += 1
     return None
 
 def main():
@@ -97,7 +97,7 @@ def main():
 
             # --- STEP 3: MAIL SELECTED GROUPS ---
             # Search for "Selected"
-            coords_2 = find_text_center("Mail Selected", instance = 2)
+            coords_2 = find_text_center("Selected", instance = 2)
 
             if coords_2:
                 send_packet(pipe, 1, coords_2[0], coords_2[1])

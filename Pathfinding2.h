@@ -23,6 +23,7 @@
 
 #include "Vector.h"
 #include "MovementController.h"
+#include "WorldState.h"
 
 // FMap function declarations (replaces VMap)
 extern "C" bool CheckFMapLine(int mapId, float x1, float y1, float z1, float x2, float y2, float z2);
@@ -463,32 +464,35 @@ public:
         return true;
     }
 
+    // --- UNIVERSAL SPIRAL ESCAPE ---
     Vector3 FindNearestSafePoint(const Vector3& pos, int mapId) {
-        // Quick check center
         if (IsClearSafePoint(pos, mapId)) return pos;
 
-        const float maxRadius = 15.0f;
+        const float maxRadius = 20.0f; // Universal Escape Limit
         const float step = 2.0f;
 
-        // Spiral out looking for a point with FULL clearance
         for (float r = step; r <= maxRadius; r += step) {
             Vector3 offsets[] = {
-               Vector3(0, 0, r), Vector3(0, 0, -r),               // Up/Down (Highest Priority to clear ground)
-               Vector3(r, 0, 0), Vector3(-r, 0, 0),               // X
-               Vector3(0, r, 0), Vector3(0, -r, 0),               // Y
-               Vector3(r, r, 0), Vector3(-r, -r, 0),              // Diagonals
-               Vector3(r, -r, 0), Vector3(-r, r, 0)
+                // PRIORITY 1: HORIZONTAL (Get away from the wall/tree)
+                Vector3(r, 0, 0), Vector3(-r, 0, 0),               // X
+                Vector3(0, r, 0), Vector3(0, -r, 0),               // Y
+
+                // PRIORITY 2: DIAGONALS
+                Vector3(r, r, 0), Vector3(-r, -r, 0),
+                Vector3(r, -r, 0), Vector3(-r, r, 0),
+
+                // PRIORITY 3: VERTICAL (Last resort for pits/void)
+                Vector3(0, 0, r), Vector3(0, 0, -r)                // Up/Down
             };
 
             for (const auto& off : offsets) {
                 Vector3 test = pos + off;
-                // Must be flyable AND have full safety clearance
                 if (CanFlyAt(mapId, test.x, test.y, test.z)) {
                     if (IsClearSafePoint(test, mapId)) return test;
                 }
             }
         }
-        return Vector3(0, 0, 0); // Failed
+        return Vector3(0, 0, 0);
     }
 
     // ----------------------------------------------------------------------
@@ -1128,10 +1132,10 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         }
     }
 
-    // --- ESCAPE LOGIC (GET OUT OF OBSTACLE) ---
-    // If the start point is within the safety margin of an obstacle, we need to nudge it out.
+    // --- ESCAPE LOGIC: USE UNIVERSAL SPIRAL ---
     if (!globalNavMesh.IsClearSafePoint(actualStart, mapId)) {
         if (DEBUG_PATHFINDING) g_LogFile << "[Flight] Start point is inside obstacle safety margin (" << AGENT_RADIUS << "yd). Seeking escape..." << std::endl;
+
         Vector3 safeStart = globalNavMesh.FindNearestSafePoint(actualStart, mapId);
 
         if (safeStart.x != 0.0f || safeStart.y != 0.0f || safeStart.z != 0.0f) {
@@ -1139,17 +1143,10 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
                 g_LogFile << "[Flight] Found escape point at (" << safeStart.x << ", " << safeStart.y << ", " << safeStart.z
                     << ") - Dist: " << actualStart.Dist3D(safeStart) << std::endl;
             }
-            // Use the safe point as the start for pathfinding
             actualStart = safeStart;
-
-            // NOTE: The path returned will start at 'actualStart'. 
-            // The bot is currently at 'start'.
-            // The movement controller will see the first waypoint is 'actualStart' and steer towards it.
-            // This effectively achieves "Get out of obstacle".
         }
         else {
             if (DEBUG_PATHFINDING) g_LogFile << "[Flight] ! Could not find a safe escape point nearby." << std::endl;
-            // We continue with original start, likely to fail, but we tried.
         }
     }
 
@@ -2036,6 +2033,37 @@ inline std::vector<PathNode> NudgeGroundPath(std::vector<PathNode> path, float a
         }
     }
     return newPath;
+}
+
+// Probes for all valid Z-layers at a specific X, Y location
+inline std::vector<float> GetPossibleZLayers(int mapId, float x, float y) {
+    std::vector<float> layers;
+
+    // Start scanning from high up (e.g., 2000.0f or map ceiling) down to the bottom
+    float checkZ = 2000.0f;
+
+    // Safety break after 50 layers to prevent infinite loops
+    int safety = 0;
+
+    while (checkZ > -1000.0f && safety < 50) {
+        // Find the floor immediately below checkZ
+        float floorZ = GetFMapFloorHeight(mapId, x, y, checkZ);
+
+        // Check for invalid return (usually -99999.0f or similar large negative)
+        if (floorZ < -5000.0f) break;
+
+        // If it's a new layer (distinct from the last one found), add it
+        // We use a 2.0f tolerance to avoid duplicate hits on uneven terrain
+        if (layers.empty() || std::abs(layers.back() - floorZ) > 2.0f) {
+            layers.push_back(floorZ);
+        }
+
+        // Prepare to scan for the next floor below this one
+        checkZ = floorZ - 2.0f;
+        safety++;
+    }
+
+    return layers;
 }
 
 // MODIFIED: CalculatePath accepts ignoreWater and passes it to FindPath/Cache

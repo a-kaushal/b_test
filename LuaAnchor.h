@@ -164,7 +164,8 @@ public:
                             g_GameState->player.corpseAreaId, g_GameState->player.corpseMapName);
                         worldMap.convertNormToWorld(val8, val9, top, bottom, left, right, g_GameState->player.corpseX, g_GameState->player.corpseY);
                         g_GameState->player.corpseMapHash = val15;
-                        g_LogFile << g_GameState->player.corpseX << " " << g_GameState->player.corpseY << std::endl;
+                        g_GameState->respawnState.isDead = g_GameState->player.isDead;
+                        //g_LogFile << g_GameState->player.corpseX << " " << g_GameState->player.corpseY << std::endl;
                     }
                     else {
                         g_GameState->player.corpseMapId = -1;

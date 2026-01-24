@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <iostream>
+#include <memory>
 
 #include "Profile.h"
 
@@ -9,6 +10,20 @@ inline void InteractWithObject(int mapId, int numTimes, Vector3 position, int ob
     g_GameState->interactState.interactId = objectId;
     g_GameState->interactState.interactTimes = numTimes;
     g_GameState->interactState.interactActive = true;
+    //g_LogFile << "A " << g_GameState->interactState.targetGuidLow << " " << g_GameState->interactState.targetGuidHigh << std::endl;
+    for (auto& entity : g_GameState->entities) {
+        if (auto object = std::dynamic_pointer_cast<ObjectInfo>(entity.info)) {
+            if (object->id == objectId) {
+                g_GameState->interactState.targetGuidLow = entity.guidLow;
+                g_GameState->interactState.targetGuidHigh = entity.guidHigh;
+            }
+        }
+    }
+}
+
+inline void MailItems(int mapId, Vector3 position, int mailboxId) {
+    InteractWithObject(mapId, 1, position, mailboxId);
+    g_GameState->interactState.mailing = true;
 }
 
 inline void FollowPath(int mapId, std::string myPath, bool looping, bool flyingPath) {
@@ -51,6 +66,14 @@ inline void Resupply(int mapId, int numTimes, Vector3 vendorPosition, int vendor
     g_GameState->interactState.interactId = vendorId;
     g_GameState->interactState.interactTimes = numTimes;
     g_GameState->interactState.interactActive = true;
+    for (auto& entity : g_GameState->entities) {
+        if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
+            if (npc->id == vendorId) {
+                g_GameState->interactState.targetGuidLow = entity.guidLow;
+                g_GameState->interactState.targetGuidHigh = entity.guidHigh;
+            }
+        }
+    }
 }
 
 inline void Repair(int mapId, int numTimes, Vector3 vendorPosition, int vendorId) {
@@ -58,4 +81,12 @@ inline void Repair(int mapId, int numTimes, Vector3 vendorPosition, int vendorId
     g_GameState->interactState.interactId = vendorId;
     g_GameState->interactState.interactTimes = numTimes;
     g_GameState->interactState.interactActive = true;
+    for (auto& entity : g_GameState->entities) {
+        if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
+            if (npc->id == vendorId) {
+                g_GameState->interactState.targetGuidLow = entity.guidLow;
+                g_GameState->interactState.targetGuidHigh = entity.guidHigh;
+            }
+        }
+    }
 }

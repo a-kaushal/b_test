@@ -262,9 +262,13 @@ bool PerformMailing(SimpleMouseClient& mouse) {
     g_LogFile << "Location 2: " << (loc2_x != -1 ? "Stored" : "Empty") << std::endl;
     g_LogFile << "Location 3: " << (loc3_x != -1 ? "Stored" : "Empty") << std::endl;
 
+
     CloseHandle(hPipe);
     // Wait a moment for Python to fully close before deleting the file
     Sleep(1000);
     DeleteScript(scriptPath);
-    return 0;
+    if (loc2_x != -1) {
+        return true;
+    }
+    return false;
 }

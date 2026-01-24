@@ -601,9 +601,6 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                     // Add to our list
                     entityList.push_back(newEntity);
                 }
-                else {
-                    g_LogFile << objType << " " << entity_ptr << std::endl;
-                }
             }
         }
         ULONG_PTR guidLowBag1, guidHighBag1, guidLowBag2, guidHighBag2, guidLowBag3, guidHighBag3, guidLowBag4, guidHighBag4;
@@ -683,15 +680,6 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                             }
                         }
                         g_GameState->player.bagFreeSlots += bag->freeSlots;
-                    }
-                }
-                // If in repair mode update npc Guid when in range
-                if ((g_GameState->interactState.interactActive == true) && (g_GameState->interactState.targetGuidLow == 0) && (g_GameState->interactState.targetGuidHigh == 0)) {
-                    if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
-                        if (npc->id == g_GameState->interactState.interactId) {
-                            g_GameState->interactState.targetGuidLow = entity.guidLow;
-                            g_GameState->interactState.targetGuidHigh = entity.guidHigh;
-                        }
                     }
                 }
             }
@@ -892,7 +880,7 @@ void MainThread(HMODULE hModule) {
                         std::cout << "Camera update failed." << std::endl;
                         Sleep(1000);
                     }
-                    
+
                     // Setup Overlay
                     OverlayWindow overlay;
                     if (!overlay.Setup(hGameWindow)) {
@@ -908,7 +896,7 @@ void MainThread(HMODULE hModule) {
                     persistentEntityList.reserve(3000);
 
                     /*while (true) {
-                        g_LogFile << pilot.IsMoving() << std::endl; Sleep(20); 
+                        g_LogFile << pilot.IsMoving() << std::endl; Sleep(20);
                         g_LogFile << kbd.IsHolding('W') << kbd.IsHolding('S') <<
                             kbd.IsHolding('Q') << kbd.IsHolding('E') <<
                             kbd.IsHolding(VK_SPACE) << kbd.IsHolding('X') << std::endl;
@@ -923,7 +911,7 @@ void MainThread(HMODULE hModule) {
                     LuaAnchor::ReadLuaData(analyzer, procId, searchPattern, luaEntry, worldmap_db);
 
                     std::string temp = "(-358.46, 6509.65, 116.46), (-395.20, 6475.67, 116.46), (-438.96, 6449.58, 116.46), (-482.82, 6425.01, 116.46), (-508.78, 6381.19, 116.46), (-529.89, 6335.85, 116.46), (-547.69, 6288.27, 116.46), (-568.29, 6241.66, 116.46), (-591.41, 6196.38, 116.46), (-630.93, 6164.87, 116.46), (-679.63, 6150.37, 116.46), (-728.66, 6137.20, 116.46), (-777.38, 6122.58, 116.46), (-826.50, 6112.96, 116.46), (-876.56, 6103.19, 116.46), (-926.79, 6102.21, 116.46), (-974.92, 6115.97, 116.46), (-1021.64, 6135.66, 116.46), (-1070.59, 6147.56, 116.46), (-1108.42, 6114.36, 116.46), (-1116.81, 6064.22, 116.46), (-1112.63, 6023.29, 145.06), (-1083.49, 5987.18, 164.99), (-1046.92, 5952.05, 164.99), (-1006.52, 5922.57, 164.99), (-965.26, 5892.46, 164.99), (-924.46, 5861.86, 164.99), (-915.96, 5812.52, 164.99), (-916.19, 5761.44, 164.99), (-908.62, 5711.04, 164.99), (-899.11, 5661.90, 164.99), (-855.82, 5636.18, 164.99), (-806.45, 5628.13, 164.99), (-756.05, 5619.92, 164.96), (-721.15, 5614.23, 129.60), (-682.91, 5608.00, 97.27), (-632.02, 5605.64, 97.27), (-583.31, 5593.95, 97.27), (-533.39, 5584.45, 97.27), (-483.33, 5592.52, 97.27), (-436.47, 5611.26, 97.27), (-389.20, 5630.16, 97.27), (-342.72, 5648.75, 97.27), (-295.78, 5667.52, 97.27), (-251.82, 5692.99, 97.27), (-213.12, 5725.18, 97.27), (-174.67, 5757.16, 97.27), (-125.34, 5769.89, 97.27), (-74.43, 5771.82, 97.27), (-23.49, 5774.45, 97.27), (6.49, 5734.40, 97.27), (21.24, 5686.60, 97.27), (36.31, 5637.81, 97.27), (45.13, 5588.17, 97.27), (53.44, 5538.02, 97.27), (56.05, 5487.54, 97.27), (41.91, 5438.62, 97.27), (19.79, 5392.02, 97.27), (-16.80, 5356.57, 97.27), (-51.41, 5319.75, 97.27), (-67.72, 5271.60, 97.30), (-54.05, 5223.70, 107.79), (-25.12, 5182.87, 107.79), (12.66, 5148.95, 107.79), (49.14, 5113.51, 107.79), (99.49, 5106.84, 107.79), (150.01, 5100.33, 107.79), (200.39, 5094.32, 107.79), (251.19, 5090.80, 107.79), (302.10, 5089.47, 107.79), (351.49, 5080.94, 107.79), (400.78, 5072.43, 107.79), (450.40, 5063.53, 107.79), (497.86, 5047.46, 107.79), (546.30, 5031.06, 107.79), (593.44, 5014.39, 107.79), (643.58, 5005.99, 107.79), (693.62, 5015.84, 107.79), (742.61, 5026.80, 107.79), (791.43, 5037.73, 107.79), (841.04, 5041.72, 98.02), (866.62, 5066.11, 62.65), (894.69, 5093.29, 31.05), (928.30, 5131.29, 31.05), (948.19, 5177.60, 31.05), (959.67, 5226.44, 31.05), (960.40, 5276.46, 31.05), (949.54, 5325.44, 31.05), (915.60, 5363.38, 31.05), (870.56, 5386.79, 31.05), (820.35, 5393.04, 31.05), (770.97, 5405.88, 31.05), (726.76, 5429.27, 31.05), (677.55, 5442.15, 31.05), (627.63, 5438.95, 31.05), (577.35, 5430.87, 31.05), (527.26, 5425.94, 31.05), (495.91, 5466.19, 31.05), (463.93, 5505.60, 31.05), (433.48, 5538.86, 53.98), (398.98, 5569.29, 75.79), (364.08, 5605.63, 75.79), (354.80, 5655.29, 75.79), (346.35, 5705.41, 75.79), (335.31, 5754.00, 69.02), (326.02, 5803.92, 69.02), (354.10, 5845.89, 69.02), (392.51, 5879.17, 69.02), (432.32, 5909.69, 73.53), (466.07, 5947.63, 73.53), (496.15, 5988.32, 73.53), (533.36, 6022.97, 73.53), (572.06, 6055.46, 73.53), (610.36, 6087.62, 73.53), (649.48, 6120.47, 73.53), (688.10, 6152.90, 73.53), (726.40, 6185.06, 73.53), (761.76, 6220.58, 73.53), (758.20, 6270.69, 73.53), (742.82, 6319.40, 73.53), (738.70, 6369.91, 73.53), (739.20, 6419.92, 73.53), (739.70, 6469.94, 73.53), (740.20, 6519.95, 73.53), (740.70, 6570.99, 73.53), (749.73, 6620.66, 73.53), (770.46, 6666.99, 73.53), (776.16, 6717.08, 73.53), (788.34, 6766.65, 73.53), (800.30, 6815.34, 73.53), (813.85, 6864.03, 73.53), (844.40, 6904.35, 73.53), (878.85, 6941.42, 73.53), (913.24, 6978.05, 73.53), (927.41, 7026.19, 73.53), (923.96, 7077.05, 73.53), (882.31, 7105.08, 73.53), (832.27, 7114.13, 73.53), (783.90, 7100.69, 73.53), (733.14, 7095.72, 73.53), (682.66, 7089.52, 73.53), (634.71, 7074.09, 73.53), (584.68, 7066.22, 73.53), (536.03, 7050.79, 73.53), (492.98, 7024.58, 73.53), (450.26, 6998.57, 73.53), (402.57, 6980.30, 73.53), (352.86, 6968.60, 73.53), (302.46, 6962.74, 73.53), (252.19, 6962.96, 73.53), (202.11, 6963.19, 73.53), (151.04, 6963.41, 73.53), (100.86, 6963.64, 73.53), (49.79, 6963.87, 73.53), (-0.26, 6972.52, 73.53), (-50.24, 6976.64, 73.53), (-100.09, 6980.74, 73.53), (-150.18, 6988.99, 73.53), (-198.67, 7004.94, 73.53), (-247.72, 7018.33, 73.53), (-298.02, 7014.87, 73.53), (-320.93, 6970.22, 73.53), (-334.14, 6921.07, 73.53)";
-                    
+
                     //InteractWithObject(530, 1, Vector3{ 258.91f, 7870.72f, 23.01f }, 182567);
                     //Resupply(530, 1, Vector3{ 228.16f, 7933.88f, 25.08f }, 18245);
                     FollowPath(530, temp, true, true);
@@ -935,7 +923,7 @@ void MainThread(HMODULE hModule) {
                     }*/
 
                     g_GameState->globalState.flyingPath = true;
-                    
+
                     // Force disable Click-to-Move to prevent accidental movement on mouse clicks
                     console.SendDataRobust(std::wstring(L"/console autointeract 0"));
 
@@ -970,7 +958,141 @@ void MainThread(HMODULE hModule) {
                     static DWORD lastTrim = 0;
                     static DWORD overlayUpdate = 0;
 
+
                     while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
+                        overlay.ProcessMessages();
+
+                        // HANDLE F3 (PAUSE TOGGLE)
+                        bool currentF3State = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
+
+                        // If key was just pressed down (Edge Detection)
+                        if (currentF3State && !lastF3State) {
+                            isPaused = !isPaused; // Toggle State
+
+                            if (isPaused) {
+                                std::cout << ">>> PAUSED <<<" << std::endl;
+                                pilot.Stop(); // CRITICAL: Stop moving immediately when paused
+                            }
+                            else {
+                                std::cout << ">>> RESUMED <<<" << std::endl;
+                            }
+                        }
+                        lastF3State = currentF3State;
+
+                        // --- REFRESH POINTERS HERE ---
+                        // Re-read the Object Manager Base itself, because it can move too!
+                        analyzer.ReadPointer(procId, objMan_Entry + OBJECT_MANAGER_FIRST_OBJECT_OFFSET, objMan_Base);
+                        // The ObjectManager may reallocate these arrays at ANY time.
+                        // We must re-read the pointers every frame to ensure they are valid.
+                        analyzer.ReadPointer(procId, objMan_Base + ENTITY_ARRAY_OFFSET, entityArray);
+                        analyzer.ReadInt32(procId, objMan_Base + ENTITY_ARRAY_SIZE_OFFSET, entityArraySize);
+                        analyzer.ReadInt32(procId, objMan_Base + HASH_ARRAY_MAXIMUM_OFFSET, hashArrayMaximum);
+                        analyzer.ReadPointer(procId, objMan_Base + HASH_ARRAY_OFFSET, hashArray);
+                        analyzer.ReadInt32(procId, objMan_Base + HASH_ARRAY_SIZE_OFFSET, hashArraySize);
+
+                        // --- [RECOMMENDED] Sanity Check to prevent Driver Crash on bad reads ---
+                        if (hashArrayMaximum > 100000 || hashArrayMaximum < 0) {
+                            g_LogFile << "[WARNING] Garbage Hash Size: " << hashArrayMaximum << ". Skipping frame." << std::endl;
+                            continue; // Skip the rest of this loop iteration
+                        }
+
+                        // 1. Extract Data
+                        // LOCK before writing
+                        std::lock_guard<std::mutex> lock(g_EntityMutex);
+
+                        // Now it is safe to update the vector
+                        ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, entityArraySize, g_GameState->player, persistentEntityList, agent);
+                        g_GameState->entities = persistentEntityList;
+                        // Read Lua data
+                        LuaAnchor::ReadLuaData(analyzer, procId, searchPattern, luaEntry, worldmap_db);
+
+                        if (g_GameState->pathFollowState.pathIndexChange == true) {
+                            if (g_GameState->pathFollowState.path[g_GameState->pathFollowState.index - 1].pos.Dist3D(g_GameState->pathFollowState.presetPath[g_GameState->pathFollowState.presetIndex]) < 5.0) {
+                                if ((g_GameState->pathFollowState.presetIndex >= g_GameState->pathFollowState.presetPath.size() - 1) && (g_GameState->pathFollowState.looping == 1)) {
+                                    g_GameState->pathFollowState.presetIndex = 0;
+                                }
+                                else if (g_GameState->pathFollowState.presetIndex < g_GameState->pathFollowState.presetPath.size() - 1) {
+                                    g_GameState->pathFollowState.presetIndex++;
+                                }
+                                //path = CalculatePath(agent.state.presetPath, agent.state.player.position, agent.state.presetPathIndex, true, 530);
+                            }
+                            g_GameState->pathFollowState.pathIndexChange = false;
+                        }
+
+                        // Sync Overlay Position
+                        overlay.UpdatePosition();
+
+                        // 1. Get Window Metrics
+                        RECT clientRect;
+                        GetClientRect(hGameWindow, &clientRect);
+                        int width = clientRect.right - clientRect.left;
+                        int height = clientRect.bottom - clientRect.top;
+
+                        // 2. Update Camera with ACTUAL window size
+                        cam.UpdateScreenSize(width, height);
+
+                        overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
+                        for (size_t i = g_GameState->globalState.activeIndex; i < min(g_GameState->globalState.activeIndex + 6, g_GameState->globalState.activePath.size()); ++i) {
+                            int screenPosx, screenPosy;
+                            if (i >= g_GameState->globalState.activePath.size()) break;
+                            if (cam.WorldToScreen(g_GameState->globalState.activePath[i].pos, screenPosx, screenPosy)) {
+                                // Draw a line using your overlay's draw list
+                                overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
+                            }
+                        }
+
+                        // UpdateGuiData usually reads entities too, so keep it inside the lock
+                        try {
+                            UpdateGuiData(g_GameState->entities);
+                        }
+                        catch (...) {
+                            g_LogFile << "[WARNING] GUI Update failed. Skipping frame." << std::endl;
+                        }
+
+                        if (!isPaused) {
+                            try {
+                                // --- Enforce Window Focus ---
+                                HWND currentForeground = GetForegroundWindow();
+                                if (currentForeground != hGameWindow) {
+                                    // If the window is minimized, restore it first
+                                    if (IsIconic(hGameWindow)) {
+                                        ShowWindow(hGameWindow, SW_RESTORE);
+                                    }
+                                    // Force window to foreground
+                                    SetForegroundWindow(hGameWindow);
+                                }
+                                if (UnderAttackCheck() == true) {
+                                    //g_LogFile << "Under Attack Detected!" << std::endl;
+                                }
+                                if (g_GameState->gatherState.enabled == true) {
+                                    UpdateGatherTarget(g_GameStateInstance);
+                                }
+                                if ((g_GameState->player.bagFreeSlots <= 2)) {
+                                    // If 30 minutes since last resupply mail items
+                                    if (((g_GameState->globalState.bagEmptyTime != -1) && (g_GameState->globalState.bagEmptyTime - GetTickCount() < 1800000)) || g_GameState->interactState.mailing) {
+                                        MailItems(530, Vector3{ 258.91f, 7870.72f, 23.01f }, 182567);
+                                    }
+                                    //else if (!g_GameState->interactState.interactActive) {
+                                    else {
+                                        //Resupply(530, 1, Vector3{ 228.16f, 7933.88f, 25.08f }, 18245);
+                                        Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
+                                    }
+                                }
+                                // if (g_GameState->player.needRepair && !g_GameState->interactState.interactActive) {
+                                if (g_GameState->player.needRepair) {
+                                    Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
+                                }
+                                agent.Tick();
+                            }
+                            catch (...) {
+                                g_LogFile << "Agent Tick Fail" << std::endl;
+                            }
+                        }
+                        Sleep(10); // Prevent high CPU usage
+                    }
+
+
+                    /*while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
                         // -- - FIX: PUMP MESSAGES-- -
                         // This prevents the overlay from freezing/crashing Windows
                         overlay.ProcessMessages();
@@ -1065,17 +1187,17 @@ void MainThread(HMODULE hModule) {
                             }
                             if ((g_GameState->player.bagFreeSlots <= 2)) {
                                 // If 30 minutes since last resupply mail items
-                                if ((g_GameState->globalState.bagEmptyTime != 0) && (g_GameState->globalState.bagEmptyTime - GetTickCount() < 1800000)) {
-                                    InteractWithObject(530, 1, Vector3{ 258.91f, 7870.72f, 23.01f }, 182567);
-                                    PerformMailing(mouse);
+                                if (((g_GameState->globalState.bagEmptyTime != -1) && (g_GameState->globalState.bagEmptyTime - GetTickCount() < 1800000)) || g_GameState->interactState.mailing) {
+                                    MailItems(530, Vector3{ 258.91f, 7870.72f, 23.01f }, 182567);
                                 }
-                                else if (!g_GameState->interactState.interactActive) {
-                                    g_LogFile << g_GameState->player.bagFreeSlots << std::endl;
+                                //else if (!g_GameState->interactState.interactActive) {
+                                else {
                                     //Resupply(530, 1, Vector3{ 228.16f, 7933.88f, 25.08f }, 18245);
                                     Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
                                 }
                             }
-                            if (g_GameState->player.needRepair && !g_GameState->interactState.interactActive) {
+                            // if (g_GameState->player.needRepair && !g_GameState->interactState.interactActive) {
+                            if (g_GameState->player.needRepair) {
                                 Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
                             }
                         }
@@ -1113,13 +1235,9 @@ void MainThread(HMODULE hModule) {
                         // 3. Logic (Rotation/Console Print)
                         //g_LogFile << nextKey << std::endl;
 
-                        /*if (pilot.Calibrate(g_GameState->player.rotation, g_GameState->player.vertRotation) == true) {
-                            break;
-						}*/
-
                         Sleep(10); // Prevent high CPU usage
                         try {
-                            //if (!isPaused) agent.Tick();
+                            if (!isPaused) agent.Tick();
                         }
                         catch (...) {
                             g_LogFile << "Agent Tick Fail" << std::endl;
@@ -1131,22 +1249,22 @@ void MainThread(HMODULE hModule) {
                         //    if (g_GameState->player.playerPtr != 0) {
                         //        CleanupFMapCache(g_GameState->player.mapId, g_GameState->player.position.x, g_GameState->player.position.y);
                         //        // Optional: Log to confirm it's running
-                        //        // g_LogFile << "[System] Pruning FMap Cache..." << std::endl; 
+                        //        // g_LogFile << "[System] Pruning FMap Cache..." << std::endl;
                         //    }
                         //    lastCleanup = GetTickCount();
                         //}
-                    }
+                    }*/
                     pilot.Stop();
 
                     if (g_LogFile.is_open()) {
                         g_LogFile.close();
                     }
                     //FreeLibraryAndExitThread(hModule, 0);
-                    
+
                     g_IsRunning = false;
                     RaiseException(0xDEADBEEF, 0, 0, nullptr); // Forcibly exit all threads (including GUI)
 
-                    Vector3 lastPoint = {};                  
+                    Vector3 lastPoint = {};
                 }
             }
         }

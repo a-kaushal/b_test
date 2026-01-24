@@ -88,9 +88,9 @@ void UpdateGatherTarget(WorldState& ws) {
                
                 // 2. Distance Check
                 d = object->distance;
-                if (d <= 5.0f) {
+                /*if (d <= 5.0f) {
                     continue;
-                }
+                }*/
                 if (BlacklistCheck(ws, entity.guidLow, entity.guidHigh)) {
                     continue;
                 }

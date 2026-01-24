@@ -16,6 +16,7 @@
 #include "Logger.h"
 #include "dllmain.h"
 #include "Misc.h"
+#include "Mailing.h"
 
 // --- ABSTRACT ACTION ---
 class GoapAction {
@@ -211,6 +212,15 @@ public:
             return false;
 
         case STATE_SCAN_MOUSE:
+            if (offsetIndex > 0) {
+                if (pilot.GetSteering()) {
+                    mouse.ReleaseButton(MOUSE_RIGHT);
+                    pilot.ChangeSteering(false);
+                }
+                g_LogFile << "Mouse Random Click " << click << std::endl;
+
+                mouse.Click(click);
+            }
             if (offsetIndex >= searchOffsets.size()) {
                 // Failed to find target after checking all offsets
                 g_LogFile << "[INTERACT] Failed to find target GUID of " << targetGuidLow << " " << targetGuidHigh << std::endl;
@@ -223,6 +233,7 @@ public:
                 keyboard.PressKey(VK_END);
                 Sleep(20);
                 keyboard.PressKey(VK_END);
+                Sleep(1500);
                 Reset(); // Reset to try again? Or fail?
                 return false;
             }
@@ -437,6 +448,7 @@ class ActionInteract : public GoapAction {
 private:
     InteractionController& interact;
     SimpleKeyboardClient& keyboard;
+    SimpleMouseClient& mouse;
     ConsoleInput input; // Used to send the Lua command
 
     DWORD interactPause = 0;
@@ -444,8 +456,8 @@ private:
     bool failedPath = false;
 
 public:
-    ActionInteract(InteractionController& ic, SimpleKeyboardClient& k)
-        : interact(ic), keyboard(k), input(k) {
+    ActionInteract(InteractionController& ic, SimpleKeyboardClient& k, SimpleMouseClient& m)
+        : interact(ic), keyboard(k), mouse(m), input(k) {
     }
 
     // Priority 150: Higher than Gathering(100)/Looting(60), Lower than Combat(200)
@@ -470,6 +482,7 @@ public:
         g_GameState->interactState.repair = false;
         g_GameState->interactState.vendorSell = false;
         g_GameState->interactState.resupply = false;
+        g_GameState->interactState.mailing = false;
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
@@ -503,6 +516,7 @@ public:
 
         // 2. Perform Repair Logic
         if (complete) {
+
             if (ws.interactState.repair) {
                 // Send Lua command to repair all items
                 // "RepairAllItems()" is the standard WoW API, passed via ConsoleInput
@@ -514,6 +528,16 @@ public:
                 // Selects the vendor shop gossip action
                 input.SendDataRobust(std::wstring(L"/run local o=C_GossipInfo.GetOptions() if o then for _,v in ipairs(o) do if v.icon==132060 then C_GossipInfo.SelectOption(v.gossipOptionID) return end end end"));
                 //ws.interactState.
+            }
+            if (ws.interactState.mailing) {
+                if (PerformMailing(mouse)) {
+                    Sleep(100);
+                    input.SendDataRobust(std::wstring(L"/run ToggleBackpack() CloseMail()"));
+                    interact.Reset();
+                    ResetState();
+                    failedPath = false;
+                    return true;
+                }
             }
 
             // Wait a moment for the transaction (optional, helps prevent instant state flip)
@@ -528,6 +552,7 @@ public:
                     interact.Reset();
                     failedPath = false;
                     g_GameState->globalState.bagEmptyTime = GetTickCount();
+                    ResetState();
                     // Close the window (Optional: prevents clutter)
                     // input.SendDataRobust(std::wstring(L"/run CloseGossip() CloseMerchant()"));
                     return true;
@@ -768,6 +793,165 @@ public:
     }
 };
 
+class ActionRespawn : public GoapAction {
+public:
+    // Priority 10000: Highest priority. If dead, nothing else matters.
+    int GetPriority() override { return 10000; }
+
+    std::string GetName() override { return "Respawn"; }
+
+    ActionState* GetState(WorldState& ws) override {
+        return &ws.respawnState;
+    }
+
+    bool CanExecute(const WorldState& ws) override {
+        // Run this action if the player is dead or a ghost
+        return ws.respawnState.isDead;
+    }
+
+    void ResetState() override {
+        // Reset the search logic when the action starts/stops
+        g_GameState->respawnState.possibleZLayers.clear();
+        g_GameState->respawnState.currentLayerIndex = -1;
+        g_GameState->respawnState.isPathingToCorpse = false;
+        g_GameState->respawnState.currentTargetPos = { 0, 0, 0 };
+        g_GameState->respawnState.path = {};
+        g_GameState->respawnState.index = 0;
+        g_GameState->respawnState.hasPath = false;
+        g_GameState->respawnState.isPathingToCorpse = false;
+        g_GameState->respawnState.isDead = false;
+    }
+
+    bool Execute(WorldState& ws, MovementController& pilot) override {
+        // 1. Completion Check: If we are alive, we are done.
+        if (!ws.player.isDead && !ws.player.isGhost) {
+            ws.respawnState.isDead = false;
+            ResetState();
+            return true; // Action Complete
+        }
+
+        // 2. Release Spirit (if not yet a ghost)
+        if (!ws.player.isGhost) {
+            pilot.ExecuteLua(L"/run RepopMe()");
+            Sleep(1000);
+            return false;
+        }
+
+        // 3. Attempt Resurrection (if in range)
+        if (ws.player.canRespawn) {
+            pilot.Stop();
+            pilot.ExecuteLua(L"/run RetrieveCorpse()");
+            Sleep(1000);
+            return false;
+        }
+
+        // 4. Initialize Z-Layer Search (Run once when we first start pathing)
+        if (ws.respawnState.possibleZLayers.empty()) {
+            float cx = ws.player.corpseX;
+            float cy = ws.player.corpseY;
+
+            // Use the helper from Pathfinding2.h
+            std::vector<float> layers = GetPossibleZLayers(ws.player.mapId, cx, cy);
+
+            if (layers.empty()) {
+                g_LogFile << "[Respawn] No valid ground found at corpse location! Using player Z." << std::endl;
+                layers.push_back(ws.player.position.z);
+            }
+
+            // Sort layers by vertical distance to our CURRENT position
+            std::sort(layers.begin(), layers.end(), [&](float a, float b) {
+                return std::abs(a - ws.player.position.z) < std::abs(b - ws.player.position.z);
+                });
+
+            ws.respawnState.possibleZLayers = layers;
+            ws.respawnState.currentLayerIndex = 0;
+            ws.respawnState.isPathingToCorpse = false;
+
+            g_LogFile << "[Respawn] Found " << layers.size() << " possible layers." << std::endl;
+        }
+
+        // 5. Navigation Logic
+        if (!ws.respawnState.isPathingToCorpse) {
+
+            // --- FAIL CONDITION: Exhausted all layers ---
+            if (ws.respawnState.currentLayerIndex >= ws.respawnState.possibleZLayers.size()) {
+                g_LogFile << "[Respawn] CRITICAL: Exhausted all Z-layers. Corpse unreachable." << std::endl;
+                EndScript(pilot, 3); // Fail Code 3
+                return false;
+            }
+
+            // Pick the next target Z
+            float targetZ = ws.respawnState.possibleZLayers[ws.respawnState.currentLayerIndex];
+            Vector3 targetPos = { ws.player.corpseX, ws.player.corpseY, targetZ };
+
+            ws.respawnState.currentTargetPos = targetPos;
+
+            // Generate Path (Ghost mode = Ground movement, typically)
+            std::vector<Vector3> singlePoint = { targetPos };
+
+            std::vector<PathNode> path = CalculatePath(
+                singlePoint,
+                ws.player.position,
+                0,
+                ws.player.isFlying, // Can't fly as ghost usually
+                ws.player.corpseMapId,
+                ws.player.isFlying,
+                false
+            );
+
+            if (!path.empty()) {
+                ws.respawnState.path = path;
+                ws.respawnState.index = 0;
+                ws.respawnState.hasPath = true;
+                ws.respawnState.isPathingToCorpse = true;
+
+                g_LogFile << "[Respawn] Pathing to Layer " << (ws.respawnState.currentLayerIndex + 1)
+                    << "/" << ws.respawnState.possibleZLayers.size()
+                    << " (Z=" << targetZ << ")" << std::endl;
+            }
+            else {
+                g_LogFile << "[Respawn] Failed to path to Z=" << targetZ << ". Skipping layer." << std::endl;
+                ws.respawnState.currentLayerIndex++;
+            }
+        }
+        else {
+            // We are actively pathing...
+            // Visualize path (optional)
+            ws.globalState.activePath = ws.respawnState.path;
+            ws.globalState.activeIndex = ws.respawnState.index;
+
+            float distToTarget = ws.player.position.Dist3D(ws.respawnState.currentTargetPos);
+
+            // Check if we reached the destination BUT didn't trigger the 'canRespawn' check above
+            bool pathFinished = (ws.respawnState.index >= ws.respawnState.path.size());
+
+            if (pathFinished || distToTarget < 5.0f) {
+                // If we are here, Step 3 (Resurrection) didn't return true, meaning we are NOT in range.
+                // This implies this Z-layer was wrong.
+                if (!ws.player.canRespawn) {
+                    g_LogFile << "[Respawn] Arrived at Z=" << ws.respawnState.currentTargetPos.z << " but cannot res. Trying next layer." << std::endl;
+                    pilot.Stop();
+                    ws.respawnState.isPathingToCorpse = false; // Force re-path
+                    ws.respawnState.currentLayerIndex++;
+                }
+            }
+
+            // Continue steering if path not finished
+            if (!pathFinished) {
+                PathNode& targetNode = ws.respawnState.path[ws.respawnState.index];
+                if (ws.player.position.Dist2D(targetNode.pos) < 3.0f) {
+                    ws.respawnState.index++;
+                }
+                else {
+                    pilot.SteerTowards(ws.player.position, ws.player.rotation, targetNode.pos, false, ws.player, true);
+                }
+            }
+        }
+
+        return false; // Continue executing until alive
+    }
+};
+
 class ActionCombat : public GoapAction {
 private:
     InteractionController& interact;
@@ -826,7 +1010,6 @@ public:
 		const auto& entity = ws.entities[ws.combatState.entityIndex];
         if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
             if ((ws.combatState.targetGuidLow == entity.guidLow) && (ws.combatState.targetGuidHigh == entity.guidHigh)) {
-                g_LogFile << npc->health << std::endl;
                 if ((npc->health == 0) || ws.combatState.reset) {
                     ResetState();
                     return true;
@@ -883,6 +1066,7 @@ public:
 
         // A. MOVEMENT
         if (distToTarget > MELEE_RANGE) {
+            g_LogFile << "Not in Range" << std::endl;
             inRoutine = false;
             // Recalculate path if needed
             if (ws.combatState.path.empty() || ws.combatState.index >= ws.combatState.path.size() || (GetTickCount() - pathTimer > REPATH_DELAY)) {
@@ -1758,7 +1942,8 @@ public:
         availableActions.push_back(new ActionGather(interact));
         availableActions.push_back(new ActionFollowPath());
         availableActions.push_back(new ActionUnstuck(keyboard, mc));
-        availableActions.push_back(new ActionInteract(interact, keyboard));
+        availableActions.push_back(new ActionInteract(interact, keyboard, mouse));
+        availableActions.push_back(new ActionRespawn());
     }
     
     ~GoapAgent() {

@@ -5,8 +5,9 @@
 
 void EndScript(MovementController& pilot, int failCode) {
     switch (failCode) {
-    case 1: g_LogFile << "Ground Path Generation Failed. Quitting Script." << std::endl;
-    case 2: g_LogFile << "Flying Path Generation Failed. Quitting Script." << std::endl;
+    case 1: g_LogFile << "Ground Path Generation Failed. Quitting Script." << std::endl; break;
+    case 2: g_LogFile << "Flying Path Generation Failed. Quitting Script." << std::endl; break;
+    case 3: g_LogFile << "Respawn Failed: Unable to reach corpse on any Z-layer. Quitting Script." << std::endl; break;
     }
 
     pilot.Stop();
