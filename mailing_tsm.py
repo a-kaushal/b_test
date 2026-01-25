@@ -97,9 +97,11 @@ def main():
 
             # --- STEP 3: MAIL SELECTED GROUPS ---
             # Search for "Selected"
-            coords_2 = find_text_center("Selected", instance = 2)
+            coords_2 = find_text_center("Mailing", instance = 2)
 
             if coords_2:
+                print("Found Text")
+                Sleep(20)
                 send_packet(pipe, 1, coords_2[0], coords_2[1])
             else:
                 print("Python Error: Second text not found.")

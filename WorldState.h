@@ -124,6 +124,8 @@ struct InteractState : public ActionState {
     bool vendorSell = false;
     bool mailing = false;
     bool repair = false;
+    bool repairDone = false;
+    bool vendorDone = false;
     ULONG_PTR targetGuidLow = 0;
     ULONG_PTR targetGuidHigh = 0;
 };

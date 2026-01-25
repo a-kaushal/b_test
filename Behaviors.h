@@ -137,7 +137,6 @@ inline void InteractWithObject(int mapId, int numTimes, Vector3 position, int ob
     // --- DETECT OVERWRITE ---
     // If we are about to start a NEW interaction, but one is ALREADY active...
     if (g_GameState->interactState.interactActive) {
-
         // Check if the IDs are different
         if (g_GameState->interactState.interactId != objectId) {
         // if (true) {

@@ -537,6 +537,8 @@ public:
         interact.Reset();
         g_GameState->interactState.path = {};
         g_GameState->interactState.index = 0;
+        g_GameState->interactState.repairDone = false;
+        g_GameState->interactState.vendorDone = false;
         lastInteractId = -1;
     }
 
@@ -567,7 +569,7 @@ public:
             true,  // Check Target
             true,  // Check GUID
             ws.interactState.flyingPath, // Fly if applicable
-            2500,  // Wait 2.5s for window to open
+            1000,  // Wait 2.5s for window to open
             MOUSE_RIGHT,
             false, // NPC is likely stationary
             failedPath,
@@ -581,17 +583,18 @@ public:
         // 2. Perform Repair Logic
         if (complete) {
 
-            if (ws.interactState.repair) {
+            if (ws.interactState.repair && !ws.interactState.repairDone) {
                 // Send Lua command to repair all items
                 // "RepairAllItems()" is the standard WoW API, passed via ConsoleInput
                 input.SendDataRobust(std::wstring(L"/run RepairAllItems()"));
-                ws.interactState.repair = false;
+                ws.interactState.repairDone = true;
                 interactPause = GetTickCount();
             }
-            if (ws.interactState.vendorSell) {
+            if (ws.interactState.vendorSell && !ws.interactState.vendorDone) {
                 // Selects the vendor shop gossip action
                 input.SendDataRobust(std::wstring(L"/run local o=C_GossipInfo.GetOptions() if o then for _,v in ipairs(o) do if v.icon==132060 then C_GossipInfo.SelectOption(v.gossipOptionID) return end end end"));
-                //ws.interactState.
+                ws.interactState.vendorDone = true;
+                interactPause = GetTickCount();
             }
             if (ws.interactState.mailing) {
                 if (PerformMailing(mouse)) {
