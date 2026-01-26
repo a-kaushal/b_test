@@ -37,8 +37,8 @@ private:
     const float PI = 3.14159265f;
     const float TWO_PI = 6.28318530f;
     
-    const float PIXELS_PER_RADIAN_YAW = 225.036f * 0.3;
-    const float PIXELS_PER_RADIAN_PITCH = 178.772f * 0.3;
+    const float PIXELS_PER_RADIAN_YAW = 225.036f * 0.5;
+    const float PIXELS_PER_RADIAN_PITCH = 178.772f * 0.7;
 
     const float TURN_THRESHOLD = 0.1f;
 
@@ -378,7 +378,7 @@ public:
         }
 
         // Attempt to mount if: Requested (isFlying), Not Mounted, Not In Tunnel
-        if (((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && !player.inWater && !mountDisable) {
+        if (((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && !player.inWater && !mountDisable && player.areaMountable) {
             Stop();
             // Check 1: Are we on a cooldown from a previous failure?
             if (now < m_MountDisabledUntil) {

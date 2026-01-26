@@ -234,8 +234,18 @@ public:
                 keyboard.PressKey(VK_END);
                 Sleep(20);
                 keyboard.PressKey(VK_END);
-                Sleep(1500);
+                Sleep(20);
                 Reset(); // Reset to try again? Or fail?
+
+                // Move forward for 1 second
+                keyboard.SendKey('W', 0, true);
+                Sleep(100);
+                keyboard.SendKey(VK_SPACE, 0, true);
+                Sleep(200);
+                keyboard.SendKey(VK_SPACE, 0, false);
+                Sleep(700);
+                keyboard.SendKey('W', 0, false);
+
                 return false;
             }
 
@@ -600,6 +610,10 @@ public:
                 if (PerformMailing(mouse)) {
                     Sleep(100);
                     input.SendDataRobust(std::wstring(L"/run ToggleBackpack() CloseMail()"));
+                    g_GameState->interactState.targetGuidHigh = 0;
+                    g_GameState->interactState.targetGuidLow = 0;
+                    g_GameState->interactState.mailing = false;
+                    g_GameState->interactState.interactActive = false;
                     ResetState();
                     return true;
                 }
@@ -1912,7 +1926,7 @@ public:
 // --- CONCRETE ACTION: FOLLOW PATH ---
 class ActionFollowPath : public GoapAction {
 private:
-    const float ACCEPTANCE_RADIUS = 3.0f;
+    const float ACCEPTANCE_RADIUS = 5.0f;
 
 public:
     bool CanExecute(const WorldState& ws) override {

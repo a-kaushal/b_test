@@ -221,13 +221,13 @@ void StartGuiThread(HMODULE hDllInst) {
     }
     catch (const std::exception& e) {
         // Log the error safely
-        if (FILE* f = fopen("C:\\Driver\\SMM_Crash_GUI.log", "a")) {
+        if (FILE* f = fopen("C:\\SMM\\SMM_Crash_GUI.log", "a")) {
             fprintf(f, "[GUI CRASH] Exception: %s\n", e.what());
             fclose(f);
         }
     }
     catch (...) {
-        if (FILE* f = fopen("C:\\Driver\\SMM_Crash_GUI.log", "a")) {
+        if (FILE* f = fopen("C:\\SMM\\SMM_Crash_GUI.log", "a")) {
             fprintf(f, "[GUI CRASH] Unknown exception.\n");
             fclose(f);
         }

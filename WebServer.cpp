@@ -56,7 +56,7 @@ std::string EscapeJSON(const std::string& s) {
 
 // [FIX] Now a member function: WebServer::ReadLogFileTail
 std::string WebServer::ReadLogFileTail(int charsToRead) {
-    std::string filepath = "C:\\Driver\\SMM_Debug.log";
+    std::string filepath = "C:\\SMM\\SMM_Debug.log";
     std::ifstream file(filepath, std::ios::binary | std::ios::ate); // Open at end
     if (!file.is_open()) return "Log file not found.";
 

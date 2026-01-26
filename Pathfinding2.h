@@ -41,8 +41,8 @@ const unsigned short AREA_DEEP_WATER = 0x06; // 6 (Deep Water)
 
 // --- CONFIGURATION ---
 const float COLLISION_STEP_SIZE = 0.5f;    // Was 0.5f - less sampling
-const float MIN_CLEARANCE = 2.0f;          // Was 1.0f - more safety margin
-const float AGENT_RADIUS = 3.0f;           // CHANGED: Increased from 1.0f to 3.0f for a wider safety buffer
+const float MIN_CLEARANCE = 1.0f;          // Was 1.0f - more safety margin
+const float AGENT_RADIUS = 1.0f;           // CHANGED: Increased from 1.0f to 3.0f for a wider safety buffer
 const float WAYPOINT_STEP_SIZE = 10.0f;
 const int MAX_POLYS = 8192;
 const float FLIGHT_GRID_SIZE = 25.0f;  // Optimized for FMap voxels
@@ -1257,11 +1257,11 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         // Dynamic=true means when 100yds away, we move in 16yd steps (Very fast).
         { 4.0f,  true,  10000, "Standard Dynamic", true },
 
-        // Fallback: Fixed coarse grid if dynamic fails
-        { 15.0f, true,  10000, "Coarse Fixed",     false },
-
         // Fallback: Relaxed collision for tight spots
         { 4.0f,  false, 20000, "Relaxed Precision", true },
+
+        // Fallback: Fixed coarse grid if dynamic fails
+        { 10.0f, true,  10000, "Coarse Fixed",     false },
 
         // Last Resort: Ultra strict/fine for impossible spots
         { 3.0f,  false, 20000, "Ultra-Precision",   false }
@@ -1276,7 +1276,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
     closedSet.reserve(150000);
     // -----------------------------------------------------------
 
-    for (int i = 0; i < 1; ++i) {
+    for (int i = 0; i < 4; ++i) {
         AStarAttempt& att = attempts[i];
         // RESET
         nodes.clear();
@@ -1532,6 +1532,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
 
         // --- FAILURE FALLBACK (On Final Attempt) ---
         if (i == 0) {
+            return {};
             if (DEBUG_PATHFINDING) g_LogFile << "   [FALLBACK] Attempting Hybrid Air-to-Ground Recovery..." << std::endl;
 
             // 1. Find the node closest to the destination
@@ -2069,7 +2070,7 @@ inline std::vector<float> GetPossibleZLayers(int mapId, float x, float y) {
 // MODIFIED: CalculatePath accepts ignoreWater and passes it to FindPath/Cache
 inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath, const Vector3& startPos,
     int currentIndex, bool canFly, int mapId, bool isFlying, bool ignoreWater, bool path_loop = false) {
-    std::string mmapFolder = "C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/mmaps/";
+    std::string mmapFolder = "C:/SMM/data/mmaps/";
 
     if (!std::filesystem::exists(mmapFolder)) {
         g_LogFile << "[ERROR] CRITICAL: MMap folder does not exist: " << mmapFolder << std::endl;

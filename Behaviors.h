@@ -38,6 +38,25 @@ inline std::vector<Vector3> ParsePathStr(const std::string& input) {
     return path;
 }
 
+// Helper: Drops points that are too close to the previous point
+inline std::vector<Vector3> FilterPath(const std::vector<Vector3>& rawPath, float minDistance) {
+    if (rawPath.empty()) return {};
+
+    std::vector<Vector3> cleanPath;
+    cleanPath.reserve(rawPath.size());
+
+    // Always keep the starting point
+    cleanPath.push_back(rawPath[0]);
+
+    for (size_t i = 1; i < rawPath.size(); ++i) {
+        // Only add the point if it is far enough from the LAST accepted point
+        if (rawPath[i].Dist3D(cleanPath.back()) >= minDistance) {
+            cleanPath.push_back(rawPath[i]);
+        }
+    }
+    return cleanPath;
+}
+
 // Task: Follow Path
 class TaskFollowPath : public IProfileTask {
     std::vector<Vector3> path;
@@ -47,7 +66,10 @@ class TaskFollowPath : public IProfileTask {
 public:
     TaskFollowPath(int mapId, std::string pathStr, bool fly, bool loop)
         : looping(loop), flying(fly) {
-        path = ParsePathStr(pathStr);
+        std::vector<Vector3> rawPath = ParsePathStr(pathStr);
+        // Clean it up (Minimum 20 yards between points)
+        // This removes "stutter steps" or points that are too dense
+        path = FilterPath(rawPath, 40.0f);
     }
     std::string GetName() const override { return "Follow Path"; }
     void OnInterrupt() override { }
@@ -129,6 +151,11 @@ public:
     }
 };
 
+// Helper function to find best mailbox/vendor
+void FindNearestTarget(Vector3 target, Vector3 start, int& mapId, Vector3& position, int& objId) {
+
+}
+
 // =============================================================
 // 3. GLOBAL INTERRUPT LOGIC (Main EXE Only)
 // =============================================================
@@ -184,7 +211,84 @@ inline void InteractWithObject(int mapId, int numTimes, Vector3 position, int ob
 }
 
 // Wrappers
-inline void MailItems(int mapId, Vector3 position, int mailboxId) { InteractWithObject(mapId, 1, position, mailboxId); g_GameState->interactState.mailing = true; }
-inline void Resupply(int mapId, int numTimes, Vector3 vendorPosition, int vendorId) { InteractWithObject(mapId, numTimes, vendorPosition, vendorId); g_GameState->interactState.vendorSell = true; }
-inline void Repair(int mapId, int numTimes, Vector3 vendorPosition, int vendorId) { InteractWithObject(mapId, numTimes, vendorPosition, vendorId); g_GameState->interactState.repair = true; }
+//inline void MailItems(int mapId, Vector3 position, int mailboxId) { InteractWithObject(mapId, 1, position, mailboxId); g_GameState->interactState.mailing = true; }
+//inline void Resupply(int mapId, int numTimes, Vector3 vendorPosition, int vendorId) { InteractWithObject(mapId, numTimes, vendorPosition, vendorId); g_GameState->interactState.vendorSell = true; }
+//inline void Repair(int mapId, int numTimes, Vector3 vendorPosition, int vendorId) { InteractWithObject(mapId, numTimes, vendorPosition, vendorId); g_GameState->interactState.repair = true; }
+inline void MailItems() {
+    int mapId;
+    Vector3 position;
+    int mailboxId;
+
+    int nearestIndex = -1;
+    float nearestDist = 99999.0f;
+
+    for (int i = 0; i < g_ProfileSettings.mailboxes.size(); i++) {
+        if (g_ProfileSettings.mailboxes[i].Position.Dist3D(g_GameState->player.position) < nearestDist) {
+            nearestDist = g_ProfileSettings.mailboxes[i].Position.Dist3D(g_GameState->player.position);
+            nearestIndex = i;
+        }
+    }
+    if (nearestIndex != -1) {
+        mapId = g_ProfileSettings.mailboxes[nearestIndex].MapId;
+        position = g_ProfileSettings.mailboxes[nearestIndex].Position;
+        mailboxId = g_ProfileSettings.mailboxes[nearestIndex].Id;
+    }
+    else {
+        g_LogFile << "No mailbox found in profile" << std::endl;
+    }
+    InteractWithObject(mapId, 1, position, mailboxId);
+    g_GameState->interactState.mailing = true; 
+}
+
+inline void Resupply() {
+    int mapId;
+    Vector3 position;
+    int vendorId;
+
+    int nearestIndex = -1;
+    float nearestDist = 99999.0f;
+
+    for (int i = 0; i < g_ProfileSettings.vendors.size(); i++) {
+        if ((g_ProfileSettings.vendors[i].Type == VendorType::Repair) && (g_ProfileSettings.vendors[i].Position.Dist3D(g_GameState->player.position) < nearestDist)) {
+            nearestDist = g_ProfileSettings.vendors[i].Position.Dist3D(g_GameState->player.position);
+            nearestIndex = i;
+        }
+    }
+    if (nearestIndex != -1) {
+        mapId = g_ProfileSettings.vendors[nearestIndex].MapId;
+        position = g_ProfileSettings.vendors[nearestIndex].Position;
+        vendorId = g_ProfileSettings.vendors[nearestIndex].Id;
+    }
+    else {
+        g_LogFile << "No resupply vendor found in profile" << std::endl;        
+    }
+    InteractWithObject(mapId, 1, position, vendorId);
+    g_GameState->interactState.vendorSell = true; 
+}
+
+inline void Repair() {
+    int mapId;
+    Vector3 position;
+    int vendorId;
+
+    int nearestIndex = -1;
+    float nearestDist = 99999.0f;
+
+    for (int i = 0; i < g_ProfileSettings.vendors.size(); i++) {
+        g_LogFile << g_ProfileSettings.vendors[i].Position.Dist3D(g_GameState->player.position) << std::endl;
+        if ((g_ProfileSettings.vendors[i].Type == VendorType::Repair) && (g_ProfileSettings.vendors[i].Position.Dist3D(g_GameState->player.position) < nearestDist)) {
+            nearestDist = g_ProfileSettings.vendors[i].Position.Dist3D(g_GameState->player.position);
+            nearestIndex = i;
+        }
+    }
+    if (nearestIndex != -1) {
+        mapId = g_ProfileSettings.vendors[nearestIndex].MapId;
+        position = g_ProfileSettings.vendors[nearestIndex].Position;
+        vendorId = g_ProfileSettings.vendors[nearestIndex].Id;
+    }
+    else {
+        g_LogFile << "No resupply vendor found in profile" << std::endl;
+    }
+    InteractWithObject(mapId, 1, position, vendorId);
+    g_GameState->interactState.repair = true; }
 #endif

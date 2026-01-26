@@ -20,14 +20,14 @@ private:
     BotProfile* currentProfile = nullptr;
 
     // [CONFIG] Directories
-    std::string profileDir = "C:\\Driver\\Profiles";
+    std::string profileDir = "C:\\SMM\\Profiles";
     std::string sourceDir = "Z:\\VSProjects\\source\\repos\\MemoryTest\\SMM";
-    std::string secondarySource = "C:\\Driver";
+    std::string secondarySource = "C:\\SMM";
 
 public:
     BotProfile* GetActiveProfile() { return currentProfile; }
 
-    // Helper: Tries to find a file in Z:, then C:\Driver, then copies/patches it to Profiles\/
+    // Helper: Tries to find a file in Z:, then C:\SMM, then copies/patches it to Profiles\/
     bool FindAndStage(const std::string& filename, bool patchCircular = false) {
         std::string srcPath;
         std::ifstream in;
@@ -36,7 +36,7 @@ public:
         srcPath = primarySource + "\\" + filename;
         in.open(srcPath);
 
-        // 2. Try Secondary (C:\Driver) if Primary failed
+        // 2. Try Secondary (C:\SMM) if Primary failed
         if (!in.is_open()) {
             srcPath = secondarySource + "\\" + filename;
             in.open(srcPath);
@@ -100,7 +100,6 @@ bool CompileAndLoad(const std::string& profileCode, std::string& outError) {
         "Pathfinding2.h", "MovementController.h",
         "Behaviors.h",
         "Profile.h",
-        "ProfileSystem.h",
         "json.hpp"
     };
 
@@ -119,7 +118,7 @@ bool CompileAndLoad(const std::string& profileCode, std::string& outError) {
 
     // Globals & Includes
     out << "#include \"ForceHeader.h\"\n";
-    out << "std::ofstream g_LogFile(\"C:\\\\Driver\\\\Profiles\\\\ProfileLog.txt\");\n";
+    out << "std::ofstream g_LogFile(\"C:\\\\SMM\\\\Profiles\\\\ProfileLog.txt\");\n";
     out << "class WorldState; extern WorldState* g_GameState;\n";
     out << "WorldState* g_GameState = nullptr;\n";
 
@@ -128,13 +127,14 @@ bool CompileAndLoad(const std::string& profileCode, std::string& outError) {
     out << "#include \"Entity.h\"\n";
     out << "class ProfileLoader;\n";
     out << "#include \"dllmain.h\"\n";
+    out << "#include \"Profile.h\"\n";
     out << "#include \"WorldState.h\"\n";
     out << "#include \"Pathfinding2.h\"\n";
     out << "#include \"MovementController.h\"\n"; 
-    out << "#include \"Profile.h\"\n";
     out << "#include \"ProfileInterface.h\"\n";
-    out << "#include \"ProfileSystem.h\"\n"; 
     out << "#include \"Behaviors.h\"\n";
+    
+    out << "using BotSettings = ProfileSettings;\n";
 
     // Insert the User's C++ Code (Must define MyProfile)
     out << profileCode << "\n";
@@ -144,6 +144,9 @@ bool CompileAndLoad(const std::string& profileCode, std::string& outError) {
     out << "public:\n";
     out << "    void Setup(WorldState* state, ProfileSettings* settings) override {\n";
     out << "        g_GameState = state;\n";
+    // This creates an instance of the user's settings class and copies it to the engine's pointer
+    out << "        MySettings userSettings;\n";
+    out << "        *settings = userSettings;\n";
     out << "        MyProfile::Setup(state, settings);\n";
     out << "    }\n";
     out << "};\n";

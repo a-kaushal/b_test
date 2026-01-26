@@ -179,7 +179,7 @@ inline Matrix4x4 MatrixPerspectiveFovRH(float fovY, float aspect, float zn, floa
 
 // Finds the closest waypoint in a path to the input position
 inline int FindClosestWaypoint(std::vector<Vector3>& path, std::vector<PathNode>& pathNode, Vector3& position) {
-    std::ofstream log("C:\\Driver\\SMM_Debug.log", std::ios::app);
+    std::ofstream log("C:\\SMM\\SMM_Debug.log", std::ios::app);
     if (path.empty() && pathNode.empty()) return -1;
 
     int closestIndex = 0;

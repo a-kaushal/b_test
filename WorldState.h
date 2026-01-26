@@ -3,7 +3,6 @@
 #include <vector>
 #include "Vector.h"
 #include "MemoryRead.h"    // For PlayerInfo, GameEntity
-#include "ProfileSystem.h"
 
 // This allows us to return a pointer to ANY state type
 struct ActionState {

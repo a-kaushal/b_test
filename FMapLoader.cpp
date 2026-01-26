@@ -37,7 +37,7 @@ private:
 public:
     FMapLogger() : enabled(DEBUG_FMAP) {
         if (enabled) {
-            logFile.open("C:\\Driver\\SMM_FMap_Debug.log", std::ios::app);
+            logFile.open("C:\\SMM\\SMM_FMap_Debug.log", std::ios::app);
             if (logFile.is_open()) {
                 auto now = std::chrono::system_clock::now();
                 auto time = std::chrono::system_clock::to_time_t(now);
@@ -812,7 +812,7 @@ extern "C" {
         float x2, float y2, float z2) {
         static bool initialized = false;
         if (!initialized) {
-            g_FMapSys.init("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/fmaps/");
+            g_FMapSys.init("C:/SMM/data/fmaps/");
             initialized = true;
         }
         return g_FMapSys.checkLine(mapId, x1, y1, z1, x2, y2, z2);
@@ -821,7 +821,7 @@ extern "C" {
     __declspec(dllexport) float GetFMapFloorHeight(int mapId, float x, float y, float z) {
         static bool initialized = false;
         if (!initialized) {
-            g_FMapSys.init("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/fmaps/");
+            g_FMapSys.init("C:/SMM/data/fmaps/");
             initialized = true;
         }
         return g_FMapSys.getFloorHeight(mapId, x, y, z);
@@ -830,7 +830,7 @@ extern "C" {
     __declspec(dllexport) float GetFMapCeilingHeight(int mapId, float x, float y, float z) {
         static bool initialized = false;
         if (!initialized) {
-            g_FMapSys.init("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/fmaps/");
+            g_FMapSys.init("C:/SMM/data/fmaps/");
             initialized = true;
         }
         return g_FMapSys.getCeilingHeight(mapId, x, y, z);
@@ -839,7 +839,7 @@ extern "C" {
     __declspec(dllexport) bool CanFlyAt(int mapId, float x, float y, float z) {
         static bool initialized = false;
         if (!initialized) {
-            g_FMapSys.init("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/fmaps/");
+            g_FMapSys.init("C:/SMM/data/fmaps/");
             initialized = true;
         }
         return g_FMapSys.canFlyAt(mapId, x, y, z);
@@ -848,7 +848,7 @@ extern "C" {
     __declspec(dllexport) bool IsInTunnel(int mapId, float x, float y, float z) {
         static bool initialized = false;
         if (!initialized) {
-            g_FMapSys.init("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/fmaps/");
+            g_FMapSys.init("C:/SMM/data/fmaps/");
             initialized = true;
         }
         return detectTunnel(mapId, x, y, z);
@@ -858,7 +858,7 @@ extern "C" {
         static bool initialized = false;
         if (!initialized) {
             // Ensure init is called if not already
-            g_FMapSys.init("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/fmaps/");
+            g_FMapSys.init("C:/SMM/data/fmaps/");
             initialized = true;
         }
         // Prune tiles further than 1200 yards away

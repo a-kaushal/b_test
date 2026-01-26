@@ -110,7 +110,7 @@ def main():
             time.sleep(1)
             confirm_popup = False
             coords_3 = find_text_center("someone")
-            if coords_3:                
+            if coords_3:
                 x, y, width, height = get_wow_window_size()
                 if width != None and height != None:
                     coords_3[0] += -112 / (1920 / width)

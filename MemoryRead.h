@@ -68,7 +68,8 @@ inline ULONG_PTR baseAddress;
 #define ENTITY_PLAYER_MAX_HEALTH 0x11B20
 #define ENTITY_PLAYER_LEVEL 0x11C20
 #define ENTITY_PLAYER_EQUIPEMENT_OFFSET 0x14520 // Start of equipment array
-#define ENTITY_PLAYER_BAG_OFFSET 0x14700 // Offset to bag array
+#define ENTITY_PLAYER_BAG_OFFSET 0x14700 // Offset to equipped bags guid
+#define ENTITY_PLAYER_BAG_GUID_OFFSET 0x14750 
 #define ENTITY_PLAYER_MAIN_BAG_OFFSET 0x14750 // Offset to main bag items array
 #define ENTITY_PLAYER_IN_COMBAT_GUID_LOW 0x670 // Attacking Enemy
 #define ENTITY_PLAYER_IN_COMBAT_GUID_HIGH 0x678 // Attacking Enemy
@@ -110,6 +111,7 @@ inline ULONG_PTR baseAddress;
 #define PLAYER_BAG_LOW_GUID 0x178 // Low part of bag GUID in item structure
 #define PLAYER_BAG_HIGH_GUID 0x180 // High part of bag GUID in item structure
 #define PLAYER_BAG_SLOTS 0x478 // Offset from bag entry
+#define PLAYER_BAG_EQUIPPED
 
 
 #define LUA_ADDON_ARRAY_START = 0x0

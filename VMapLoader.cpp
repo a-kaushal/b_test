@@ -26,7 +26,7 @@ private:
 public:
     VMapLogger() : enabled(DEBUG_VMAP) {
         if (enabled) {
-            g_LogFile.open("C:\\Driver\\SMM_VMap_Debug.log", std::ios::app);
+            g_LogFile.open("C:\\SMM\\SMM_VMap_Debug.log", std::ios::app);
             if (g_LogFile.is_open()) {
                 auto now = std::chrono::system_clock::now();
                 auto time = std::chrono::system_clock::to_time_t(now);
@@ -454,7 +454,7 @@ VMapSystem g_Sys;
 extern "C" __declspec(dllexport) bool CheckVMapLine(int mapId, float x1, float y1, float z1, float x2, float y2, float z2) {
     static bool init = false;
     if (!init) {
-        g_Sys.Init("C:/Users/A/Downloads/SkyFire Repack WoW MOP 5.4.8/data/vmaps/");
+        g_Sys.Init("C:/SMM/data/vmaps/");
         init = true;
     }
     return g_Sys.Check(mapId, x1, y1, z1, x2, y2, z2);

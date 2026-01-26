@@ -124,6 +124,8 @@ struct ItemInfo : EntityInfo {
 struct BagInfo : EntityInfo {
     ULONG_PTR bagPtr;
     uint32_t id;
+    int bagId;
+    bool equippedBag;
     int bagSlots;
     int slotCount;
     int freeSlots;

@@ -29,7 +29,6 @@
 #include "OverlayWindow.h"
 #include "Gathering.h"
 #include "Combat.h"
-#include "Repair.h"
 #include "Logger.h"
 #include "Behaviors.h"
 #include "LuaAnchor.h"
@@ -79,7 +78,7 @@ LONG WINAPI CrashHandler(EXCEPTION_POINTERS* pExceptionInfo) {
     }
 
     // 2. Create Dump
-    HANDLE hFile = CreateFileA("C:\\Driver\\SMM_Crash.dmp", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE hFile = CreateFileA("C:\\SMM\\SMM_Crash.dmp", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
         MINIDUMP_EXCEPTION_INFORMATION dumpInfo;
         dumpInfo.ThreadId = GetCurrentThreadId();
@@ -475,7 +474,7 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
 
                         analyzer.ReadUInt32(procId, entity_ptr + PLAYER_BAG_ITEM_ID, std::dynamic_pointer_cast<BagInfo>(newEntity.info)->id);
                         analyzer.ReadInt32(procId, entity_ptr + PLAYER_BAG_SLOTS, std::dynamic_pointer_cast<BagInfo>(newEntity.info)->bagSlots);
-
+                       
                         id = std::dynamic_pointer_cast<BagInfo>(newEntity.info)->id;
                     }
                     if (objType == 33) {
@@ -658,26 +657,28 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                     else if (auto corpse = std::dynamic_pointer_cast<CorpseInfo>(entity.info)) {
                         corpse->distance = corpse->position.Dist3D(newPlayer.position);
                     }
-
                     if (auto bag = std::dynamic_pointer_cast<BagInfo>(entity.info)) {
-
                         bag->freeSlots = bag->bagSlots;
+                        bag->equippedBag = true;
                         if ((entity.guidLow == guidLowBag1) && (entity.guidHigh == guidHighBag1))
-                            bag->id = 1;
+                            bag->bagId = 1;
                         else if ((entity.guidLow == guidLowBag2) && (entity.guidHigh == guidHighBag2))
-                            bag->id = 2;
+                            bag->bagId = 2;
                         else if ((entity.guidLow == guidLowBag3) && (entity.guidHigh == guidHighBag3))
-                            bag->id = 3;
+                            bag->bagId = 3;
                         else if ((entity.guidLow == guidLowBag4) && (entity.guidHigh == guidHighBag4))
-                            bag->id = 4;
-                        else
-                            bag->id = 0;
+                            bag->bagId = 4;
+                        else {
+                            //bag->bagId = 0;
+                            bag->equippedBag = false;
+                            continue;
+                        }
 
                         for (auto& itemList : entityList) {
                             if (auto item = std::dynamic_pointer_cast<ItemInfo>(itemList.info)) {
-                                if ((item->bagGuidLow == entity.guidLow) && (item->bagGuidHigh == entity.guidHigh)) {
+                                if ((item->bagGuidLow == entity.guidLow) && (item->bagGuidHigh == entity.guidHigh) && bag->equippedBag) {
                                     bag->freeSlots = bag->freeSlots - 1;
-                                    item->bagID = bag->id;
+                                    item->bagID = bag->bagId;
                                 }
                             }
                         }
@@ -730,7 +731,7 @@ void MainThread(HMODULE hModule) {
     //    g_LogFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
     //}
 
-    g_LogFile.open("C:\\Driver\\SMM_Debug.log", std::ios::out | std::ios::app);
+    g_LogFile.open("C:\\SMM\\SMM_Debug.log", std::ios::out | std::ios::app);
 
     auto log = [](const std::string& msg) {
         // Write to global file
@@ -755,7 +756,7 @@ void MainThread(HMODULE hModule) {
     log("Web Server started at http://localhost:8080");
 
     // Launch GUI in background thread
-    std::thread guiThread(StartGuiThread, hModule);
+    //std::thread guiThread(StartGuiThread, hModule);
 	//log("GUI Thread Started.");
 
     try {
@@ -956,6 +957,7 @@ void MainThread(HMODULE hModule) {
                         // 3. Execution Logic
                         if (!isPaused) {
                             try {
+                                //g_LogFile << g_ProfileSettings.herbalismEnabled << std::endl;
                                 // Enforce Focus
                                 if (GetForegroundWindow() != hGameWindow) SetForegroundWindow(hGameWindow);
 
@@ -973,17 +975,20 @@ void MainThread(HMODULE hModule) {
                                 if ((g_GameState->player.bagFreeSlots <= 2)) {
                                     // If 30 minutes since last resupply mail items
                                     if (((g_GameState->globalState.bagEmptyTime != -1) && (GetTickCount() - g_GameState->globalState.bagEmptyTime < 1800000)) || g_GameState->interactState.mailing) {
-                                        MailItems(530, Vector3{ 258.91f, 7870.72f, 23.01f }, 182567);
+                                        //MailItems(530, Vector3{ 258.91f, 7870.72f, 23.01f }, 182567);
+                                        MailItems();
                                     }
                                     //else if (!g_GameState->interactState.interactActive) {
                                     else {
                                         //Resupply(530, 1, Vector3{ 228.16f, 7933.88f, 25.08f }, 18245);
-                                        Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
+                                        //Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
+                                        Repair();
                                     }
                                 }
                                 // if (g_GameState->player.needRepair && !g_GameState->interactState.interactActive) {
                                 if (g_GameState->player.needRepair) {
-                                    Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
+                                   // Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
+                                    Repair();
                                 }
                                 agent.Tick();
                             }

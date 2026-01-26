@@ -99,9 +99,6 @@
     <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\crc32.c">
       <Filter>VMap\Headers</Filter>
     </ClCompile>
-    <ClCompile Include="Repair.h">
-      <Filter>Repair/Restock</Filter>
-    </ClCompile>
     <ClCompile Include="FMapLoader.cpp">
       <Filter>VMap</Filter>
     </ClCompile>
@@ -222,9 +219,6 @@
       <Filter>Profile</Filter>
     </ClInclude>
     <ClInclude Include="Mailing.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Injection.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
