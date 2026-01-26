@@ -549,6 +549,8 @@ public:
         g_GameState->interactState.index = 0;
         g_GameState->interactState.repairDone = false;
         g_GameState->interactState.vendorDone = false;
+        g_GameState->interactState.locationChangeTime = -1;
+        g_GameState->interactState.locationChange = false;
         lastInteractId = -1;
     }
 
@@ -581,7 +583,7 @@ public:
             ws.interactState.flyingPath, // Fly if applicable
             1000,  // Wait 2.5s for window to open
             MOUSE_RIGHT,
-            false, // NPC is likely stationary
+            g_GameState->interactState.locationChange, // NPC is likely stationary
             failedPath,
             ws.interactState.interactId
         );
@@ -596,6 +598,8 @@ public:
             if (ws.interactState.repair && !ws.interactState.repairDone) {
                 // Send Lua command to repair all items
                 // "RepairAllItems()" is the standard WoW API, passed via ConsoleInput
+                input.SendDataRobust(std::wstring(L"/run local o=C_GossipInfo.GetOptions() if o then for _,v in ipairs(o) do if v.icon==132060 then C_GossipInfo.SelectOption(v.gossipOptionID) return end end end"));
+                Sleep(20);
                 input.SendDataRobust(std::wstring(L"/run RepairAllItems()"));
                 ws.interactState.repairDone = true;
                 interactPause = GetTickCount();
@@ -1957,7 +1961,18 @@ public:
                 g_GameState->pathFollowState.looping
             );
             ws.pathFollowState.index = 0;
+
+            if (ws.pathFollowState.path.size() > 0) {
+                ws.waypointReturnState.savedPath = ws.pathFollowState.path;
+                ws.waypointReturnState.savedIndex = ws.pathFollowState.index;
+                if ((ws.waypointReturnState.savedPath.size() > 0) &&
+                    (ws.player.position.Dist3D(ws.waypointReturnState.savedPath[ws.waypointReturnState.savedIndex].pos) > 20.0f)) {
+                    ws.waypointReturnState.hasTarget = true;
+                }
+                return false;
+            }
         }
+
         ws.globalState.activePath = ws.pathFollowState.path;
         ws.globalState.activeIndex = ws.pathFollowState.index;
         // 1. Check if we finished the path
@@ -2061,7 +2076,7 @@ public:
         }
 
         if (bestAction) {
-            if (currentAction == nullptr) {
+            if (bestAction != currentAction) {
                 if (bestAction->GetName() == "Follow Path") {
                     std::vector<Vector3> empty = {};
                     if (state.pathFollowState.path.size() > 0) {
@@ -2070,6 +2085,7 @@ public:
                         //g_LogFile << "Prev Index: " << state.pathFollowState.index << " | New Index: " << state.waypointReturnState.savedIndex << " | Size: " << state.pathFollowState.path.size() << std::endl;
                         //state.pathFollowState.index = state.waypointReturnState.savedIndex;
                         state.waypointReturnState.savedIndex = state.pathFollowState.index;
+                        //g_LogFile << state.player.position.Dist3D(state.waypointReturnState.savedPath[state.waypointReturnState.savedIndex].pos) << std::endl;
                     }
                 }
                 else if (bestAction->GetName() == "Repair Equipment") {
@@ -2099,9 +2115,7 @@ public:
                         }
                     }
                 }
-            }
 
-            if (bestAction != currentAction) {
                 //if (currentAction->GetName() == "Return to previous waypoint") currentAction->ResetState();
                 if (currentAction) {
                     currentAction->ResetState();

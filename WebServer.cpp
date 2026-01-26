@@ -318,6 +318,18 @@ void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
             contentType = "application/json";
         }
     }
+    // NEW ENDPOINT: POST /api/load_last
+    else if (requestData.find("POST /api/load_last ") != std::string::npos) {
+        std::string error;
+        if (g_ProfileLoader.LoadLastProfile(error)) {
+            responseBody = "{\"status\":\"success\", \"message\":\"Last Profile Reloaded!\"}";
+            currentProfile = "Reloaded Profile";
+        }
+        else {
+            responseBody = "{\"status\":\"error\", \"message\":\"" + EscapeJSON(error) + "\"}";
+        }
+        contentType = "application/json";
+    }
     // 4. GET /api/state (Complete State for Dashboard)
     else if (requestData.find("GET /api/state ") != std::string::npos) {
         responseBody = GenerateJSONState(); // Calls member function
@@ -417,8 +429,11 @@ std::string WebServer::GetHTML() {
                 <input type="file" id="profileFile" onchange="uploadProfile()">
             </button>
             <span id="uploadStatus" style="font-size: 12px; color: #aaa; align-self: center;"></span>
-            
+
+            <button class="btn-blue" onclick="loadLastProfile()">Reload Last</button>
+
             <div style="width: 1px; background: #555; margin: 0 10px;"></div>
+    
             <button class="btn-start" onclick="sendCommand('start')">START</button>
             <button class="btn-stop" onclick="sendCommand('stop')">STOP</button>
         </div>
@@ -473,6 +488,25 @@ std::string WebServer::GetHTML() {
         async function sendCommand(cmd) {
             try { await fetch('/api/' + cmd, { method: 'POST' }); } 
             catch(e) { console.error(e); }
+        }
+
+        async function loadLastProfile() {
+            const status = document.getElementById('uploadStatus');
+            status.innerText = "Reloading...";
+            try {
+                const res = await fetch('/api/load_last', { method: 'POST' });
+                const data = await res.json();
+                if(data.status === 'success') {
+                    status.innerText = "Reloaded!";
+                    status.style.color = "lime";
+                    setTimeout(() => status.innerText = "", 3000);
+                } else {
+                    status.innerText = "Error: " + data.message;
+                    status.style.color = "red";
+                }
+            } catch(err) {
+                status.innerText = "Request Failed";
+            }
         }
 
         async function uploadProfile() {

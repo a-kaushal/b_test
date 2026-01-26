@@ -116,6 +116,7 @@ struct InteractState : public ActionState {
     std::vector<PathNode> path;
     int index;
     Vector3 location;
+    Vector3 inGameLocation;
     int interactId;
     bool interactActive = false;
     int interactTimes = 0;
@@ -127,6 +128,8 @@ struct InteractState : public ActionState {
     bool vendorDone = false;
     ULONG_PTR targetGuidLow = 0;
     ULONG_PTR targetGuidHigh = 0;
+    bool locationChange = false;
+    DWORD locationChangeTime = -1;
 };
 
 struct RespawnState : public ActionState {

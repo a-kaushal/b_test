@@ -190,6 +190,7 @@ inline void InteractWithObject(int mapId, int numTimes, Vector3 position, int ob
     g_GameState->interactState.interactId = objectId;
     g_GameState->interactState.interactTimes = numTimes;
     g_GameState->interactState.interactActive = true;
+    g_GameState->interactState.inGameLocation = { position };
 
     //g_LogFile << "A " << g_GameState->interactState.targetGuidLow << " " << g_GameState->interactState.targetGuidHigh << std::endl;
     for (auto& entity : g_GameState->entities) {
@@ -197,6 +198,13 @@ inline void InteractWithObject(int mapId, int numTimes, Vector3 position, int ob
             if (npc->id == objectId) {
                 g_GameState->interactState.targetGuidLow = entity.guidLow;
                 g_GameState->interactState.targetGuidHigh = entity.guidHigh;
+                g_GameState->interactState.inGameLocation = { npc->position };
+                if ((g_GameState->interactState.inGameLocation != g_GameState->interactState.location) && (g_GameState->interactState.inGameLocation.Dist3D(g_GameState->player.position) < 50.0f)) {
+                    // && (g_GameState->interactState.locationChangeTime != -1) && (g_GameState->interactState.locationChangeTime - GetTickCount() > 2000)
+                    g_GameState->interactState.locationChange = true;
+                    g_GameState->interactState.location = { npc->position };
+                    //g_GameState->interactState.locationChangeTime = GetTickCount();
+                }
                 break;
             }
         }
@@ -275,7 +283,6 @@ inline void Repair() {
     float nearestDist = 99999.0f;
 
     for (int i = 0; i < g_ProfileSettings.vendors.size(); i++) {
-        g_LogFile << g_ProfileSettings.vendors[i].Position.Dist3D(g_GameState->player.position) << std::endl;
         if ((g_ProfileSettings.vendors[i].Type == VendorType::Repair) && (g_ProfileSettings.vendors[i].Position.Dist3D(g_GameState->player.position) < nearestDist)) {
             nearestDist = g_ProfileSettings.vendors[i].Position.Dist3D(g_GameState->player.position);
             nearestIndex = i;

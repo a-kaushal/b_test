@@ -957,40 +957,51 @@ void MainThread(HMODULE hModule) {
                         // 3. Execution Logic
                         if (!isPaused) {
                             try {
+                                auto* activeProfile = g_ProfileLoader.GetActiveProfile();
                                 //g_LogFile << g_ProfileSettings.herbalismEnabled << std::endl;
-                                // Enforce Focus
-                                if (GetForegroundWindow() != hGameWindow) SetForegroundWindow(hGameWindow);
+                                if (activeProfile) {
+                                    // Enforce Focus
+                                    if (GetForegroundWindow() != hGameWindow) SetForegroundWindow(hGameWindow);
 
-                                // This runs your profile script (once) to populate the queue
-                                if (auto* profile = g_ProfileLoader.GetActiveProfile()) {
-                                    profile->Tick();
-                                }
-
-                                if (UnderAttackCheck() == true) {
-                                    //g_LogFile << "Under Attack Detected!" << std::endl;
-                                }
-                                if (g_GameState->gatherState.enabled == true) {
-                                    UpdateGatherTarget(g_GameStateInstance);
-                                }
-                                if ((g_GameState->player.bagFreeSlots <= 2)) {
-                                    // If 30 minutes since last resupply mail items
-                                    if (((g_GameState->globalState.bagEmptyTime != -1) && (GetTickCount() - g_GameState->globalState.bagEmptyTime < 1800000)) || g_GameState->interactState.mailing) {
-                                        //MailItems(530, Vector3{ 258.91f, 7870.72f, 23.01f }, 182567);
-                                        MailItems();
+                                    // This runs your profile script (once) to populate the queue
+                                    if (auto* profile = g_ProfileLoader.GetActiveProfile()) {
+                                        profile->Tick();
                                     }
-                                    //else if (!g_GameState->interactState.interactActive) {
-                                    else {
-                                        //Resupply(530, 1, Vector3{ 228.16f, 7933.88f, 25.08f }, 18245);
-                                        //Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
+
+                                    if (UnderAttackCheck() == true) {
+                                        //g_LogFile << "Under Attack Detected!" << std::endl;
+                                    }
+                                    if (g_GameState->gatherState.enabled == true) {
+                                        UpdateGatherTarget(g_GameStateInstance);
+                                    }
+                                    if ((g_GameState->player.bagFreeSlots <= 2)) {
+                                        // If 30 minutes since last resupply mail items
+                                        if (((g_GameState->globalState.bagEmptyTime != -1) && (GetTickCount() - g_GameState->globalState.bagEmptyTime < 1800000)) || g_GameState->interactState.mailing) {
+                                            //MailItems(530, Vector3{ 258.91f, 7870.72f, 23.01f }, 182567);
+                                            MailItems();
+                                        }
+                                        //else if (!g_GameState->interactState.interactActive) {
+                                        else {
+                                            //Resupply(530, 1, Vector3{ 228.16f, 7933.88f, 25.08f }, 18245);
+                                            Repair();
+                                        }
+                                    }
+                                    // if (g_GameState->player.needRepair && !g_GameState->interactState.interactActive) {
+                                    if (g_GameState->player.needRepair) {
+                                        // Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
                                         Repair();
                                     }
+                                    agent.Tick();
                                 }
-                                // if (g_GameState->player.needRepair && !g_GameState->interactState.interactActive) {
-                                if (g_GameState->player.needRepair) {
-                                   // Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
-                                    Repair();
+                                else {
+                                    // --- Status update while waiting ---
+                                    // static DWORD lastPrint = 0;
+                                    // if (GetTickCount() - lastPrint > 3000) {
+                                    //     std::cout << "[System] Waiting for profile to load..." << std::endl;
+                                    //     lastPrint = GetTickCount();
+                                    // }
+                                    Sleep(100); // Sleep longer when idle to save CPU
                                 }
-                                agent.Tick();
                             }
                             catch (...) {
                                 g_LogFile << "Agent Tick Fail" << std::endl;

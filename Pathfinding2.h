@@ -380,13 +380,22 @@ public:
             return false;
         }
 
-        // Check for collision in a small sphere around the point
-        if (CheckFMapLine(mapId, pos.x, pos.y, pos.z - 0.5f, pos.x, pos.y, pos.z + 0.5f)) {
-            if (DEBUG_PATHFINDING) {
-                //log << "  ? Vertical collision detected" << std::endl;
-            }
+        // 1. Check Core (Center to Head)
+        if (CheckFMapLine(mapId, pos.x, pos.y, pos.z, pos.x, pos.y, pos.z + 2.5f)) {
             return false;
         }
+        // 2. Check Feet (Center to Feet)
+        if (CheckFMapLine(mapId, pos.x, pos.y, pos.z, pos.x, pos.y, pos.z - 0.5f)) {
+            return false;
+        }
+
+        // Check for collision in a small sphere around the point
+        //if (CheckFMapLine(mapId, pos.x, pos.y, pos.z - 0.5f, pos.x, pos.y, pos.z + 0.5f)) {
+        //    if (DEBUG_PATHFINDING) {
+        //        //log << "  ? Vertical collision detected" << std::endl;
+        //    }
+        //    return false;
+        //}
 
         // Skip ground clearance check if allowed (for takeoff points)
         if (allowGroundProximity) {
@@ -522,7 +531,13 @@ public:
         }
         Vector3 realUp = right.Cross(forward).Normalize();
 
-        float r = AGENT_RADIUS;
+        // --- FIX START ---
+        // 1. Determine Radius based on Strictness
+        // Strict = Full AGENT_RADIUS (Safety)
+        // Relaxed = Small Radius (0.6f) - Fits in caves, but catches ceilings!
+        float checkRadius = strict ? AGENT_RADIUS : 0.5f;
+
+        float r = checkRadius;
         float diag = r * 0.85f;
 
         // Construct 9 offsets perpendicular to the path
@@ -542,7 +557,8 @@ public:
         // User requested fix for clipping on Attempt 1 (Strict), so Strict must be robust.
         // For relaxed attempts (strict=false), we can reduce count or radius.
         // Here we keep count but could reduce radius if needed. For now, we trust the 'strict' flag logic.
-        int numRays = strict ? 9 : 1;
+        //int numRays = strict ? 9 : 1;
+        int numRays = strict ? 9 : 5;
 
         float skipCollisionDist = startingFromGround ? 5.0f : 0.0f;
 
@@ -1258,7 +1274,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         { 4.0f,  true,  10000, "Standard Dynamic", true },
 
         // Fallback: Relaxed collision for tight spots
-        { 4.0f,  false, 20000, "Relaxed Precision", true },
+        { 1.0f,  false, 80000, "Relaxed Precision", true },
 
         // Fallback: Fixed coarse grid if dynamic fails
         { 10.0f, true,  10000, "Coarse Fixed",     false },
@@ -1310,7 +1326,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             );
 
             if (snappedPos.Dist3D(midpoint) > currentSearchRadius + 50.0f) return -1;
-            if (!globalNavMesh.CheckFlightPoint(snappedPos, mapId)) return -1;
+            if (!globalNavMesh.CheckFlightPoint(snappedPos, mapId, !att.strict)) return -1;
 
             size_t idx = nodes.size();
             nodes.emplace_back();
@@ -1531,7 +1547,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         }
 
         // --- FAILURE FALLBACK (On Final Attempt) ---
-        if (i == 0) {
+        if (i == 1) {
             return {};
             if (DEBUG_PATHFINDING) g_LogFile << "   [FALLBACK] Attempting Hybrid Air-to-Ground Recovery..." << std::endl;
 
