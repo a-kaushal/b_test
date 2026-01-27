@@ -63,9 +63,10 @@ class TaskFollowPath : public IProfileTask {
     bool looping;
     bool flying;
     bool started = false;
+    int mapId;
 public:
     TaskFollowPath(int mapId, std::string pathStr, bool fly, bool loop)
-        : looping(loop), flying(fly) {
+        : looping(loop), flying(fly), mapId(mapId) {
         std::vector<Vector3> rawPath = ParsePathStr(pathStr);
         // Clean it up (Minimum 20 yards between points)
         // This removes "stutter steps" or points that are too dense
@@ -88,6 +89,7 @@ public:
             state->pathFollowState.enabled = true;
             state->pathFollowState.hasPath = true;
             state->pathFollowState.pathIndexChange = true;
+            state->pathFollowState.mapId = mapId;
             started = true;
             return false;
         }
@@ -191,6 +193,7 @@ inline void InteractWithObject(int mapId, int numTimes, Vector3 position, int ob
     g_GameState->interactState.interactTimes = numTimes;
     g_GameState->interactState.interactActive = true;
     g_GameState->interactState.inGameLocation = { position };
+    g_GameState->interactState.mapId = mapId;
 
     //g_LogFile << "A " << g_GameState->interactState.targetGuidLow << " " << g_GameState->interactState.targetGuidHigh << std::endl;
     for (auto& entity : g_GameState->entities) {

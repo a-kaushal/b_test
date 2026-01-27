@@ -128,6 +128,7 @@ public:
 
                     // Read the first 3 values (Double precision)
                     double val, val1, val2, val3, val4, val5, val6, val7, val8, val9, val10, val11, val12, val13, val14, val15;
+                    double prof1Id, prof1Level, prof1Max, prof2Id, prof2Level, prof2Max;
                     analyzer.ReadDouble(pid, arrayPtr + 0x00, val); // Verification Value
                     analyzer.ReadDouble(pid, arrayPtr + 0x18, val1);
                     analyzer.ReadDouble(pid, arrayPtr + 0x30, val2);
@@ -144,6 +145,14 @@ public:
                     analyzer.ReadDouble(pid, arrayPtr + 0x138, val13);
                     analyzer.ReadDouble(pid, arrayPtr + 0x150, val14);
                     analyzer.ReadDouble(pid, arrayPtr + 0x168, val15);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x1C8, prof1Id);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x1E0, prof1Level);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x1F8, prof1Max);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x210, prof2Id);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x228, prof2Level);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x240, prof2Max);
+
+                    //g_LogFile << prof1Id << " " << prof1Level << " " << prof1Max << " " << prof2Id << " " << prof2Level << " " << prof2Max << std::endl;
 
                     ((val1 > 0.5) ? g_GameState->player.needRepair = true : g_GameState->player.needRepair = false);
                     ((val2 > 0.5) ? g_GameState->player.isIndoor = true : g_GameState->player.isIndoor = false);

@@ -438,7 +438,7 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                 GUIDBreakdown(low_counter, type_field, instance, id, map_id, server_id, guidLow, guidHigh);
 
                 // Filter for specific types
-                if ((objType == 3) || (objType == 7) || (objType == 33) || (objType == 225) || (objType == 257) || (objType == 1025)) {
+                if ((objType == 3) || (objType == 7) || (objType == 33) || (objType == 97) || (objType == 225) || (objType == 257) || (objType == 1025)) {
                     // --- SAFETY BLOCK FOR LOGGING ---
                     // Log before processing complex entities if you suspect a specific one crashes it
                     //if (g_LogFile.is_open()) g_LogFile << "Processing Type " << objType << " ID: " << id << std::endl; 
@@ -596,11 +596,23 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                         analyzer.ReadFloat(procId, entity_ptr + OBJECT_POSITION_Z_OFFSET, std::dynamic_pointer_cast<CorpseInfo>(newEntity.info)->position.z);
                         std::dynamic_pointer_cast<CorpseInfo>(newEntity.info)->id = id;
                     }
+                    if (objType == 97) {
+                        newEntity.objType = "Other Player";
+                        auto otherPlayerInfo = std::make_shared<OtherPlayerInfo>();
+                        newEntity.info = otherPlayerInfo;
+
+                        analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_X_OFFSET, std::dynamic_pointer_cast<OtherPlayerInfo>(newEntity.info)->position.x);
+                        analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Y_OFFSET, std::dynamic_pointer_cast<OtherPlayerInfo>(newEntity.info)->position.y);
+                        analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_Z_OFFSET, std::dynamic_pointer_cast<OtherPlayerInfo>(newEntity.info)->position.z);
+                    }
                     newEntity.id = id;
                     newEntity.mapId = map_id;
 
                     // Add to our list
                     entityList.push_back(newEntity);
+                }
+                else {
+                    //g_LogFile << objType << " " << entity_ptr << std::endl;
                 }
             }
         }
@@ -756,7 +768,7 @@ void MainThread(HMODULE hModule) {
     log("Web Server started at http://localhost:8080");
 
     // Launch GUI in background thread
-    //std::thread guiThread(StartGuiThread, hModule);
+    std::thread guiThread(StartGuiThread, hModule);
 	//log("GUI Thread Started.");
 
     try {
@@ -940,6 +952,7 @@ void MainThread(HMODULE hModule) {
                         catch (...) {
                             g_LogFile << "[WARNING] GUI Update failed. Skipping frame." << std::endl;
                         }
+                        //pilot.Calibrate(g_GameState->player.rotation, g_GameState->player.vertRotation);
 
                         //if (g_GameState->pathFollowState.pathIndexChange == true) {
                         //    if (g_GameState->pathFollowState.path[g_GameState->pathFollowState.index - 1].pos.Dist3D(g_GameState->pathFollowState.presetPath[g_GameState->pathFollowState.presetIndex]) < 5.0) {
@@ -976,7 +989,7 @@ void MainThread(HMODULE hModule) {
                                     }
                                     if ((g_GameState->player.bagFreeSlots <= 2)) {
                                         // If 30 minutes since last resupply mail items
-                                        if (((g_GameState->globalState.bagEmptyTime != -1) && (GetTickCount() - g_GameState->globalState.bagEmptyTime < 1800000)) || g_GameState->interactState.mailing) {
+                                        if (((g_GameState->globalState.bagEmptyTime != -1) && (GetTickCount() - g_GameState->globalState.bagEmptyTime < 1800000) && g_ProfileSettings.mailingEnabled) || g_GameState->interactState.mailing) {
                                             //MailItems(530, Vector3{ 258.91f, 7870.72f, 23.01f }, 182567);
                                             MailItems();
                                         }

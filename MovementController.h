@@ -38,7 +38,7 @@ private:
     const float TWO_PI = 6.28318530f;
     
     const float PIXELS_PER_RADIAN_YAW = 225.036f * 0.5;
-    const float PIXELS_PER_RADIAN_PITCH = 178.772f * 0.7;
+    const float PIXELS_PER_RADIAN_PITCH = 178.772f * 0.5;
 
     const float TURN_THRESHOLD = 0.1f;
 

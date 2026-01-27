@@ -73,7 +73,6 @@ void UpdateGatherTarget(WorldState& ws) {
             if (object->nodeActive == 0) continue;
 
             if (((object->type == 1) && (g_ProfileSettings.herbalismEnabled == true)) || ((object->type == 2) && (g_ProfileSettings.miningEnabled == true))) {
-
                 // --- CLEANER IGNORE WATER LOGIC ---
                 if (g_GameState->globalState.ignoreUnderWater) {
                     // Get the Area ID directly from our new function
@@ -94,6 +93,34 @@ void UpdateGatherTarget(WorldState& ws) {
                 if (BlacklistCheck(ws, entity.guidLow, entity.guidHigh)) {
                     continue;
                 }
+
+                bool ignoredNode = false;
+                // If area is ignored dont gather
+                for (int j = 0; j < g_ProfileSettings.ignoredAreas.size(); j++) {
+                    if (object->position.Dist3D(g_ProfileSettings.ignoredAreas[j].Position) < g_ProfileSettings.ignoredAreas[j].Radius) {
+                        ws.gatherState.blacklistNodesGuidLow.push_back(entity.guidLow);
+                        ws.gatherState.blacklistNodesGuidHigh.push_back(entity.guidHigh);
+                        ws.gatherState.blacklistTime.push_back(GetTickCount());
+                        g_LogFile << "Node in ignored area, blacklisting for " << BLACKLIST_TIMEOUT / 1000 << " seconds" << std::endl;
+                        ignoredNode = true;
+                        break;
+                    }
+                }
+                // Check if player is close to node
+                for (int j = 0; j < ws.entities.size(); ++j) {
+                    if (auto otherPlayer = std::dynamic_pointer_cast<OtherPlayerInfo>(entity.info)) {
+                        if (object->position.Dist3D(otherPlayer->position) < 10.0f) {
+                            ws.gatherState.blacklistNodesGuidLow.push_back(ws.gatherState.guidLow);
+                            ws.gatherState.blacklistNodesGuidHigh.push_back(ws.gatherState.guidHigh);
+                            ws.gatherState.blacklistTime.push_back(GetTickCount());
+                            g_LogFile << "Player detected near node, blacklisting for " << BLACKLIST_TIMEOUT / 1000 << " seconds" << std::endl;
+                            ignoredNode = true;
+                            break;
+                        }
+                    }
+                }
+                if (ignoredNode) continue;
+
                 std::vector<int> enemyIndex = {};
                 int index = 0;
                 for (auto& entity : ws.entities) {
@@ -134,6 +161,7 @@ void UpdateGatherTarget(WorldState& ws) {
             ws.gatherState.guidHigh = target.guidHigh;
             ws.gatherState.hasNode = true;
             ws.gatherState.nodeActive = true;
+            ws.gatherState.mapId = ws.player.mapId;
             g_LogFile << "[AGENT] Found Gather Node: " << objInfo->name << " at " << bestDist << "y" << std::endl;
         }
     }

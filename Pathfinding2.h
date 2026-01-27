@@ -1274,7 +1274,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         { 4.0f,  true,  10000, "Standard Dynamic", true },
 
         // Fallback: Relaxed collision for tight spots
-        { 1.0f,  false, 80000, "Relaxed Precision", true },
+        { 4.0f,  false, 20000, "Relaxed Precision", true },
 
         // Fallback: Fixed coarse grid if dynamic fails
         { 10.0f, true,  10000, "Coarse Fixed",     false },
@@ -1299,7 +1299,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         gridToIndex.clear();
         closedSet.clear();
 
-        IndexPriorityQueue openSet(&nodes);
+        IndexPriorityQueue openSet(&nodes); 
 
         if (DEBUG_PATHFINDING) {
             g_LogFile << ">>> A* Attempt " << (i + 1) << " (" << att.name << ") <<<" << std::endl;
@@ -2256,7 +2256,7 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
         // --- CLEAN UP STRAIGHT LINES ---
         // This removes the excessive waypoint density from Subdivision 
         // where it isn't needed (straight lines), but keeps it for curves/terrain.
-        //stitchedPath = OptimizeFlightPath(stitchedPath);
+        stitchedPath = OptimizeFlightPath(stitchedPath);
 
         return stitchedPath;
     }

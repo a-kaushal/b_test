@@ -35,6 +35,7 @@ struct Looting : public ActionState {
     Vector3 position;
     std::vector<PathNode> path;
     int index;
+    int mapId;
     bool hasLoot = false;
     ULONG_PTR guidLow;
     ULONG_PTR guidHigh;
@@ -48,6 +49,7 @@ struct Gathering : public ActionState {
     bool hasNode = false;
     bool nodeActive = false;
     int index;
+    int mapId;
     ULONG_PTR guidLow;
     ULONG_PTR guidHigh;
     std::vector<ULONG_PTR> gatheredNodesGuidLow = {};
@@ -63,6 +65,7 @@ struct PathFollowing : public ActionState {
     std::vector<PathNode> path;
     std::vector<Vector3> presetPath;
     int index;
+    int mapId;
     int presetIndex;
     bool looping = true; // If true the path repeats from the beginning when it finishes
     bool startNearest = true; // If true starts at the closest waypoint to player
@@ -118,6 +121,7 @@ struct InteractState : public ActionState {
     Vector3 location;
     Vector3 inGameLocation;
     int interactId;
+    int mapId;
     bool interactActive = false;
     int interactTimes = 0;
     bool resupply = false;

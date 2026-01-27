@@ -14,6 +14,7 @@ bool UnderAttackCheck() {
     std::vector<Vector3> enemyIndices = {};
 	if ((g_GameState->player.targetGuidLow != 0) && (g_GameState->player.targetGuidHigh != 0)) {
         int count = 0;
+        bool npcCombat = 0;
         for (auto& entity : g_GameState->entities) {
             // Use std::dynamic_pointer_cast for shared_ptr
             if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
@@ -29,6 +30,7 @@ bool UnderAttackCheck() {
                     }
                     else {
                         g_GameState->combatState.reset = true;
+                        targetFound = true;
                     }
                 }
             }
@@ -39,6 +41,9 @@ bool UnderAttackCheck() {
         g_GameState->combatState.underAttack = false;
 		return false;
 	}
+    if (!targetFound) {
+        g_GameState->combatState.reset = true;
+    }
     return false;
 }
 

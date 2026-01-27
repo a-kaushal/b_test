@@ -82,6 +82,10 @@ struct PlayerInfo : EntityInfo {
     bool canRespawn; // Player ghost in reange of body and able to respawn
 };
 
+struct OtherPlayerInfo : EntityInfo {
+    Vector3 position;
+};
+
 struct EnemyInfo : EntityInfo {
     ULONG_PTR enemyPtr;
     Vector3 position;

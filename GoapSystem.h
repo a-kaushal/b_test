@@ -129,7 +129,7 @@ public:
 
     // Main Entry Point
     // returns TRUE if interaction sequence is complete
-    bool EngageTarget(Vector3 targetPos, ULONG_PTR targetGuidLow, ULONG_PTR targetGuidHigh, PlayerInfo & player, std::vector<PathNode>&currentPath, int& pathIndex, float approachDist, float interactDist, float finalDist,
+    bool EngageTarget(Vector3 targetPos, ULONG_PTR targetGuidLow, ULONG_PTR targetGuidHigh, PlayerInfo & player, std::vector<PathNode>&currentPath, int& pathIndex, int mapId, float approachDist, float interactDist, float finalDist,
         bool checkTarget, bool targetGuid, bool canFly, int postClickWaitMs, MouseButton click, bool movingTarget, bool& failedPath, int targetId, bool mountDisable = false) {
         bool fly_entry_state = canFly;
         // If we are stabilizing, aligning camera, or scanning for the mouse, we are "close enough".
@@ -147,7 +147,7 @@ public:
         // 4. Enough time has passed (200ms)
         if (!isInteracting && (currentState != STATE_CREATE_PATH) && (movingTarget == true) && (pathCalcTimer != 0) && (GetTickCount() - pathCalcTimer > 200)) {
             // Recalculate
-            currentPath = CalculatePath({ targetPos }, player.position, 0, canFly, 530, player.isFlying, g_GameState->globalState.ignoreUnderWater);
+            currentPath = CalculatePath({ targetPos }, player.position, 0, canFly, mapId, player.isFlying, g_GameState->globalState.ignoreUnderWater);
             pathIndex = 0;
             pathCalcTimer = GetTickCount();
         }
@@ -170,7 +170,7 @@ public:
         case STATE_CREATE_PATH:
             // Assuming CalculatePath is available globally or via included header
             g_LogFile << "Target Pos x: " << targetPos.x << " | Target Pos y: " << targetPos.y << " | Target Pos z: " << targetPos.z << std::endl;
-            currentPath = CalculatePath({ targetPos }, player.position, 0, canFly, 530, player.isFlying, g_GameState->globalState.ignoreUnderWater);
+            currentPath = CalculatePath({ targetPos }, player.position, 0, canFly, mapId, player.isFlying, g_GameState->globalState.ignoreUnderWater);
             //if (currentPath.empty()) EndScript(pilot, (canFly && g_GameState->player.areaMountable) ? 2 : 1);
 
             if (currentPath.empty()) {
@@ -575,6 +575,7 @@ public:
             ws.player,
             ws.interactState.path,
             ws.interactState.index,
+            ws.interactState.mapId,
             5.0f,  // Approach Distance
             3.0f,  // Interact Distance
             3.0f,  // Final Distance
@@ -1092,6 +1093,10 @@ public:
     bool Execute(WorldState& ws, MovementController& pilot) override {
         bool lowHp = false;
         // Logic to check target health
+        if (ws.combatState.reset) {
+            ResetState();
+            return true;
+        }
 		const auto& entity = ws.entities[ws.combatState.entityIndex];
         if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
             if ((ws.combatState.targetGuidLow == entity.guidLow) && (ws.combatState.targetGuidHigh == entity.guidHigh)) {
@@ -1137,7 +1142,7 @@ public:
                 // Use EngageTarget purely for the "Click" logic.
                 // We pass 'false' for checkTarget (handled above) and standard interaction params.
                 if (interact.EngageTarget(ws.combatState.enemyPosition, ws.combatState.targetGuidLow, ws.combatState.targetGuidHigh, ws.player, ws.combatState.path,
-                    ws.combatState.index, MELEE_RANGE, 10.0f, 3.0f, true, true, false, 100, MOUSE_RIGHT, true, failedPath, -1, true)) {
+                    ws.combatState.index, ws.player.mapId, MELEE_RANGE, 10.0f, 3.0f, true, true, false, 100, MOUSE_RIGHT, true, failedPath, -1, true)) {
 
                     clickCooldown = GetTickCount();
                 }
@@ -1155,7 +1160,7 @@ public:
             inRoutine = false;
             // Recalculate path if needed
             if (ws.combatState.path.empty() || ws.combatState.index >= ws.combatState.path.size() || (GetTickCount() - pathTimer > REPATH_DELAY)) {
-                ws.combatState.path = CalculatePath({ ws.combatState.enemyPosition }, ws.player.position, 0, false, 530, false, g_GameState->globalState.ignoreUnderWater);
+                ws.combatState.path = CalculatePath({ ws.combatState.enemyPosition }, ws.player.position, 0, false, ws.player.mapId, false, g_GameState->globalState.ignoreUnderWater);
                 ws.combatState.index = 0;
                 pathTimer = GetTickCount();
             }
@@ -1289,6 +1294,7 @@ public:
             ws.player,
             ws.lootState.path,
             ws.lootState.index,
+            ws.lootState.mapId,
             3.5f,
             2.8f,
             2.8f,
@@ -1370,6 +1376,7 @@ public:
             ws.player,
             ws.gatherState.path,
             ws.gatherState.index,
+            ws.gatherState.mapId,
             approachDist,
             2.8f,
             finalDist,
@@ -1532,7 +1539,7 @@ public:
                 testStart.z = currentGroundZ + 1.0f;
                 Vector3 testEnd = returnTarget;
                 testEnd.z = targetGroundZ + 1.0f;
-                directClear = globalNavMesh.CheckFlightSegment(testStart, testEnd, 530, ws.player.isFlying, true);
+                directClear = globalNavMesh.CheckFlightSegment(testStart, testEnd, ws.player.mapId, ws.player.isFlying, true);
                 // Additional validation: sample midpoint
                 if (directClear) {
                     Vector3 midpoint = (testStart + testEnd) * 0.5f;
@@ -1552,7 +1559,7 @@ public:
                     g_LogFile << "Player on ground, raising player position z by 20.0 for flight path" << std::endl;
                 }*/
 
-                directClear = globalNavMesh.CheckFlightSegment(adjustedPlayer, returnTarget, 530, ws.player.isFlying, true);
+                directClear = globalNavMesh.CheckFlightSegment(adjustedPlayer, returnTarget, ws.player.mapId, ws.player.isFlying, true);
                 // NEW: Additional validation for flight paths
                 if (directClear) {
                     // Check multiple points along the path
@@ -1565,7 +1572,7 @@ public:
                         Vector3 testPoint = adjustedPlayer + (dir * (dist * t));
 
                         // Verify flyability
-                        if (!CanFlyAt(530, testPoint.x, testPoint.y, testPoint.z)) {
+                        if (!CanFlyAt(ws.player.mapId, testPoint.x, testPoint.y, testPoint.z)) {
                             g_LogFile << "  ✗ Sample point " << sample << " not flyable" << std::endl;
                             directClear = false;
                             break;
@@ -1772,7 +1779,7 @@ public:
                     ws.player.position,
                     0,
                     ws.waypointReturnState.flyingPath,
-                    530,
+                    ws.player.mapId,
                     ws.player.isFlying,
                     g_GameState->globalState.ignoreUnderWater,
                     false
@@ -1955,7 +1962,7 @@ public:
                 g_GameState->player.position, 
                 g_GameState->pathFollowState.presetIndex, 
                 ws.pathFollowState.flyingPath, 
-                530, 
+                ws.pathFollowState.mapId,
                 g_GameState->player.isFlying, 
                 g_GameState->globalState.ignoreUnderWater,
                 g_GameState->pathFollowState.looping
