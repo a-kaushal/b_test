@@ -96,6 +96,7 @@ struct Combat : public ActionState {
     int index;
     int entityIndex;
     bool underAttack = false; // True when bot is under attack from a enemy
+    int attackerCount = 0; // Track number of active enemies
     bool hasTarget = false; // True when the bot selects a target to attack, but has not reached within range yet
     bool reset = false;
     Vector3 enemyPosition;

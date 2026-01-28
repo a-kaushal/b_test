@@ -43,7 +43,7 @@ const unsigned short AREA_DEEP_WATER = 0x06; // 6 (Deep Water)
 const float COLLISION_STEP_SIZE = 0.5f;    // Was 0.5f - less sampling
 const float MIN_CLEARANCE = 1.0f;          // Was 1.0f - more safety margin
 const float AGENT_RADIUS = 1.0f;           // CHANGED: Increased from 1.0f to 3.0f for a wider safety buffer
-const float WAYPOINT_STEP_SIZE = 10.0f;
+const float WAYPOINT_STEP_SIZE = 25.0f;
 const int MAX_POLYS = 8192;
 const float FLIGHT_GRID_SIZE = 25.0f;  // Optimized for FMap voxels
 const float FLIGHT_MAX_SEARCH_RADIUS = 500.0f;
@@ -535,8 +535,7 @@ public:
         // 1. Determine Radius based on Strictness
         // Strict = Full AGENT_RADIUS (Safety)
         // Relaxed = Small Radius (0.6f) - Fits in caves, but catches ceilings!
-        float checkRadius = strict ? AGENT_RADIUS : 0.5f;
-
+        float checkRadius = strict ? AGENT_RADIUS : AGENT_RADIUS / 2;
         float r = checkRadius;
         float diag = r * 0.85f;
 
@@ -571,11 +570,14 @@ public:
 
         float headTop = 2.5f;   // Check max height (Top of Mount/Head)
         float headMid = 1.25f;  // GAP FILLER: Check between Center and Top
+        float knees   = -0.5f;           // Gap filler
+        float feetBot = -AGENT_RADIUS;  // Bottom of Feet check (catches ground clipping)
 
         // If relaxed (Attempt 4+), we shrink the box to fit in tunnels
         if (!strict) {
             headTop = 1.5f;
             headMid = 0.75f;
+            knees = -0.3f;
         }
         Vector3 actualEnd = Vector3{ -36.8802f, 5284.5f, 24.4288f };
         if (actualEnd.Dist3D(end) < 10.0f) {
@@ -597,23 +599,29 @@ public:
             }
             // 2. OBSTACLE CHECK
             else if (skipCollisionDist == 0.0f || totalDist <= skipCollisionDist) {
-
-                // A. CENTER Check (The Core)
+                // 1. CENTER
                 if (CheckFMapLine(mapId, s.x, s.y, s.z, e.x, e.y, e.z)) {
                     if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " CENTER hit obstacle." << std::endl;
                     return SEGMENT_COLLISION;
                 }
-
-                // C. TOP Check (Don't hit the ceiling)
-                if (CheckFMapLine(mapId, s.x, s.y, s.z + headTop, e.x, e.y, e.z + headTop)) {
-                    if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " HEAD-TOP hit obstacle." << std::endl;
+                // 2. FEET (Bottom) - Critical for ground clipping
+                if (CheckFMapLine(mapId, s.x, s.y, s.z + feetBot, e.x, e.y, e.z + feetBot)) {
+                    if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " FEET hit obstacle." << std::endl;
                     return SEGMENT_COLLISION;
                 }
-
-                // D. MID Check (The Gap Filler!)
-                // This catches obstacles that are too high for Center but too low for Top
+                // 3. KNEES (Gap Filler)
+                if (CheckFMapLine(mapId, s.x, s.y, s.z + knees, e.x, e.y, e.z + knees)) {
+                    if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " KNEES hit obstacle." << std::endl;
+                    return SEGMENT_COLLISION;
+                }
+                // 4. HEAD MID
                 if (CheckFMapLine(mapId, s.x, s.y, s.z + headMid, e.x, e.y, e.z + headMid)) {
                     if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " HEAD-MID hit obstacle." << std::endl;
+                    return SEGMENT_COLLISION;
+                }
+                // 5. HEAD TOP
+                if (CheckFMapLine(mapId, s.x, s.y, s.z + headTop, e.x, e.y, e.z + headTop)) {
+                    if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " HEAD-TOP hit obstacle." << std::endl;
                     return SEGMENT_COLLISION;
                 }
             }
@@ -1266,6 +1274,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             }
         }
     }
+
     // 3. ATTEMPT CONFIGURATIONS
     // We use a small 'baseGridSize' for precision, but 'dynamic=true' allows it to scale up when far away.
     AStarAttempt attempts[] = {
@@ -1369,9 +1378,9 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         };
 
         float totalDistToGoal = actualStart.Dist3D(actualEnd);
-        if (totalDistToGoal > 1000.0f) att.maxNodes *= 32;
-        if (totalDistToGoal > 200.0f) att.maxNodes *= 8;
-        if (totalDistToGoal > 50.0f) att.maxNodes *= 2;
+        if (totalDistToGoal > 1000.0f) att.maxNodes *= 16;
+        else if (totalDistToGoal > 200.0f) att.maxNodes *= 8;
+        else if (totalDistToGoal > 50.0f) att.maxNodes *= 2;
 
         while (!openSet.empty() && iterations < att.maxNodes) {
             int currentIdx = openSet.top();
@@ -1390,9 +1399,16 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             if (att.dynamic) {
                 // If far away, use larger steps to cover ground quickly.
                 // Multipliers must be integers so nodes align with the base grid.
-                if (distToGoal > 1000.0f) { currentStep *= 8.0f; } // e.g. 8.0 * 2 = 32 yard steps
-                else if (distToGoal > 200.0f) { currentStep *= 4.0f; } // e.g. 4.0 * 4 = 16 yard steps
-                else if (distToGoal > 50.0f) { currentStep *= 2.0f; } // e.g. 4.0 * 2 = 8 yard steps
+                bool nearStart = current.pos.Dist3D(actualStart) < 20.0f;
+                bool nearEnd = current.pos.Dist3D(actualEnd) < 20.0f;
+                //if (nearStart || nearEnd) {
+                    //currentStep /= 2.0f;  // Causes issues for some reason
+                //}
+                //else {
+                    if (distToGoal > 1000.0f) { currentStep *= 8.0f; } // e.g. 8.0 * 2 = 32 yard steps
+                    else if (distToGoal > 200.0f) { currentStep *= 4.0f; } // e.g. 4.0 * 4 = 16 yard steps
+                    else if (distToGoal > 50.0f) { currentStep *= 2.0f; } // e.g. 4.0 * 2 = 8 yard steps
+                //}
                 // else: < 50 yards, use baseGridSize (4 yards) for precision
             }
 
@@ -1653,7 +1669,7 @@ inline std::vector<PathNode> SubdivideFlightPath(const std::vector<PathNode>& in
 }
 
 // --- PATH OPTIMIZATION (Removes collinear points) ---
-inline std::vector<PathNode> OptimizeFlightPath(const std::vector<PathNode>& path) {
+inline std::vector<PathNode> OptimizeFlightPath(const std::vector<PathNode>& path, float minDistance = 25.0f) {
     if (path.size() < 3) return path;
 
     std::vector<PathNode> optimized;
@@ -1661,43 +1677,40 @@ inline std::vector<PathNode> OptimizeFlightPath(const std::vector<PathNode>& pat
     optimized.push_back(path[0]);
 
     for (size_t i = 1; i < path.size() - 1; ++i) {
-        const Vector3& prev = optimized.back().pos;
+        const Vector3& prev = optimized.back().pos; // Reference the LAST KEPT point
         const Vector3& curr = path[i].pos;
         const Vector3& next = path[i + 1].pos;
 
-        // Ensure we don't merge different path types (e.g. Air vs Ground)
+        // 1. Mandatory Keep: Type Change (Always keep transitions like Ground -> Air)
         if (optimized.back().type != path[i].type) {
             optimized.push_back(path[i]);
             continue;
         }
 
-        Vector3 v1 = (curr - prev);
-        Vector3 v2 = (next - curr);
-
-        float dist1 = v1.Length();
-        float dist2 = v2.Length();
-
-        // Keep points if they are extremely close (micro-movements) or very far
-        if (dist1 < 0.1f || dist2 < 0.1f) {
-            optimized.push_back(path[i]);
+        // 2. Minimum Distance Check
+        // If this point is too close to the last kept point, skip it to sparse out the path.
+        float distFromLast = prev.Dist3D(curr);
+        if (distFromLast < minDistance) {
             continue;
         }
 
-        v1 = v1 / dist1; // Normalize
-        v2 = v2 / dist2; // Normalize
+        // 3. Collinear Check
+        // Only keep if there is a meaningful turn relative to the last kept point
+        Vector3 v1 = (curr - prev).Normalize();
+        Vector3 v2 = (next - curr).Normalize();
 
-        // Dot Product: 1.0 = Perfectly Straight, 0.0 = 90 degrees
-        // 0.999 is ~2.5 degrees of tolerance. 
-        // If the direction barely changes, the middle point is redundant.
         float dot = v1.Dot(v2);
 
-        if (dot < 0.995f) { // Keep point if there is a meaningful turn/curve
+        if (dot < 0.995f) { // Keep point if there is a turn (~5.7 degrees)
             optimized.push_back(path[i]);
         }
-        // Else: Skip 'curr', effectively connecting 'prev' directly to 'next'
     }
 
-    optimized.push_back(path.back());
+    // Always keep the destination
+    if (optimized.back().pos.Dist3D(path.back().pos) > 0.1f) {
+        optimized.push_back(path.back());
+    }
+
     return optimized;
 }
 
@@ -2256,7 +2269,8 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
         // --- CLEAN UP STRAIGHT LINES ---
         // This removes the excessive waypoint density from Subdivision 
         // where it isn't needed (straight lines), but keeps it for curves/terrain.
-        stitchedPath = OptimizeFlightPath(stitchedPath);
+        // Pass 25.0f to enforce minimum spacing
+        stitchedPath = OptimizeFlightPath(stitchedPath, 25.0f);
 
         return stitchedPath;
     }

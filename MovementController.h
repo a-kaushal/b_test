@@ -22,7 +22,7 @@ private:
     DWORD lastSteerTime = 0;
 
     // --- FLIGHT CONTROL CONSTANTS ---
-    const float ALIGNMENT_DEADZONE = 0.1f;      // ~6 degrees: Considered "Facing Target"
+    const float ALIGNMENT_DEADZONE = 0.03f;      // ~6 degrees: Considered "Facing Target"
     const float BANKING_ANGLE = 0.78f;           // ~45 degrees: Max angle to hold 'W' while turning (Prevents wide drifting)
     const float STEEP_CLIMB_THRESHOLD = 1.4f;    //  degrees: Use Jump/Sit keys for vertical limits
 
@@ -37,8 +37,8 @@ private:
     const float PI = 3.14159265f;
     const float TWO_PI = 6.28318530f;
     
-    const float PIXELS_PER_RADIAN_YAW = 225.036f * 0.5;
-    const float PIXELS_PER_RADIAN_PITCH = 178.772f * 0.5;
+    const float PIXELS_PER_RADIAN_YAW = 225.036f * 0.8;
+    const float PIXELS_PER_RADIAN_PITCH = 178.772f * 0.8;
 
     const float TURN_THRESHOLD = 0.1f;
 
@@ -334,7 +334,7 @@ public:
         return false;
     }
 
-    void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool flyingPath, PlayerInfo& player, bool mountDisable = false) {
+    void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool flyingPath, PlayerInfo& player, bool mountDisable = false, bool escapeWater = false) {
 
         float dx = targetPos.x - currentPos.x;
         float dy = targetPos.y - currentPos.y;
@@ -435,6 +435,11 @@ public:
             inputCommand.Reset();
         }
 
+        if (escapeWater) {
+            kbd.SendKey(KEY_ASCEND, 0, true);
+            return;
+        }
+
         // --- 1. CALCULATE ANGLES ---
         float targetYaw = std::atan2(dy, dx);
         float yawDiff = NormalizeAngle(targetYaw - currentRot);
@@ -474,11 +479,12 @@ public:
         bool isCoasting = (dist3D < COAST_DISTANCE);
 
         // Determine if we need "Elevator Mode" (Space/X) for extreme verticality
-        bool useElevator = (std::abs(targetPitch) > STEEP_CLIMB_THRESHOLD);
+        //bool useElevator = (std::abs(targetPitch) > STEEP_CLIMB_THRESHOLD);
+        bool useElevator = (std::abs(targetPitch) > 1.0f) || (dist2D < 3.0f && std::abs(dz) > 2.0f);
 
         // -- - DAMPING FACTOR FOR CLOSE RANGE-- -
         // If within 5 yards, reduce steering aggression by 50% to prevent overshooting
-        float damping = (pitchDiff < 0.5f) ? 0.5f : 1.0f;
+        float damping = (pitchDiff < 0.75f) ? 0.75f : 1.0f;
 
         if (!isCoasting) {
             // YAW

@@ -22,10 +22,12 @@ private:
 
     // Ability Cooldowns (MOP 5.4 values approx)
     const int CD_CRUSADER_STRIKE = 4500;
+    const int CD_HAMMER_OF_THE_RIGHTEOUS = 4500; // Shares CD with Crusader Strike
     const int CD_JUDGMENT = 6000;
     const int CD_EXORCISM = 15000;
     const int CD_HAMMER_OF_WRATH = 6000;
     const int CD_TEMPLARS_VERDICT = 0; // Spender
+    const int CD_DIVINE_STORM = 0;     // AoE Spender
     const int CD_INQUISITION = 30000; // Buff maintenance
 
     // Helper: Check if spell is ready based on internal timer
@@ -59,6 +61,12 @@ public:
     void UpdateRotation(Vector3 playerPos, Vector3 targetPos, float playerRot, bool targetIsLowHealth = false) {
         // MOP RETRIBUTION PALADIN PRIORITY (5.4.8)
 
+        // Retrieve attacker count from WorldState (accessed via pilot's extern if needed, or assume caller context)
+        // Since we don't pass WorldState here explicitly, we assume g_GameState is globally available
+        // as per other files.
+        int attackerCount = g_GameState->combatState.attackerCount;
+        bool useAoE = (attackerCount >= 3);
+
         // 1. Inquisition (Buff)
         // Maintain if missing or < 3 Holy Power and high duration needed.
         // Simplified: Cast if we have 3+ HP and it hasn't been cast in 30s
@@ -80,9 +88,21 @@ public:
             return;
         }
 
-        // 4. Crusader Strike (Main Generator)
-        if (IsReady("Crusader Strike", CD_CRUSADER_STRIKE)) {
+        // 4. GENERATORS (AoE vs Single)
+        // A. Hammer of the Righteous (AoE Generator)
+        // Shares Cooldown with Crusader Strike
+        if (useAoE && IsReady("Hammer of the Righteous", CD_HAMMER_OF_THE_RIGHTEOUS)) {
+            Cast(L"Hammer of the Righteous", 1);
+            // Manually set shared cooldown
+            lastCastTime["Crusader Strike"] = std::chrono::steady_clock::now();
+            return;
+        }
+
+        // B. Crusader Strike (Main Generator)
+        if (!useAoE && IsReady("Crusader Strike", CD_CRUSADER_STRIKE)) {
             Cast(L"Crusader Strike", 1);
+            // Manually set shared cooldown
+            lastCastTime["Hammer of the Righteous"] = std::chrono::steady_clock::now();
             return;
         }
 
@@ -98,9 +118,14 @@ public:
             return;
         }
 
-        // 7. Templar's Verdict (3-4 HP dump if nothing else ready)
+        // 7. FINISHERS (3-4 HP dump if nothing else ready)
         if (estimatedHolyPower >= 3) {
-            Cast(L"Templar's Verdict", -3);
+            if (useAoE) {
+                Cast(L"Divine Storm", -3);
+            }
+            else {
+                Cast(L"Templar's Verdict", -3);
+            }
             return;
         }
 

@@ -65,7 +65,7 @@ void UpdateGatherTarget(WorldState& ws) {
                 ws.gatherState.nodeActive = false;
             }
             return;
-        }        
+        }
 
         float d = 9999.0f;
         if (auto object = std::dynamic_pointer_cast<ObjectInfo>(entity.info)) {

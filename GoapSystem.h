@@ -336,7 +336,7 @@ public:
         if (path.empty()) {
             return true; // Treat as "Arrived" to prevent crash
         }
-        if (index >= path.size() || path.end()->pos.Dist3D(player.position) < finalDist) {
+        if ((index >= path.size()) || (path.back().pos.Dist3D(player.position) < finalDist) || (targetPos.Dist3D(player.position) < finalDist)) {
             pilot.Stop();
             // Dismount Logic
             if (player.flyingMounted || player.groundMounted || player.inWater) {
@@ -357,7 +357,7 @@ public:
                     if (timer == 0) { timer = GetTickCount(); keyboard.SendKey('X', 0, true); }
                     return false;
                 }
-                if (player.position.Dist3D(path[index - 1].pos) < 10.0f) {
+                if (path.back().pos.Dist3D(player.position) < finalDist || targetPos.Dist3D(player.position) < finalDist) {
                     if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"))) {
                         inputCommand.Reset();
                         return true;
@@ -1447,6 +1447,7 @@ private:
     Vector3 ascentTarget;
     bool ascentTargetSet = false;
     bool checkedDirect = false;
+    bool escapeWater = false;
     DWORD mountTimer = 0;
     SimpleKeyboardClient* keyboard = nullptr;
     ConsoleInput* consoleInput = nullptr;
@@ -1492,6 +1493,17 @@ public:
         ws.globalState.activePath = ws.waypointReturnState.path;
         ws.globalState.activeIndex = ws.waypointReturnState.index;
         DWORD now = GetTickCount();
+
+        if (ws.player.inWater) {
+            if (!escapeWater) {
+                escapeWater = true;
+                pilot.SteerTowards(ws.player.position, ws.player.rotation, ws.player.position, ws.waypointReturnState.flyingPath, ws.player, escapeWater = true);
+            }
+        }
+        else if (escapeWater) {
+            escapeWater = false;
+            pilot.Stop();
+        }
 
         switch (currentPhase) {
         case PHASE_CHECK_DIRECT:
@@ -2012,6 +2024,15 @@ public:
         if (dist < ACCEPTANCE_RADIUS) {
             ws.pathFollowState.index++; // Advance state
             ws.pathFollowState.pathIndexChange = true;
+            if (g_GameState->pathFollowState.presetIndex < g_GameState->pathFollowState.presetPath.size() - 1) {
+
+                // Check if the node we just reached corresponds to the NEXT preset waypoint
+                Vector3 nextPreset = g_GameState->pathFollowState.presetPath[g_GameState->pathFollowState.presetIndex + 1];
+                if (targetNode.pos.Dist3D(nextPreset) < 10.0f) {
+                    g_GameState->pathFollowState.presetIndex++;
+                    //g_LogFile << "[Profile] Advancing Preset Index to " << g_GameState->pathFollowState.presetIndex << std::endl;
+                }
+            }
             std::cout << "[GOAP] Waypoint " << ws.pathFollowState.index << " Reached." << std::endl;
             return false; // Not done with action, just sub-step
         }
@@ -2084,6 +2105,7 @@ public:
 
         if (bestAction) {
             if (bestAction != currentAction) {
+                g_LogFile << bestAction->GetName() << std::endl;
                 if (bestAction->GetName() == "Follow Path") {
                     std::vector<Vector3> empty = {};
                     if (state.pathFollowState.path.size() > 0) {
@@ -2109,7 +2131,7 @@ public:
                     state.waypointReturnState.savedPath = state.gatherState.path;
                     state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.gatherState.path, state.player.position);
                 }*/
-                if ((state.waypointReturnState.savedPath.size() > 0) &&
+                if ((state.waypointReturnState.savedPath.size() > 0) && ((bestAction->GetName() == "Follow Path") || (bestAction->GetName() == "Repair Equipment")) &&
                     (state.player.position.Dist3D(state.waypointReturnState.savedPath[state.waypointReturnState.savedIndex].pos) > 10.0f)) {
                     state.waypointReturnState.hasTarget = true;
                     for (auto action : availableActions) {

@@ -10,40 +10,52 @@
 #include "Entity.h"
 
 bool UnderAttackCheck() {
-    bool targetFound = false;
-    std::vector<Vector3> enemyIndices = {};
-	if ((g_GameState->player.targetGuidLow != 0) && (g_GameState->player.targetGuidHigh != 0)) {
-        int count = 0;
-        bool npcCombat = 0;
-        for (auto& entity : g_GameState->entities) {
-            // Use std::dynamic_pointer_cast for shared_ptr
-            if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
-                if (npc->inCombat && (npc->targetGuidLow == g_GameState->player.playerGuidLow) && (npc->targetGuidHigh == g_GameState->player.playerGuidHigh) && (!g_GameState->player.isFlying)) {
-                    if (npc->health > 0) {
-                        g_GameState->combatState.hasTarget = true;
-                        g_GameState->combatState.underAttack = true;
-                        g_GameState->combatState.enemyPosition = npc->position;
-                        g_GameState->combatState.targetGuidLow = entity.guidLow;
-                        g_GameState->combatState.targetGuidHigh = entity.guidHigh;
-                        g_GameState->combatState.entityIndex = count;
-                        return true;
-                    }
-                    else {
-                        g_GameState->combatState.reset = true;
-                        targetFound = true;
+    int attackerCount = 0;
+    int closestIndex = -1;
+    float closestDist = 99999.0f;
+    int index = 0;
+
+    // Scan ALL entities to find everyone attacking us
+    for (auto& entity : g_GameState->entities) {
+        if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
+            // Check if this NPC is attacking the player
+            if (npc->inCombat && (npc->targetGuidLow == g_GameState->player.playerGuidLow) &&
+                (npc->targetGuidHigh == g_GameState->player.playerGuidHigh) &&
+                (!g_GameState->player.isFlying)) {
+
+                if (npc->health > 0) {
+                    attackerCount++;
+
+                    // Check if this is the closest attacker found so far
+                    float dist = g_GameState->player.position.Dist3D(npc->position);
+                    if (dist < closestDist) {
+                        closestDist = dist;
+                        closestIndex = index;
                     }
                 }
             }
-			count++;
         }
-	}
-	else {
-        g_GameState->combatState.underAttack = false;
-		return false;
-	}
-    if (!targetFound) {
-        g_GameState->combatState.reset = true;
+        index++;
     }
+    // Update the total count in the state
+    g_GameState->combatState.attackerCount = attackerCount;
+
+    // If we found at least one attacker, target the closest one
+    if (closestIndex != -1) {
+        const auto& entity = g_GameState->entities[closestIndex];
+        if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(entity.info)) {
+            g_GameState->combatState.hasTarget = true;
+            g_GameState->combatState.underAttack = true;
+            g_GameState->combatState.enemyPosition = npc->position;
+            g_GameState->combatState.targetGuidLow = entity.guidLow;
+            g_GameState->combatState.targetGuidHigh = entity.guidHigh;
+            g_GameState->combatState.entityIndex = closestIndex;
+            return true;
+        }
+    }
+
+    // No attackers found
+    g_GameState->combatState.underAttack = false;
     return false;
 }
 

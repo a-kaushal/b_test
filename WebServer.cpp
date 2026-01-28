@@ -74,8 +74,6 @@ std::string WebServer::ReadLogFileTail(int charsToRead) {
     return content;
 }
 
-// [FIX] Now a member function: WebServer::GenerateJSONState
-// This fixes the "startTime is inaccessible" error.
 std::string WebServer::GenerateJSONState() {
     if (!g_GameState) return "{}";
 
@@ -99,11 +97,19 @@ std::string WebServer::GenerateJSONState() {
     ss << "\"uptime\": \"" << (elapsed / 3600) << "h " << ((elapsed % 3600) / 60) << "m\",";
 
     // --- 2. PLAYER ---
+    auto& p = g_GameState->player;
     ss << "\"player\": {";
-    ss << "\"x\": " << g_GameState->player.position.x << ",";
-    ss << "\"y\": " << g_GameState->player.position.y << ",";
-    ss << "\"z\": " << g_GameState->player.position.z << ",";
-    ss << "\"rot\": " << g_GameState->player.rotation;
+    ss << "\"addr\": \"0x" << std::hex << p.playerPtr << std::dec << "\",";
+    ss << "\"x\":" << p.position.x << ",\"y\":" << p.position.y << ",\"z\":" << p.position.z << ",";
+    ss << "\"hp\":" << p.health << ",\"maxHp\":" << p.maxHealth << ",";
+    ss << "\"isDead\":" << (p.isDead ? "true" : "false") << ",";
+    ss << "\"isGhost\":" << (p.isGhost ? "true" : "false") << ",";
+    ss << "\"inCombat\":" << (p.inCombatGuidLow > 0 ? "true" : "false") << ",";
+    ss << "\"isMounted\":" << (p.isMounted ? "true" : "false") << ",";
+    ss << "\"isFlying\":" << (p.isFlying ? "true" : "false") << ",";
+    ss << "\"isIndoor\":" << (p.isIndoor ? "true" : "false") << ",";
+    ss << "\"onGround\":" << (p.onGround ? "true" : "false") << ",";
+    ss << "\"target\": \"0x" << std::hex << p.targetGuidLow << std::dec << "\"";
     ss << "},";
 
     // --- 3. PATH ---
@@ -119,54 +125,31 @@ std::string WebServer::GenerateJSONState() {
     ss << "\"entities\": [";
     bool first = true;
     for (const auto& ent : g_GameState->entities) {
-        // Skip irrelevant types (3=Item, 7=Container)
-        if (ent.type != 3 && ent.type != 7) {
+        std::string typeStr = "Unknown";
+        std::stringstream extra;
 
-            std::string typeStr = "Unknown";
-            std::string nameStr = "Unknown";
-            float x = 0, y = 0, z = 0, hp = 0, maxHp = 0, dist = 0;
-            int id = 0;
-            bool include = false;
-
-            if (ent.type == 33 && ent.info) { // Enemy
-                if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(ent.info)) {
-                    typeStr = "Enemy";
-                    nameStr = npc->name;
-                    x = npc->position.x; y = npc->position.y; z = npc->position.z;
-                    hp = npc->health; maxHp = npc->maxHealth;
-                    dist = npc->distance;
-                    id = npc->id;
-                    include = true;
-                }
-            }
-            else if (ent.type == 257 && ent.info) { // Object
-                if (auto obj = std::dynamic_pointer_cast<ObjectInfo>(ent.info)) {
-                    typeStr = "Object";
-                    nameStr = obj->name;
-                    x = obj->position.x; y = obj->position.y; z = obj->position.z;
-                    dist = obj->distance;
-                    id = obj->id;
-                    include = true;
-                }
-            }
-            else if (ent.type == 225) { // Player
-                typeStr = "Player";
-                // include = true; // Optional: include other players
-            }
-
-            if (include) {
+        if (ent.type == 33 && ent.info) { // Enemy
+            if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(ent.info)) {
+                typeStr = "Enemy";
+                extra << ",\"hp\":" << npc->health << ",\"maxHp\":" << npc->maxHealth
+                    << ",\"level\":" << npc->level << ",\"reaction\":" << npc->reaction
+                    << ",\"target\":" << npc->targetGuidLow;
+                // Add coordinates and basic info
                 if (!first) ss << ",";
-                ss << "{"
-                    << "\"type\":\"" << typeStr << "\","
-                    << "\"name\":\"" << EscapeJSON(nameStr) << "\","
-                    << "\"id\":" << id << ","
-                    << "\"hp\":" << hp << ","
-                    << "\"maxHp\":" << maxHp << ","
-                    << "\"dist\":" << dist << ","
-                    << "\"x\":" << x << ","
-                    << "\"y\":" << y << ","
-                    << "\"z\":" << z
-                    << "}";
+                ss << "{\"type\":\"" << typeStr << "\",\"name\":\"" << EscapeJSON(npc->name) << "\","
+                    << "\"id\":" << npc->id << ",\"dist\":" << npc->distance
+                    << ",\"x\":" << npc->position.x << ",\"y\":" << npc->position.y << extra.str() << "}";
+                first = false;
+            }
+        }
+        else if (ent.type == 257 && ent.info) { // Object
+            if (auto obj = std::dynamic_pointer_cast<ObjectInfo>(ent.info)) {
+                typeStr = "Object";
+                extra << ",\"nodeActive\":" << obj->nodeActive << ",\"skill\":" << obj->skillLevel;
+                if (!first) ss << ",";
+                ss << "{\"type\":\"" << typeStr << "\",\"name\":\"" << EscapeJSON(obj->name) << "\","
+                    << "\"id\":" << obj->id << ",\"dist\":" << obj->distance
+                    << ",\"x\":" << obj->position.x << ",\"y\":" << obj->position.y << extra.str() << "}";
                 first = false;
             }
         }
@@ -463,9 +446,18 @@ std::string WebServer::GetHTML() {
         </div>
 
         <div id="entities" class="view">
+            <div style="padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--border);">
+                <label>Filter Type: </label>
+                <select id="typeFilter" onchange="updateTable()" style="background:#333; color:white; border:1px solid #555;">
+                    <option value="All">All Entities</option>
+                    <option value="Enemy">Enemies</option>
+                    <option value="Object">Objects</option>
+                    <option value="Player">Player Info</option>
+                </select>
+            </div>
             <div id="table-wrapper">
                 <table id="entTable">
-                    <thead><tr><th>Type</th><th>Name</th><th>ID</th><th>HP</th><th>MaxHP</th><th>Dist</th><th>Position</th></tr></thead>
+                    <thead><tr id="tableHeader"></tr></thead>
                     <tbody></tbody>
                 </table>
             </div>
@@ -654,25 +646,57 @@ std::string WebServer::GetHTML() {
             ctx.restore();
         }
 
-        // --- TABLE UPDATE ---
         function updateTable() {
             const tbody = document.querySelector('#entTable tbody');
+            const thead = document.querySelector('#tableHeader');
+            const filter = document.getElementById('typeFilter').value;
             tbody.innerHTML = '';
-            if(!gameState.entities) return;
+            
+            // 1. Handle "Player" specific view
+            if (filter === 'Player') {
+                thead.innerHTML = `<th>Property</th><th>Value</th>`;
+                const p = gameState.player;
+                if (!p) return;
+                const rows = [
+                    ["Position", `${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`],
+                    ["Health", `${p.hp} / ${p.maxHp}`],
+                    ["Level", p.level],
+                    ["Status", p.isDead ? "DEAD" : (p.inCombat ? "In Combat" : "Idle")]
+                ];
+                rows.forEach(r => {
+                    tbody.innerHTML += `<tr><td><b>${r[0]}</b></td><td>${r[1]}</td></tr>`;
+                });
+                return;
+            }
 
-            // Sort by distance
-            const sorted = [...gameState.entities].sort((a,b) => a.dist - b.dist);
+            // 2. Handle Entity List
+            thead.innerHTML = `<th>Type</th><th>Name</th><th>Dist</th><th>Health/State</th><th>Details</th>`;
+            if (!gameState.entities) return;
 
-            sorted.forEach(ent => {
+            const filtered = gameState.entities
+                .filter(e => filter === 'All' || e.type === filter)
+                .sort((a, b) => a.dist - b.dist);
+
+            filtered.forEach(ent => {
+                let healthInfo = "N/A";
+                let detailInfo = `ID: ${ent.id}`;
+
+                if (ent.type === 'Enemy') {
+                    healthInfo = `${ent.hp} / ${ent.maxHp} (Lvl ${ent.level})`;
+                    const reactions = ["Hostile", "Neutral", "Friendly"];
+                    detailInfo += ` | ${reactions[ent.reaction] || 'Unknown'}`;
+                } else if (ent.type === 'Object') {
+                    healthInfo = ent.nodeActive ? "Active" : "Depleted";
+                    detailInfo += ` | Req Skill: ${ent.skill}`;
+                }
+
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td style="color:${ent.type==='Enemy'?'#ff5555':ent.type==='Object'?'#f1c40f':'#ccc'}">${ent.type}</td>
+                    <td style="color:${ent.type==='Enemy'?'#ff5555':'#f1c40f'}">${ent.type}</td>
                     <td>${ent.name}</td>
-                    <td>${ent.id}</td>
-                    <td>${ent.hp}</td>
-                    <td>${ent.maxHp}</td>
                     <td>${ent.dist.toFixed(1)}</td>
-                    <td>${ent.x.toFixed(0)}, ${ent.y.toFixed(0)}, ${ent.z.toFixed(0)}</td>
+                    <td>${healthInfo}</td>
+                    <td>${detailInfo}</td>
                 `;
                 tbody.appendChild(tr);
             });
