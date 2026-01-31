@@ -49,12 +49,14 @@ inline ULONG_PTR baseAddress;
 #define ENTITY_POSITION_Z_OFFSET 0x138
 #define ENTITY_ROTATION_OFFSET 0x140
 #define ENTITY_VERTICAL_ROTATION_OFFSET 0x144
-#define ENTITY_ENEMY_IN_COMBAT_GUID_LOW 0x670 // GUID of enemy target
+#define ENTITY_ENEMY_IN_COMBAT_GUID_LOW 0x670 // GUID of enemy target (Has a value if enemy is performing a melee attack only. 0 if enemy is not close to player and doing a ranged attack)
 #define ENTITY_ENEMY_IN_COMBAT_GUID_HIGH 0x678 // Attacking Enemy
+#define ENTITY_ENEMY_RANGED_COMBAT_GUID_LOW 0x11A80 // GUID of ranged enemy attack target (Has a value if enemy is performing a ranged or melee attack)
+#define ENTITY_ENEMY_RANGED_COMBAT_GUID_HIGH 0x11A88
 #define ENTITY_ENEMY_ATTACKING 0x11AB0
 #define ENTITY_LEVEL 0x11C20
 #define ENTITY_ENEMY_HEALTH 0x119F8
-#define ENTITY_ENEMY_MAX_HEALTH 0x11B20
+#define ENTITY_ENEMY_MAX_HEALTH 0x11B38
 
 #define OBJECT_POSITION_X_OFFSET 0xF0
 #define OBJECT_POSITION_Y_OFFSET 0xF4
@@ -65,7 +67,7 @@ inline ULONG_PTR baseAddress;
 //#define ENTITY_PLAYER_MOUNT_STATE 0xA40
 #define ENTITY_PLAYER_MOUNT_STATE 0x8D0
 #define ENTITY_PLAYER_HEALTH 0x119F8
-#define ENTITY_PLAYER_MAX_HEALTH 0x11B20
+#define ENTITY_PLAYER_MAX_HEALTH 0x11B38
 #define ENTITY_PLAYER_LEVEL 0x11C20
 #define ENTITY_PLAYER_EQUIPEMENT_OFFSET 0x14520 // Start of equipment array
 #define ENTITY_PLAYER_BAG_OFFSET 0x14700 // Offset to equipped bags guid

@@ -64,6 +64,20 @@ void UpdateGatherTarget(WorldState& ws) {
                 //ws.gatherState.hasNode = false;
                 ws.gatherState.nodeActive = false;
             }
+
+            for (int j = 0; j < ws.entities.size(); ++j) {
+                if (auto otherPlayer = std::dynamic_pointer_cast<OtherPlayerInfo>(ws.entities[j].info)) {
+                    if ((ws.gatherState.position.Dist3D(otherPlayer->position) < 10.0f) && (ws.gatherState.position.Dist3D(otherPlayer->position) < ws.gatherState.position.Dist3D(ws.player.position))) {
+                        ws.gatherState.blacklistNodesGuidLow.push_back(ws.gatherState.guidLow);
+                        ws.gatherState.blacklistNodesGuidHigh.push_back(ws.gatherState.guidHigh);
+                        ws.gatherState.blacklistTime.push_back(GetTickCount());
+                        g_LogFile << "Player detected near node, blacklisting for " << BLACKLIST_TIMEOUT / 1000 << " seconds" << std::endl;
+                        ws.gatherState.nodeActive = false;
+                        break;
+                    }
+                }
+            }
+
             return;
         }
 
@@ -108,7 +122,7 @@ void UpdateGatherTarget(WorldState& ws) {
                 }
                 // Check if player is close to node
                 for (int j = 0; j < ws.entities.size(); ++j) {
-                    if (auto otherPlayer = std::dynamic_pointer_cast<OtherPlayerInfo>(entity.info)) {
+                    if (auto otherPlayer = std::dynamic_pointer_cast<OtherPlayerInfo>(ws.entities[j].info)) {
                         if (object->position.Dist3D(otherPlayer->position) < 10.0f) {
                             ws.gatherState.blacklistNodesGuidLow.push_back(ws.gatherState.guidLow);
                             ws.gatherState.blacklistNodesGuidHigh.push_back(ws.gatherState.guidHigh);

@@ -56,6 +56,8 @@ bool UnderAttackCheck() {
 
     // No attackers found
     g_GameState->combatState.underAttack = false;
+    g_GameState->combatState.inCombat = false;
+    g_GameState->combatState.hasTarget = false;
     return false;
 }
 

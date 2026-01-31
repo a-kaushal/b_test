@@ -92,7 +92,6 @@ std::string WebServer::GenerateJSONState() {
     ss << "\"profile\": \"" << EscapeJSON(profileName) << "\",";
 
     unsigned long long now = GetTickCount64();
-    // [FIX] Accessing private 'startTime' is allowed here now
     unsigned long long elapsed = (now - startTime) / 1000;
     ss << "\"uptime\": \"" << (elapsed / 3600) << "h " << ((elapsed % 3600) / 60) << "m\",";
 
@@ -102,14 +101,22 @@ std::string WebServer::GenerateJSONState() {
     ss << "\"addr\": \"0x" << std::hex << p.playerPtr << std::dec << "\",";
     ss << "\"x\":" << p.position.x << ",\"y\":" << p.position.y << ",\"z\":" << p.position.z << ",";
     ss << "\"hp\":" << p.health << ",\"maxHp\":" << p.maxHealth << ",";
+    ss << "\"level\":" << p.level << ",";
+    ss << "\"mapId\":" << p.mapId << ",";
+    ss << "\"bagFree\":" << p.bagFreeSlots << ",";
+    ss << "\"needRepair\":" << (p.needRepair ? "true" : "false") << ",";
+    ss << "\"rot\":" << p.rotation << ",";
     ss << "\"isDead\":" << (p.isDead ? "true" : "false") << ",";
     ss << "\"isGhost\":" << (p.isGhost ? "true" : "false") << ",";
     ss << "\"inCombat\":" << (p.inCombatGuidLow > 0 ? "true" : "false") << ",";
     ss << "\"isMounted\":" << (p.isMounted ? "true" : "false") << ",";
+    ss << "\"groundMounted\":" << (p.groundMounted ? "true" : "false") << ",";
+    ss << "\"flyingMounted\":" << (p.flyingMounted ? "true" : "false") << ",";
     ss << "\"isFlying\":" << (p.isFlying ? "true" : "false") << ",";
     ss << "\"isIndoor\":" << (p.isIndoor ? "true" : "false") << ",";
     ss << "\"onGround\":" << (p.onGround ? "true" : "false") << ",";
-    ss << "\"target\": \"0x" << std::hex << p.targetGuidLow << std::dec << "\"";
+    ss << "\"target\": \"0x" << std::hex << p.inCombatGuidLow << std::dec << "\",";
+    ss << "\"selected\": \"0x" << std::hex << p.targetGuidLow << std::dec << "\"";
     ss << "},";
 
     // --- 3. PATH ---
@@ -133,12 +140,14 @@ std::string WebServer::GenerateJSONState() {
                 typeStr = "Enemy";
                 extra << ",\"hp\":" << npc->health << ",\"maxHp\":" << npc->maxHealth
                     << ",\"level\":" << npc->level << ",\"reaction\":" << npc->reaction
+                    << ",\"inCombat\":" << (npc->inCombat ? "true" : "false")
+                    << ",\"targetGuid\":\"0x" << std::hex << npc->targetGuidLow << std::dec << "\""
                     << ",\"target\":" << npc->targetGuidLow;
-                // Add coordinates and basic info
+
                 if (!first) ss << ",";
                 ss << "{\"type\":\"" << typeStr << "\",\"name\":\"" << EscapeJSON(npc->name) << "\","
                     << "\"id\":" << npc->id << ",\"dist\":" << npc->distance
-                    << ",\"x\":" << npc->position.x << ",\"y\":" << npc->position.y << extra.str() << "}";
+                    << ",\"x\":" << npc->position.x << ",\"y\":" << npc->position.y << ",\"z\":" << npc->position.z << extra.str() << "}";
                 first = false;
             }
         }
@@ -149,7 +158,7 @@ std::string WebServer::GenerateJSONState() {
                 if (!first) ss << ",";
                 ss << "{\"type\":\"" << typeStr << "\",\"name\":\"" << EscapeJSON(obj->name) << "\","
                     << "\"id\":" << obj->id << ",\"dist\":" << obj->distance
-                    << ",\"x\":" << obj->position.x << ",\"y\":" << obj->position.y << extra.str() << "}";
+                    << ",\"x\":" << obj->position.x << ",\"y\":" << obj->position.y << ",\"z\":" << obj->position.z << extra.str() << "}";
                 first = false;
             }
         }
@@ -347,7 +356,10 @@ void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
 
 // THIS IS THE NEW HTML DASHBOARD
 std::string WebServer::GetHTML() {
-    return R"HTML(
+    std::stringstream ss;
+
+    // PART 1: HEADER & STYLES
+    ss << R"HTML(
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -396,16 +408,22 @@ std::string WebServer::GetHTML() {
         #table-wrapper { height: 100%; overflow: auto; padding: 20px; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         th { text-align: left; background: var(--panel); padding: 8px; position: sticky; top: 0; }
-        td { border-bottom: 1px solid var(--border); padding: 6px; }
+        /* Copyable Cells */
+        td { border-bottom: 1px solid var(--border); padding: 6px; cursor: pointer; transition: background 0.1s; }
+        td:hover { background: #3e3e42; }
         tr:hover { background: #2a2d2e; }
 
         /* FOOTER STATUS */
         .status-bar { background: var(--accent); color: white; padding: 4px 15px; font-size: 12px; display: flex; gap: 20px; }
     </style>
 </head>
+)HTML";
+
+    // PART 2: BODY HTML
+    ss << R"HTML(
 <body>
     <header>
-        <div class="title">Shadow Bot</div>
+        <div class="title">Shadow Bot Dashboard</div>
         <div class="controls">
             <button class="btn-file">
                 Select Profile...
@@ -439,8 +457,10 @@ std::string WebServer::GetHTML() {
                 <div class="legend">
                     <div><span class="dot" style="background:cyan"></span> Player</div>
                     <div><span class="dot" style="background:lime"></span> Path</div>
-                    <div><span class="dot" style="background:red"></span> Enemy</div>
-                    <div><span class="dot" style="background:yellow"></span> Object</div>
+                    <div><span class="dot" style="background:#ff0000"></span> Enemy NPC</div>
+                    <div><span class="dot" style="background:#ffff00"></span> Neutral NPC</div>
+                    <div><span class="dot" style="background:#00ff00"></span> Friendly NPC</div>
+                    <div><span class="dot" style="background:#d02090"></span> Object</div>
                 </div>
             </div>
         </div>
@@ -469,7 +489,10 @@ std::string WebServer::GetHTML() {
         <span id="stat-profile">Profile: None</span>
         <span id="stat-uptime">Uptime: 0m</span>
     </div>
+)HTML";
 
+    // PART 3: SCRIPT
+    ss << R"HTML(
     <script>
         // --- GLOBAL STATE ---
         let gameState = {};
@@ -533,13 +556,33 @@ std::string WebServer::GetHTML() {
             reader.readAsText(file);
         }
 
+        // --- CLIPBOARD HELPER ---
+        function copyToClipboard(text, el) {
+            // Robust fallback for non-secure contexts (HTTP)
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.position = "fixed";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                // Visual feedback
+                const prev = el.style.background;
+                el.style.background = '#666';
+                setTimeout(() => el.style.background = "", 150);
+            } catch (err) {
+                console.error('Copy failed', err);
+            }
+            document.body.removeChild(textArea);
+        }
+
         // --- UI LOGIC ---
         function switchTab(name) {
             document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
             document.getElementById(name).classList.add('active');
             event.target.classList.add('active');
-            
             if(name === 'map') resizeCanvas();
         }
 
@@ -554,27 +597,24 @@ std::string WebServer::GetHTML() {
         // --- DATA POLLING ---
         async function poll() {
             try {
-                // 1. Get Logs (Only if tab active)
+                // 1. Logs
                 if(document.getElementById('console').classList.contains('active')) {
                     const res = await fetch('/api/logs');
                     const text = await res.text();
                     const container = document.getElementById('log-container');
-                    // Simple scroll-to-bottom logic
                     const isAtBottom = container.scrollHeight - container.scrollTop === container.clientHeight;
                     container.innerText = text;
                     if(isAtBottom) container.scrollTop = container.scrollHeight;
                 }
 
-                // 2. Get State (Always needed for status bar)
+                // 2. State
                 const res = await fetch('/api/state');
                 gameState = await res.json();
 
-                // Update Status Bar
                 document.getElementById('stat-running').innerText = "Status: " + (gameState.running ? "RUNNING" : "STOPPED");
                 document.getElementById('stat-profile').innerText = "Profile: " + (gameState.profile || "None");
                 document.getElementById('stat-uptime').innerText = "Uptime: " + gameState.uptime;
 
-                // Update Active Views
                 if(document.getElementById('map').classList.contains('active')) drawMap();
                 if(document.getElementById('entities').classList.contains('active')) updateTable();
 
@@ -586,17 +626,16 @@ std::string WebServer::GetHTML() {
             if(!gameState.player) return;
             const px = gameState.player.x;
             const py = gameState.player.y;
-            const scale = 4.0; // Zoom
+            const scale = 4.0;
             const cx = canvas.width / 2;
             const cy = canvas.height / 2;
 
-            // Clear
             ctx.fillStyle = "#000";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             const toScreen = (x, y) => ({
                 x: cx + (x - px) * scale,
-                y: cy - (y - py) * scale // Flip Y
+                y: cy - (y - py) * scale
             });
 
             // Path
@@ -615,15 +654,20 @@ std::string WebServer::GetHTML() {
             if(gameState.entities) {
                 gameState.entities.forEach(ent => {
                     const s = toScreen(ent.x, ent.y);
-                    // Clip offscreen
                     if(s.x < -10 || s.x > canvas.width+10 || s.y < -10 || s.y > canvas.height+10) return;
 
                     ctx.beginPath();
                     ctx.arc(s.x, s.y, 4, 0, Math.PI*2);
-                    if(ent.type === 'Enemy') ctx.fillStyle = 'red';
-                    else if(ent.type === 'Object') ctx.fillStyle = 'yellow';
+                    
+                    if(ent.type === 'Enemy') {
+                        if (ent.reaction === 2) ctx.fillStyle = '#00ff00';      // Friendly
+                        else if (ent.reaction === 1) ctx.fillStyle = '#ffff00'; // Neutral
+                        else ctx.fillStyle = '#ff0000';                         // Hostile
+                    }
+                    else if(ent.type === 'Object') ctx.fillStyle = '#d02090';   // Purple
                     else if(ent.type === 'Player') ctx.fillStyle = 'blue';
                     else ctx.fillStyle = 'gray';
+                    
                     ctx.fill();
                 });
             }
@@ -632,10 +676,7 @@ std::string WebServer::GetHTML() {
             const rot = gameState.player.rot; 
             ctx.save();
             ctx.translate(cx, cy);
-            // WoW rotation is typically radians. Rotate canvas to match.
-            // You might need to adjust this (-rot, +rot, +PI/2) depending on game coord system
             ctx.rotate(rot + Math.PI); 
-            
             ctx.beginPath();
             ctx.moveTo(0, -8);
             ctx.lineTo(-6, 8);
@@ -652,25 +693,33 @@ std::string WebServer::GetHTML() {
             const filter = document.getElementById('typeFilter').value;
             tbody.innerHTML = '';
             
-            // 1. Handle "Player" specific view
+            // 1. Player Table
             if (filter === 'Player') {
                 thead.innerHTML = `<th>Property</th><th>Value</th>`;
                 const p = gameState.player;
                 if (!p) return;
                 const rows = [
                     ["Position", `${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`],
+                    ["Rotation", p.rot.toFixed(3) + " rad"],
                     ["Health", `${p.hp} / ${p.maxHp}`],
                     ["Level", p.level],
-                    ["Status", p.isDead ? "DEAD" : (p.inCombat ? "In Combat" : "Idle")]
+                    ["Map ID", p.mapId],
+                    ["Free Bag Slots", p.bagFree],
+                    ["Need Repair", p.needRepair ? "YES" : "No"],
+                    ["Status", p.isDead ? "DEAD" : (p.inCombat ? "In Combat" : "Idle")],
+                    ["Flags", `Mounted: ${p.isMounted}, Ground Mounted: ${p.groundMounted}, Flying Mounted: ${p.flyingMounted}, Flying: ${p.isFlying}, Indoor: ${p.isIndoor}`],
+                    ["Target GUID", p.target],
+                    ["Selected GUID", p.selected]
                 ];
                 rows.forEach(r => {
-                    tbody.innerHTML += `<tr><td><b>${r[0]}</b></td><td>${r[1]}</td></tr>`;
+                    const color = (r[0] === "Need Repair" && p.needRepair) ? "color:red;font-weight:bold" : "";
+                    tbody.innerHTML += `<tr><td><b>${r[0]}</b></td><td style="${color}" onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${r[1]}</td></tr>`;
                 });
                 return;
             }
 
-            // 2. Handle Entity List
-            thead.innerHTML = `<th>Type</th><th>Name</th><th>Dist</th><th>Health/State</th><th>Details</th>`;
+            // 2. Entity Table
+            thead.innerHTML = `<th>Type</th><th>Name</th><th>Dist</th><th>Pos (X,Y,Z)</th><th>Health</th><th>Combat?</th><th>Target GUID</th>`;
             if (!gameState.entities) return;
 
             const filtered = gameState.entities
@@ -679,34 +728,47 @@ std::string WebServer::GetHTML() {
 
             filtered.forEach(ent => {
                 let healthInfo = "N/A";
-                let detailInfo = `ID: ${ent.id}`;
+                let combatInfo = "-";
+                let targetInfo = "-";
+                let color = '#ccc';
+                let typeDisplay = ent.type;
 
                 if (ent.type === 'Enemy') {
                     healthInfo = `${ent.hp} / ${ent.maxHp} (Lvl ${ent.level})`;
-                    const reactions = ["Hostile", "Neutral", "Friendly"];
-                    detailInfo += ` | ${reactions[ent.reaction] || 'Unknown'}`;
-                } else if (ent.type === 'Object') {
+                    combatInfo = ent.inCombat ? "<span style='color:red;font-weight:bold'>YES</span>" : "No";
+                    targetInfo = ent.targetGuid || "None";
+
+                    if (ent.reaction === 2) { color = '#00ff00'; typeDisplay = "Friendly NPC"; }
+                    else if (ent.reaction === 1) { color = '#ffff00'; typeDisplay = "Neutral NPC"; }
+                    else { color = '#ff0000'; typeDisplay = "Enemy NPC"; }
+                } 
+                else if (ent.type === 'Object') {
                     healthInfo = ent.nodeActive ? "Active" : "Depleted";
-                    detailInfo += ` | Req Skill: ${ent.skill}`;
+                    combatInfo = "-";
+                    targetInfo = "-";
+                    color = '#d02090'; // Purple
                 }
 
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td style="color:${ent.type==='Enemy'?'#ff5555':'#f1c40f'}">${ent.type}</td>
-                    <td>${ent.name}</td>
-                    <td>${ent.dist.toFixed(1)}</td>
-                    <td>${healthInfo}</td>
-                    <td>${detailInfo}</td>
+                    <td style="color:${color}; font-weight:bold;" onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${typeDisplay}</td>
+                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${ent.name} (ID: ${ent.id})</td>
+                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${ent.dist.toFixed(1)}</td>
+                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${ent.x.toFixed(1)}, ${ent.y.toFixed(1)}, ${ent.z.toFixed(1)}</td>
+                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${healthInfo}</td>
+                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${combatInfo}</td>
+                    <td style="font-family:monospace; font-size:11px;" onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${targetInfo}</td>
                 `;
                 tbody.appendChild(tr);
             });
         }
 
-        // Start Loop
         setInterval(poll, 1000);
         poll();
     </script>
 </body>
 </html>
     )HTML";
+
+    return ss.str();
 }

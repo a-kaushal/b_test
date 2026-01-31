@@ -127,7 +127,7 @@ public:
                 if (analyzer.ReadPointer(pid, tableAddress + 0x20, arrayPtr)) {
 
                     // Read the first 3 values (Double precision)
-                    double val, val1, val2, val3, val4, val5, val6, val7, val8, val9, val10, val11, val12, val13, val14, val15;
+                    double val, val1, val2, val3, val4, val5, val6, val7, val8, val9, val10, val11, val12, val13, val14, val15, val16;
                     double prof1Id, prof1Level, prof1Max, prof2Id, prof2Level, prof2Max;
                     analyzer.ReadDouble(pid, arrayPtr + 0x00, val); // Verification Value
                     analyzer.ReadDouble(pid, arrayPtr + 0x18, val1);
@@ -145,6 +145,7 @@ public:
                     analyzer.ReadDouble(pid, arrayPtr + 0x138, val13);
                     analyzer.ReadDouble(pid, arrayPtr + 0x150, val14);
                     analyzer.ReadDouble(pid, arrayPtr + 0x168, val15);
+                    analyzer.ReadDouble(pid, arrayPtr + 0x180, val16);
                     analyzer.ReadDouble(pid, arrayPtr + 0x1C8, prof1Id);
                     analyzer.ReadDouble(pid, arrayPtr + 0x1E0, prof1Level);
                     analyzer.ReadDouble(pid, arrayPtr + 0x1F8, prof1Max);
@@ -159,11 +160,13 @@ public:
                     ((val3 > 0.5) ? g_GameState->player.areaMountable = true : g_GameState->player.areaMountable = false);
                     (((val6 > 0.5) && (val4 > 0.5)) ? g_GameState->player.flyingMounted = true : g_GameState->player.flyingMounted = false);
                     (((val6 < 0.5) && (val4 > 0.5)) ? g_GameState->player.groundMounted = true : g_GameState->player.groundMounted = false);
+                    g_GameState->player.isMounted = g_GameState->player.flyingMounted || g_GameState->player.groundMounted;
                     ((val7 > 0.5) ? g_GameState->player.isGhost = true : g_GameState->player.isGhost = false);
                     ((val10 > 0.5) ? g_GameState->player.canRespawn = true : g_GameState->player.canRespawn = false);
                     ((val11 > 0.5) ? g_GameState->player.isDeadBody = true : g_GameState->player.isDeadBody = false);
                     ((val12 > 0.5) ? g_GameState->globalState.vendorOpen = true : g_GameState->globalState.vendorOpen = false);
                     ((val13 > 0.5) ? g_GameState->globalState.chatOpen = true : g_GameState->globalState.chatOpen = false);
+                    ((val16 > 0.5) ? g_GameState->player.onGround = true : g_GameState->player.onGround = false);
                     //((val14 > 0.5) ? g_LogFile << "Mail Window Open" << std::endl : g_LogFile << "Mail Window Closed" << std::endl);
                     
                     g_GameState->player.isDead = g_GameState->player.isGhost || g_GameState->player.isDeadBody;
@@ -185,10 +188,10 @@ public:
                         g_GameState->player.corpseMapHash = -1;
                     }
 
-                    if (firstRead == true) {
+                    if (true) {
                         g_LogFile << "Data: [" << g_GameState->player.needRepair << ", " << g_GameState->player.isIndoor << ", " << g_GameState->player.areaMountable << ", " << val4 << ", " << val5
                             << ", " << val6 << " " << val7 << " " << val8 << " " << val9 << " " << val10 << " " << val11 << " " << val12 << " " << val13 << " "
-                            << val14 << " " << val15 << "]" << std::endl;
+                            << val14 << " " << val15 << " " << val16 << "]" << std::endl;
                     }
                 }
             }

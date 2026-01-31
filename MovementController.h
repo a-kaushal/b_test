@@ -435,10 +435,10 @@ public:
             inputCommand.Reset();
         }
 
-        if (escapeWater) {
+        /*if (escapeWater) {
             kbd.SendKey(KEY_ASCEND, 0, true);
             return;
-        }
+        }*/
 
         // --- 1. CALCULATE ANGLES ---
         float targetYaw = std::atan2(dy, dx);
@@ -480,7 +480,7 @@ public:
 
         // Determine if we need "Elevator Mode" (Space/X) for extreme verticality
         //bool useElevator = (std::abs(targetPitch) > STEEP_CLIMB_THRESHOLD);
-        bool useElevator = (std::abs(targetPitch) > 1.0f) || (dist2D < 3.0f && std::abs(dz) > 2.0f);
+        bool useElevator = ((std::abs(targetPitch) > 1.0f) || (dist2D < 3.0f && std::abs(dz) > 0.0f)) && flyingPath;
 
         // -- - DAMPING FACTOR FOR CLOSE RANGE-- -
         // If within 5 yards, reduce steering aggression by 50% to prevent overshooting
@@ -560,22 +560,27 @@ public:
         // --- 4. THROTTLE CONTROL (SMOOTH BANKING) ---
         bool shouldMoveForward = false;
 
-        if (isCoasting) {
-            // Just push through the waypoint
+        if (!flyingPath) {
             shouldMoveForward = true;
         }
         else {
-            // DYNAMIC THROTTLE LOGIC:
-            // 1. If we are far away (> 5y), allow wider turns (Banking).
-            // 2. If we are close (< 5y), require strict alignment (Precision).
-
-            float allowedError = (dist3D > PRECISION_DIST) ? BANKING_ANGLE : ALIGNMENT_DEADZONE * 2.0f;
-
-            // "Arcing Safety": 
-            // If the turn is sharp (> 45 deg), STOP moving to pivot.
-            // This prevents "Drifting" into walls.
-            if (std::abs(yawDiff) < allowedError) {
+            if (isCoasting) {
+                // Just push through the waypoint
                 shouldMoveForward = true;
+            }
+            else {
+                // DYNAMIC THROTTLE LOGIC:
+                // 1. If we are far away (> 5y), allow wider turns (Banking).
+                // 2. If we are close (< 5y), require strict alignment (Precision).
+
+                float allowedError = (dist3D > PRECISION_DIST) ? BANKING_ANGLE : ALIGNMENT_DEADZONE * 2.0f;
+
+                // "Arcing Safety": 
+                // If the turn is sharp (> 45 deg), STOP moving to pivot.
+                // This prevents "Drifting" into walls.
+                if (std::abs(yawDiff) < allowedError) {
+                    shouldMoveForward = true;
+                }
             }
         }
 
@@ -590,11 +595,13 @@ public:
         // --- 5. GROUND UNSTUCK (Spacebar Tap) ---
         if (!flyingPath && !player.flyingMounted && !isCoasting) {
             DWORD now = GetTickCount();
-            if (now - lastPosTime > 1000) {
+            if (now - lastPosTime > 500) {
                 if (currentPos.Dist2D(lastPosCheck) < 0.5f && shouldMoveForward) {
                     // We are trying to move but stuck -> Jump
                     kbd.SendKey(VK_SPACE, 0, true);
+                    kbd.SendKey('W', 0, true);
                     Sleep(50);
+                    kbd.SendKey('W', 0, false);
                     kbd.SendKey(VK_SPACE, 0, false);
                 }
                 lastPosCheck = currentPos;
@@ -706,59 +713,39 @@ public:
     bool faceTarget(Vector3 currentPos, Vector3 targetPos, float currentRot) {
         float dx = targetPos.x - currentPos.x;
         float dy = targetPos.y - currentPos.y;
-        float dz = targetPos.z - currentPos.z;
-        float dist2D = std::sqrt(dx * dx + dy * dy);
-        float dist3D = std::sqrt(dx * dx + dy * dy + dz * dz);
+        float targetYaw = std::atan2(dy, dx);
+        float yawDiff = NormalizeAngle(targetYaw - currentRot);
 
-        DWORD now = GetTickCount();
-        // --- 1. Horizontal Steering (Yaw) --- (A and D old)
-        float targetAngle = std::atan2(dy, dx);
-        float angleDiff = NormalizeAngle(targetAngle - currentRot);
+        // Slightly relaxed threshold for combat tracking (approx 8 degrees)
+        // Too tight = wobble, Too loose = miss spells
+        const float ALIGNED_THRESHOLD = 0.30f;
 
-        bool isTurningLeft = kbd.IsHolding('A');
-        bool isTurningRight = kbd.IsHolding('D');
-
-        // Check if we need to turn
-        if (angleDiff > TURN_THRESHOLD) {
-            // WE WANT TO GO LEFT
-            if (isTurningRight) kbd.StopHold('D'); // Cancel opposite turn
-
-            // Only start a new turn if we aren't already holding the key
-            if (!isTurningLeft) {
-                // Calculate precise duration
-                // Time = Distance / Speed
-                float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
-                int durationMs = static_cast<int>(durationSeconds * 1000.0f);
-                //durationMs *= 0.5;
-
-                // Min duration to avoid micro-presses
-                if (durationMs > 20) {
-                    kbd.HoldKeyAsync('A', durationMs);
-                }
-            }
+        // --- DEBUG LOGGING (Throttle: 200ms) ---
+        static DWORD lastLog = 0;
+        if (GetTickCount() - lastLog > 200) {
+            // Uncomment to debug specific angles if needed
+            // std::cout << "[Face] Diff: " << yawDiff << std::endl;
+            lastLog = GetTickCount();
         }
-        else if (angleDiff < -TURN_THRESHOLD) {
-            // WE WANT TO GO RIGHT
-            if (isTurningLeft) kbd.StopHold('A');
 
-            if (!isTurningRight) {
-                float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
-                int durationMs = static_cast<int>(durationSeconds * 1000.0f);
-                //durationMs *= 0.5;
-
-                if (durationMs > 20) {
-                    kbd.HoldKeyAsync('D', durationMs);
-                }
-            }
-        }
-        // DEADZONE (Aligned)
-        else {
-            // FIX: Force stop if we are aligned, even if the timer is still running.
-            // This prevents the bot from continuing to turn if it reached the target faster than calculated.
-            if (isTurningLeft) kbd.StopHold('A');
-            if (isTurningRight) kbd.StopHold('D');
+        // 1. ALIGNED: Release keys and return true
+        if (std::abs(yawDiff) < ALIGNED_THRESHOLD) {
+            if (kbd.IsHolding('A')) kbd.SendKey('A', 0, false);
+            if (kbd.IsHolding('D')) kbd.SendKey('D', 0, false);
             return true;
         }
-        return false;
+
+        // 2. TARGET IS LEFT (Positive Diff): Hold A, Release D
+        if (yawDiff > 0) {
+            if (kbd.IsHolding('D')) kbd.SendKey('D', 0, false); // Ensure conflicting key is up
+            if (!kbd.IsHolding('A')) kbd.SendKey('A', 0, true); // Hold turn key down
+        }
+        // 3. TARGET IS RIGHT (Negative Diff): Hold D, Release A
+        else {
+            if (kbd.IsHolding('A')) kbd.SendKey('A', 0, false);
+            if (!kbd.IsHolding('D')) kbd.SendKey('D', 0, true);
+        }
+
+        return false; // Not facing yet
     }
 };

@@ -481,6 +481,10 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                         newEntity.objType = "NPC";
                         auto enemyInfo = std::make_shared<EnemyInfo>();
                         newEntity.info = enemyInfo;
+                        ULONG_PTR targetGuidLow;
+                        ULONG_PTR targetGuidHigh;
+                        ULONG_PTR rangedTargetGuidLow;
+                        ULONG_PTR rangedTargetGuidHigh;
 
                         // Use robust reads
                         if (!analyzer.ReadFloat(procId, entity_ptr + ENTITY_POSITION_X_OFFSET, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->position.x)) continue;
@@ -492,8 +496,13 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                             if (g_LogFile.is_open()) g_LogFile << "[WARN] NaN Position for NPC " << id << ". Skipping." << std::endl;
                             continue;
                         }
-                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_LOW, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidLow);
-                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_HIGH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidHigh);
+                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_LOW, targetGuidLow);
+                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_IN_COMBAT_GUID_HIGH, targetGuidHigh);
+                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_RANGED_COMBAT_GUID_LOW, rangedTargetGuidLow);
+                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_ENEMY_RANGED_COMBAT_GUID_HIGH, rangedTargetGuidHigh);
+                        std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidLow = rangedTargetGuidLow;  // This seems to have the correct value for both ranged and melee attacks
+                        std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->targetGuidHigh = rangedTargetGuidHigh;
+
                         analyzer.ReadBool(procId, entity_ptr + ENTITY_ENEMY_ATTACKING, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->inCombat);
                         analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->health);
                         analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_MAX_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->maxHealth);
@@ -535,23 +544,20 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                         analyzer.ReadFloat(procId, entity_ptr + ENTITY_VERTICAL_ROTATION_OFFSET, newPlayer.vertRotation);
                         analyzer.ReadUInt32(procId, entity_ptr + ENTITY_PLAYER_STATE_OFFSET, newPlayer.state);
                         analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_IN_COMBAT_GUID_LOW, newPlayer.inCombatGuidLow);
-                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_IN_COMBAT_GUID_HIGH, newPlayer.inCombatGuidLow);
+                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_IN_COMBAT_GUID_HIGH, newPlayer.inCombatGuidHigh);
                         analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_TARGET_GUID_LOW, newPlayer.targetGuidLow);
                         analyzer.ReadPointer(procId, entity_ptr + ENTITY_PLAYER_TARGET_GUID_HIGH, newPlayer.targetGuidHigh);
 
                         (((newPlayer.state & (1 << 11)) >> 11) == 1) ? newPlayer.inAir = true : newPlayer.inAir = false;
                         (((newPlayer.state & (1 << 24)) >> 24) == 1) ? newPlayer.isFlying = true : newPlayer.isFlying = false;
                         (((newPlayer.state & (1 << 26)) >> 26) == 1) ? newPlayer.isDead = true : newPlayer.isDead = false;
-                        //(((newPlayer.state & (1 << 23)) >> 23) == 1) ? newPlayer.flyingMounted = true : newPlayer.flyingMounted = false;
                         (((newPlayer.state & (1 << 20)) >> 20) == 1) ? newPlayer.inWater = true : newPlayer.inWater = false;
 
-                        if (newPlayer.isFlying == false) {
+                        /*if (newPlayer.isFlying == false) {
                             newPlayer.onGround = true;
-                        }
+                        }*/
 
                         analyzer.ReadUInt32(procId, entity_ptr + ENTITY_PLAYER_MOUNT_STATE, newPlayer.mountState);
-                        //(newPlayer.mountState == 2) ? newPlayer.groundMounted = true : newPlayer.groundMounted = false;
-                        //(newPlayer.mountState == 1) ? newPlayer.isMounted = true : newPlayer.isMounted = false;
 
                         analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_HEALTH, newPlayer.health);
                         analyzer.ReadInt32(procId, entity_ptr + ENTITY_PLAYER_MAX_HEALTH, newPlayer.maxHealth);
@@ -669,6 +675,9 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                     else if (auto corpse = std::dynamic_pointer_cast<CorpseInfo>(entity.info)) {
                         corpse->distance = corpse->position.Dist3D(newPlayer.position);
                     }
+                    else if (auto otherPlayer = std::dynamic_pointer_cast<OtherPlayerInfo>(entity.info)) {
+                        otherPlayer->distance = otherPlayer->position.Dist3D(newPlayer.position);
+                    }
                     if (auto bag = std::dynamic_pointer_cast<BagInfo>(entity.info)) {
                         bag->freeSlots = bag->bagSlots;
                         bag->equippedBag = true;
@@ -743,7 +752,7 @@ void MainThread(HMODULE hModule) {
     //    g_LogFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
     //}
 
-    g_LogFile.open("C:\\SMM\\SMM_Debug.log", std::ios::out | std::ios::app);
+    g_LogFile.open("C:\\SMM\\SMM_Debug.log", std::ios::out | std::ios::trunc);
 
     auto log = [](const std::string& msg) {
         // Write to global file
@@ -907,6 +916,7 @@ void MainThread(HMODULE hModule) {
                         analyzer.ReadPointer(procId, baseAddress + OBJECT_MANAGER_OFFSET, objMan_Direct);
                         if (objMan_Direct == 0x0) {
                             g_LogFile << "Not in game" << std::endl;
+                            Sleep(60000);
                             break;
                         }
                         analyzer.ReadPointer(procId, objMan_Entry + OBJECT_MANAGER_FIRST_OBJECT_OFFSET, objMan_Base);

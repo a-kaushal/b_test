@@ -84,6 +84,7 @@ struct PlayerInfo : EntityInfo {
 
 struct OtherPlayerInfo : EntityInfo {
     Vector3 position;
+    float distance;
 };
 
 struct EnemyInfo : EntityInfo {
