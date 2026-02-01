@@ -19,6 +19,21 @@
 #include "Mailing.h"
 #include "ProfileLoader.h"
 
+// ACTION PRIORITIES
+/*
+Action Unstuck - 10000
+Action Respawn - 1000
+Action Escape Danger - 500 (Unused)
+ActionCombat - 200
+ActionGather - 100
+ActionLoot - 70 (Unused)
+ActionReturnWaypoint - 60
+ActionEscapeWater - 51
+Action Interact - 50
+Follow Path - 20
+ActionProfileExecutor - 10
+*/
+
 // --- ABSTRACT ACTION ---
 class GoapAction {
 public:
@@ -130,8 +145,10 @@ public:
     // Main Entry Point
     // returns TRUE if interaction sequence is complete
     bool EngageTarget(Vector3 targetPos, ULONG_PTR targetGuidLow, ULONG_PTR targetGuidHigh, PlayerInfo& player, std::vector<PathNode>& currentPath, int& pathIndex, int mapId, float approachDist, float interactDist, float finalDist,
-        bool checkTarget, bool targetGuid, bool canFly, int postClickWaitMs, MouseButton click, bool movingTarget, bool& failedPath, int targetId, bool mountDisable = false, int waitTime = 1500, bool groundInteract = false) {
+        bool checkTarget, bool targetGuid, bool canFly, int postClickWaitMs, MouseButton click, bool movingTarget, bool& failedPath, int targetId, bool& failedInteract, bool mountDisable = false, int waitTime = 1500, bool groundInteract = false,
+        Vector3 updatedPos = {-1, -1, -1}) {
         bool fly_entry_state = canFly;
+        if (updatedPos.x == -1) updatedPos = targetPos;
         // If we are stabilizing, aligning camera, or scanning for the mouse, we are "close enough".
         // Running CalculatePath now will reset variables and lag the mouse loop.
         bool isInteracting = (currentState == STATE_STABILIZE ||
@@ -145,7 +162,7 @@ public:
         // 2. We are in a state that allows movement (not CreatePath)
         // 3. The target is moving (movingTarget == true)
         // 4. Enough time has passed (200ms)
-        if (!isInteracting && (currentState != STATE_CREATE_PATH) && (movingTarget == true) && (pathCalcTimer != 0) && (GetTickCount() - pathCalcTimer > 200)) {
+        if (!isInteracting && (currentState != STATE_CREATE_PATH) && (movingTarget == true) && (updatedPos.Dist3D(targetPos) > interactDist) && (pathCalcTimer != 0) && (GetTickCount() - pathCalcTimer > 200)) {
             // Recalculate
             currentPath = CalculatePath({ targetPos }, player.position, 0, canFly, mapId, player.isFlying, g_GameState->globalState.ignoreUnderWater);
             pathIndex = 0;
@@ -192,7 +209,7 @@ public:
             return false;
 
         case STATE_APPROACH:
-            if (MoveToTargetLogic(targetPos, currentPath, pathIndex, player, stateTimer, approachDist, interactDist, finalDist, fly_entry_state, mountDisable)) {
+            if ((MoveToTargetLogic(targetPos, currentPath, pathIndex, player, stateTimer, approachDist, interactDist, finalDist, fly_entry_state, mountDisable)) && !player.isMounted) {
                 stateTimer = GetTickCount(); // Start stabilization timer
                 currentState = STATE_STABILIZE;
             }
@@ -230,17 +247,17 @@ public:
             if (offsetIndex >= searchOffsets.size()) {
                 // Failed to find target after checking all offsets
                 g_LogFile << "[INTERACT] Failed to find target GUID of " << targetGuidLow << " " << targetGuidHigh << std::endl;
-                keyboard.PressKey(VK_HOME);
-                Sleep(20);
-                keyboard.PressKey(VK_END);
-                Sleep(20);
-                keyboard.PressKey(VK_END);
-                Sleep(20);
-                keyboard.PressKey(VK_END);
-                Sleep(20);
-                keyboard.PressKey(VK_END);
-                Sleep(20);
+
+                keyboard.TypeKey(VK_HOME);
+                keyboard.TypeKey(VK_HOME);
+                keyboard.TypeKey(VK_HOME);
+                keyboard.TypeKey(VK_HOME);
+                keyboard.TypeKey(VK_END);
+                keyboard.TypeKey(VK_END);
+                keyboard.TypeKey(VK_END);
+                keyboard.TypeKey(VK_END);
                 Reset(); // Reset to try again? Or fail?
+                failedInteract = true;
 
                 // Move forward for 1 second
                 keyboard.SendKey('W', 0, true);
@@ -560,6 +577,7 @@ public:
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
+        bool failedInteract;
         // Check for Override
         // If the ID in the global state is different from what we processed last tick,
         // it means dllmain switched targets on us. Force a hard reset.
@@ -591,7 +609,12 @@ public:
             MOUSE_RIGHT,
             g_GameState->interactState.locationChange, // NPC is likely stationary
             failedPath,
-            ws.interactState.interactId
+            ws.interactState.interactId,
+            failedInteract,
+            false,
+            1500,
+            false,
+            g_GameState->interactState.inGameLocation
         );
 
         // Visualization
@@ -668,7 +691,7 @@ public:
         : keyboard(k), pilot(p) {
     }
 
-    int GetPriority() override { return 900; }
+    int GetPriority() override { return 10000; }
     std::string GetName() override { return "Unstuck Maneuver"; }
     ActionState* GetState(WorldState& ws) override { return &ws.stuckState; }
 
@@ -888,7 +911,7 @@ public:
 class ActionRespawn : public GoapAction {
 public:
     // Priority 10000: Highest priority. If dead, nothing else matters.
-    int GetPriority() override { return 10000; }
+    int GetPriority() override { return 1000; }
 
     std::string GetName() override { return "Respawn"; }
 
@@ -940,6 +963,7 @@ public:
         if (ws.respawnState.possibleZLayers.empty()) {
             float cx = ws.player.corpseX;
             float cy = ws.player.corpseY;
+            g_LogFile << cx << " " << cy << std::endl;
 
             // Use the helper from Pathfinding2.h
             std::vector<float> layers = GetPossibleZLayers(ws.player.mapId, cx, cy);
@@ -987,7 +1011,9 @@ public:
                 ws.player.isFlying, // Can't fly as ghost usually
                 ws.player.corpseMapId,
                 ws.player.isFlying,
-                false
+                false,
+                false,
+                20.0f
             );
 
             if (!path.empty()) {
@@ -1030,7 +1056,7 @@ public:
             // Continue steering if path not finished
             if (!pathFinished) {
                 PathNode& targetNode = ws.respawnState.path[ws.respawnState.index];
-                if (ws.player.position.Dist2D(targetNode.pos) < 3.0f) {
+                if (ws.player.position.Dist2D(targetNode.pos) < 0.5f) {
                     ws.respawnState.index++;
                 }
                 else {
@@ -1097,6 +1123,7 @@ public:
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
         bool lowHp = false;
+        bool failedInteract;
         
         // --- LOGGING: Entry ---
         // Rate limit log to avoid spamming every single frame (e.g. every 500ms)
@@ -1181,7 +1208,7 @@ public:
                     g_LogFile << "[Combat] Requesting Interaction (Click) at 5.0y range." << std::endl;
                     g_LogFile << interact.GetState() << std::endl;
                     bool engaged = interact.EngageTarget(ws.combatState.enemyPosition, ws.combatState.targetGuidLow, ws.combatState.targetGuidHigh, ws.player, ws.combatState.path,
-                        ws.combatState.index, ws.player.mapId, MELEE_RANGE, 5.0f, 3.0f, true, true, false, 100, MOUSE_RIGHT, true, failedPath, -1, true, 100);
+                        ws.combatState.index, ws.player.mapId, MELEE_RANGE, 5.0f, 3.0f, true, true, false, 100, MOUSE_RIGHT, true, failedPath, -1, failedInteract , true, 100);
                     g_LogFile << interact.GetState() << std::endl;
                     
                     if (engaged) {
@@ -1226,71 +1253,6 @@ public:
 
         return false;
     }
-
-
-        ///////////////////////////
-        // OLD CODE
-        // ////////////////////
-        // 1. Identify Target & Update Info
-        //Vector3 targetPos = ws.combatState.enemyPosition;
-        //int targetHealth = ws.combatState.targetHealth; // Default to 100% if unknown
-        //bool targetFound = false;
-
-        //// Try to find the live entity data for our target to get accurate position/health
-        //if (ws.combatState.targetGuidLow != 0) {
-        //    for (const auto& ent : ws.entities) {
-        //        if (ent.guidLow == ws.combatState.targetGuidLow) {
-        //            if (auto enemy = std::dynamic_pointer_cast<EnemyInfo>(ent.info)) {
-        //                targetPos = enemy->position;
-        //                targetHealth = enemy->health;
-        //                targetFound = true;
-        //            }
-        //            break;
-        //        }
-        //    }
-        //}
-
-        //if (targetHealth == 0) {
-        //    ws.combatState.inCombat = false;
-        //    return true;
-        //}
-
-        //// If we have no target GUID but are in combat, we might want to target nearest (Logic not shown here, assuming state is populated)
-
-        //// 2. Check Distance
-        //float dist = ws.player.position.Dist3D(targetPos);
-
-        //// 3. Movement Logic
-        //if (dist > MELEE_RANGE) {
-        //    // Move towards target
-        //    // Note: passing 'false' for flying to force ground combat movement
-        //    pilot.SteerTowards(ws.player.position, ws.player.rotation, targetPos, false, ws.player);
-        //}
-        //else {
-        //    if (ws.combatState.inCombat != true) {
-        //        int sx, sy;
-        //        if (camera.WorldToScreen(ws.combatState.enemyPosition, sx, sy, &mouse))
-        //            mouse.MoveAbsolute(sx + p.x, sy + p.y);
-        //    }
-        //    // In range: Stop moving so we can cast
-        //    pilot.Stop();
-
-        //    // Optional: Explicitly face target if SteerTowards doesn't handle static rotation
-
-        //    // Target nearest enemy
-        //    keyboard.TypeKey(VK_TAB);
-        //}
-
-        //// 4. Rotation Logic
-        //// Determine if target is in execute range (< 20% hp) for Hammer of Wrath
-        //bool isLowHealth = (targetHealth < 20);
-
-        //// Execute the rotation step
-        //combatController.UpdateRotation(isLowHealth);
-
-        //// Combat actions return false (not complete) until the WorldState updates to say we are out of combat
-        //return false;
-    //}
 };
 
 class ActionLoot : public GoapAction {
@@ -1310,7 +1272,7 @@ public:
         return &ws.lootState;
     }
 
-    int GetPriority() override { return 60; }
+    int GetPriority() override { return 70; }
     std::string GetName() override { return "Loot Corpse"; }
 
     // Reset state if we are switching to this action fresh
@@ -1321,7 +1283,7 @@ public:
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
-        
+        bool failedInteract;
 
         if (ws.gatherState.nodeActive == false) {
             interact.SetState(InteractionController::STATE_COMPLETE);
@@ -1348,6 +1310,7 @@ public:
             false,
             failedPath,
             -1,
+            failedInteract,
             false,
             1500,
             true
@@ -1376,6 +1339,8 @@ private:
 
     int failCount = 0;
     bool failedPath = false;
+    bool failedInteract = false;
+    int failInteractCount = 0;
 
 public:
     ActionGather(InteractionController& ic) : interact(ic) {}
@@ -1402,7 +1367,9 @@ public:
         approachDist = 3.5f;
         finalDist = 2.8f;
         failCount = 0;
+        failInteractCount = 0;
         failedPath = false;
+        failedInteract = false;
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {  
@@ -1450,10 +1417,27 @@ public:
             MOUSE_RIGHT,
             false,
             failedPath,
-            -1
+            -1,
+            failedInteract,
+            false,
+            1500,
+            false,
+            {}
         );
         ws.globalState.activePath = ws.gatherState.path;
         ws.globalState.activeIndex = ws.gatherState.index;
+
+        if (failedInteract) {
+            failInteractCount++;
+            if (failInteractCount > 3) {
+                g_LogFile << "Failed to interact 3 times, adding to blacklist" << std::endl;
+                ws.gatherState.blacklistNodesGuidLow.push_back(ws.gatherState.guidLow);
+                ws.gatherState.blacklistNodesGuidHigh.push_back(ws.gatherState.guidHigh);
+                ws.gatherState.blacklistTime.push_back(GetTickCount());
+                ResetState();
+                return true;
+            }
+        }
 
         /*if (failedPath) {
             g_LogFile << "Failed to create path to node, adding to blacklist" << std::endl;
@@ -1488,10 +1472,47 @@ public:
     }
 };
 
+class ActionEscapeWater : public GoapAction {
+private:
+    bool pressingSpace = false;
+
+public:
+    // Execute only if player is in water
+    bool CanExecute(const WorldState& ws) override {
+        return ws.player.inWater;
+    }
+
+    // Priority 51: 
+    // Lower than Gather (100) and Loot (60) -> Allows working underwater
+    // Higher than FollowPath (20) and Interact (50) -> Surfaces before trying to resume pathing
+    int GetPriority() override { return 51; }
+
+    std::string GetName() override { return "Escape Water"; }
+
+    ActionState* GetState(WorldState& ws) override { return nullptr; }
+
+    void ResetState() override {
+        pressingSpace = false;
+    }
+
+    bool Execute(WorldState& ws, MovementController& pilot) override {
+        // Only press the key once to initiate the "Hold"
+        if (!pressingSpace) {
+            // Trigger the "escapeWater" logic in SteerTowards (holds Jump/Ascend)
+            pilot.SteerTowards(ws.player.position, ws.player.rotation, ws.player.position, true, ws.player, false, true);
+            //pressingSpace = true;
+        }
+
+        // Return false to keep this action active until CanExecute() returns false (player exits water)
+        return false;
+    }
+};
+
 // --- Return to a saved waypoint after performing a different action --- //
 class ActionReturnWaypoint : public GoapAction {
 private:
     const float ACCEPTANCE_RADIUS = 3.0f;
+    const float GROUND_ACCEPTANCE_RADIUS = 0.5f;
     const float GROUND_HEIGHT_THRESHOLD = 7.0f; // If target is this close to ground, use ground path
 
     const int MAX_PATHFINDING_ATTEMPTS = 8;
@@ -1527,7 +1548,7 @@ public:
         return (ws.waypointReturnState.enabled && ws.waypointReturnState.hasTarget);
     }
 
-    int GetPriority() override { return 70; }
+    int GetPriority() override { return 60; }
     std::string GetName() override { return "Return to previous waypoint"; }
 
     ActionState* GetState(WorldState& ws) override {
@@ -1554,18 +1575,6 @@ public:
         ws.globalState.activePath = ws.waypointReturnState.path;
         ws.globalState.activeIndex = ws.waypointReturnState.index;
         DWORD now = GetTickCount();
-
-        if (ws.player.inWater) {
-            g_LogFile << "In Water" << std::endl;
-            if (!escapeWater) {
-                escapeWater = true;
-            }
-            pilot.SteerTowards(ws.player.position, ws.player.rotation, ws.player.position, ws.waypointReturnState.flyingPath, ws.player, escapeWater = true);
-        }
-        else if (escapeWater) {
-            escapeWater = false;
-            pilot.Stop();
-        }
 
         switch (currentPhase) {
         case PHASE_CHECK_DIRECT:
@@ -1938,7 +1947,7 @@ public:
                 dist = ws.player.position.Dist3D(target);
             }
 
-            if (dist < ACCEPTANCE_RADIUS) {
+            if (((targetType == PATH_AIR) && (dist < ACCEPTANCE_RADIUS)) || ((targetType == PATH_GROUND) && (dist < GROUND_ACCEPTANCE_RADIUS))) {
                 ws.waypointReturnState.index++;
                 return false;
             }
@@ -1976,6 +1985,7 @@ public:
 class ActionFollowPath : public GoapAction {
 private:
     const float ACCEPTANCE_RADIUS = 5.0f;
+    const float GROUND_ACCEPTANCE_RADIUS = 1.0f;
 
 public:
     bool CanExecute(const WorldState& ws) override {
@@ -2047,7 +2057,7 @@ public:
             dist = ws.player.position.Dist3D(target);
         }
 
-        if (dist < ACCEPTANCE_RADIUS) {
+        if (((targetType == PATH_AIR) && (dist < ACCEPTANCE_RADIUS)) || ((targetType == PATH_GROUND) && (dist < GROUND_ACCEPTANCE_RADIUS))) {
             ws.pathFollowState.index++; // Advance state
             ws.pathFollowState.pathIndexChange = true;
             if (g_GameState->pathFollowState.presetIndex < g_GameState->pathFollowState.presetPath.size() - 1) {
@@ -2099,6 +2109,7 @@ public:
         availableActions.push_back(new ActionInteract(interact, keyboard, mouse));
         availableActions.push_back(new ActionRespawn());
         availableActions.push_back(new ActionProfileExecutor(interact));
+        availableActions.push_back(new ActionEscapeWater());
     }
     
     ~GoapAgent() {
@@ -2258,7 +2269,7 @@ private:
             float distMoved = state.player.position.Dist3D(state.stuckState.lastPosition);
 
             // 3. Distance Check (Threshold: 2.0 units)
-            if (distMoved < 2.0f) {
+            if ((!g_GameState->player.inWater && distMoved < 2.0f) || (g_GameState->player.inWater && distMoved < 0.5f)) {
                 // We haven't moved enough
                 if (state.stuckState.stuckStartTime == 0) {
                     state.stuckState.stuckStartTime = now;

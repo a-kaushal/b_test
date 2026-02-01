@@ -79,6 +79,10 @@ private:
     float m_PixelsPerRadianYaw = 0.0f;
     float m_PixelsPerRadianPitch = 0.0f;
 
+    // --- UI STUCK DETECTION VARIABLES ---
+    float m_LastRotationCheck = 0.0f;
+    int m_UiStuckCounter = 0;
+
 public:
     // --- MOUNTING LOGIC VARIABLES ---
     DWORD m_MountAttemptStart = 0;
@@ -378,7 +382,8 @@ public:
         }
 
         // Attempt to mount if: Requested (isFlying), Not Mounted, Not In Tunnel
-        if (((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && !player.inWater && !mountDisable && player.areaMountable) {
+        if ((((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && !player.inWater && !mountDisable && player.areaMountable) || 
+            (((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && player.inWater && escapeWater)) {
             Stop();
             // Check 1: Are we on a cooldown from a previous failure?
             if (now < m_MountDisabledUntil) {
@@ -435,10 +440,10 @@ public:
             inputCommand.Reset();
         }
 
-        /*if (escapeWater) {
+        if (escapeWater) {
             kbd.SendKey(KEY_ASCEND, 0, true);
             return;
-        }*/
+        }
 
         // --- 1. CALCULATE ANGLES ---
         float targetYaw = std::atan2(dy, dx);
@@ -453,22 +458,19 @@ public:
             // --- NEW: CENTER MOUSE BEFORE CLICKING ---
             // This ensures we have maximum range of motion before hitting an edge.
 
-            // 1. Calculate Center
-            RECT rect;
-            GetClientRect(hGameWindow, &rect);
-            POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
-            ClientToScreen(hGameWindow, &center);
+            // Center Mouse before clicking to maximize turn radius and avoid edges
+            mouse.ReleaseButton(MOUSE_RIGHT); // Safety release
+            mouse.MoveToCenter();             // Use your existing function
+            Sleep(20);                        // Wait for update
 
-            // 2. Release (Safety), Move, Then Press
-            // We release first to prevent the camera from snapping 180 degrees during the move.
-            mouse.ReleaseButton(MOUSE_RIGHT);
-            mouse.MoveAbsolute(center.x, center.y);
-            Sleep(20); // Allow Windows to update cursor position
-
-            // 3. Begin Steering
             mouse.PressButton(MOUSE_RIGHT);
             isSteering = true;
-            Sleep(10);
+
+            // Reset detection
+            m_UiStuckCounter = 0;
+            m_LastRotationCheck = currentRot;
+
+            Sleep(10);            
         }
 
         // --- 3. MOUSE CONTROL (YAW & PITCH) ---
@@ -535,6 +537,45 @@ public:
                 }
             }
         }
+        // --- UI BLOCK DETECTION LOGIC ---
+        // If we are trying to turn significantly (pixelsYaw > 5), but rotation isn't changing...
+        if (std::abs(pixelsYaw) > 5) {
+            float rotDelta = std::abs(NormalizeAngle(currentRot - m_LastRotationCheck));
+
+            // If rotation changed less than ~0.5 degrees (0.01 rad) despite input
+            if (rotDelta < 0.01f) {
+                m_UiStuckCounter++;
+            }
+            else {
+                // We moved successfully, reset counter
+                m_UiStuckCounter = 0;
+                m_LastRotationCheck = currentRot;
+            }
+
+            // If stuck for ~15 ticks (approx 150-300ms depending on tick rate)
+            if (m_UiStuckCounter > 15) {
+                g_LogFile << "[Movement] UI Trap Detected! Resetting mouse..." << std::endl;
+
+                // 1. Release Mouse
+                mouse.ReleaseButton(MOUSE_RIGHT);
+                isSteering = false;
+
+                // 2. Close Menu (Escape)
+                kbd.SendKey(VK_ESCAPE, 0, true);
+                Sleep(50);
+                kbd.SendKey(VK_ESCAPE, 0, false);
+                Sleep(50);
+
+                // 3. Find New Spot
+                mouse.RandomizePosition();
+
+                // 4. Force Reset Logic
+                m_UiStuckCounter = 0;
+                m_LastRotationCheck = currentRot;
+                return; // Skip the rest of this frame
+            }
+        }
+
 
         // Clamp Mouse Speed to prevent camera snapping
         pixelsYaw = std::clamp(pixelsYaw, -60, 60);

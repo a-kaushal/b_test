@@ -43,6 +43,7 @@ void UpdateGatherTarget(WorldState& ws) {
 
     BlacklistClear(ws);
 
+    bool foundExistingNode = false;
     // Loop through all entities updated by the Memory Reader
     for (int i = 0; i < ws.entities.size(); ++i) {
         const auto& entity = ws.entities[i];
@@ -58,26 +59,32 @@ void UpdateGatherTarget(WorldState& ws) {
         }
 
         // If we already have a target, check if it's still valid/close
-        if ((ws.gatherState.hasNode) && (entity.guidLow == ws.gatherState.guidLow) && (entity.guidHigh == ws.gatherState.guidHigh)) {
-            float dist = ws.player.position.Dist3D(ws.gatherState.position);
-            if ((dist > g_ProfileSettings.gatherRange) || (std::dynamic_pointer_cast<ObjectInfo>(entity.info)->nodeActive == 0)) { // Lost it or moved too far
-                //ws.gatherState.hasNode = false;
-                ws.gatherState.nodeActive = false;
-            }
+        if (ws.gatherState.hasNode) {
+            if ((entity.guidLow == ws.gatherState.guidLow) && (entity.guidHigh == ws.gatherState.guidHigh)) {
+                float dist = ws.player.position.Dist3D(ws.gatherState.position);
+                if ((dist > g_ProfileSettings.gatherRange) || (std::dynamic_pointer_cast<ObjectInfo>(entity.info)->nodeActive == 0)) { // Lost it or moved too far
+                    //ws.gatherState.hasNode = false;
+                    ws.gatherState.nodeActive = false;
+                }
 
-            for (int j = 0; j < ws.entities.size(); ++j) {
-                if (auto otherPlayer = std::dynamic_pointer_cast<OtherPlayerInfo>(ws.entities[j].info)) {
-                    if ((ws.gatherState.position.Dist3D(otherPlayer->position) < 10.0f) && (ws.gatherState.position.Dist3D(otherPlayer->position) < ws.gatherState.position.Dist3D(ws.player.position))) {
-                        ws.gatherState.blacklistNodesGuidLow.push_back(ws.gatherState.guidLow);
-                        ws.gatherState.blacklistNodesGuidHigh.push_back(ws.gatherState.guidHigh);
-                        ws.gatherState.blacklistTime.push_back(GetTickCount());
-                        g_LogFile << "Player detected near node, blacklisting for " << BLACKLIST_TIMEOUT / 1000 << " seconds" << std::endl;
-                        ws.gatherState.nodeActive = false;
-                        break;
+                for (int j = 0; j < ws.entities.size(); ++j) {
+                    if (auto otherPlayer = std::dynamic_pointer_cast<OtherPlayerInfo>(ws.entities[j].info)) {
+                        if ((ws.gatherState.position.Dist3D(otherPlayer->position) < 10.0f) && (ws.gatherState.position.Dist3D(otherPlayer->position) < ws.gatherState.position.Dist3D(ws.player.position))) {
+                            ws.gatherState.blacklistNodesGuidLow.push_back(ws.gatherState.guidLow);
+                            ws.gatherState.blacklistNodesGuidHigh.push_back(ws.gatherState.guidHigh);
+                            ws.gatherState.blacklistTime.push_back(GetTickCount());
+                            g_LogFile << "Player detected near node, blacklisting for " << BLACKLIST_TIMEOUT / 1000 << " seconds" << std::endl;
+                            ws.gatherState.nodeActive = false;
+                            break;
+                        }
                     }
                 }
+                foundExistingNode = true;
+                return;
             }
-
+        }
+        if (foundExistingNode) {
+            ws.gatherState.nodeActive;
             return;
         }
 
@@ -93,7 +100,7 @@ void UpdateGatherTarget(WorldState& ws) {
                     unsigned char area = globalNavMesh.GetAreaID(object->position);
 
                     // Check against our flags (Water Surface or Sea Floor)
-                    if (area == AREA_UNDERWATER) {
+                    if (area == AREA_UNDERWATER || area == AREA_DEEP_WATER) {
                         continue; // Skip this node
                     }
                 }

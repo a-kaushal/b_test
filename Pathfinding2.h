@@ -1151,7 +1151,7 @@ struct AStarAttempt {
 };
 
 // ANGLED FLIGHT PATHFINDING - Natural diagonal ascent/descent
-inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end, int mapId, bool isFlying, bool ignoreWater = true) {
+inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end, int mapId, bool isFlying, bool ignoreWater = true, float partialPathThreshold = 25.0f) {
     Vector3 rawStartPos = start;
     // Always open log for this specific debug request, or keep using DEBUG_PATHFINDING flag
     if (DEBUG_PATHFINDING) {
@@ -1164,14 +1164,13 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
     // We use a small 'baseGridSize' for precision, but 'dynamic=true' allows it to scale up when far away.
     AStarAttempt attempts[] = {
         // Base=4.0f means near the target we move in 4yd steps (Very precise).
-        // Dynamic=true means when 100yds away, we move in 16yd steps (Very fast).
-        { 4.0f,  true,  10000, "Standard Dynamic", true },
+        // Fixed coarse grid
+        { 4.0f, false,  10000, "Coarse Fixed",     true },
+
+        { 2.0f,  false,  40000, "Standard Dynamic", true },
 
         // Fallback: Relaxed collision for tight spots
-        { 4.0f,  false, 20000, "Relaxed Precision", true },
-
-        // Fallback: Fixed coarse grid if dynamic fails
-        { 10.0f, true,  10000, "Coarse Fixed",     false },
+        { 4.0f,  false, 10000, "Relaxed Precision", true },
 
         // Last Resort: Ultra strict/fine for impossible spots
         { 3.0f,  false, 20000, "Ultra-Precision",   false }
@@ -1274,23 +1273,23 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
     //    }
     //}
 
-    groundZ = globalNavMesh.GetLocalGroundHeight(end);
-    if (groundZ > -90000.0f && end.z < groundZ + MIN_CLEARANCE) {
-        actualEnd.z = groundZ + MIN_CLEARANCE;
+    float endGround = GetFMapFloorHeight(mapId, end.x, end.y, end.z + 2.0f);
+    if (endGround > -90000.0f && end.z < endGround + 1.0f) {
+        actualEnd.z = endGround + 2.0f;
         end.z = actualEnd.z;
         if (DEBUG_PATHFINDING) {
-            g_LogFile << "Adjusted end height to: " << actualEnd.z << " (ground: " << groundZ << ")" << std::endl;
+            g_LogFile << "Adjusted end height to: " << actualEnd.z << " (ground: " << endGround << ")" << std::endl;
         }
     }
 
     // If the goal is on the ground and we're descending to it, be more lenient
-    if (groundZ > -90000.0f && end.z < groundZ + GROUND_HEIGHT_THRESHOLD) {
+    if (endGround > -90000.0f && end.z < endGround + GROUND_HEIGHT_THRESHOLD) {
         // Adjust end to be just slightly above ground instead of MIN_CLEARANCE
-        actualEnd.z = groundZ + MIN_CLEARANCE; // Changed from MIN_CLEARANCE + 1.0f
+        actualEnd.z = endGround + 1.0f; // Changed from MIN_CLEARANCE + 1.0f
         end.z = actualEnd.z;
         if (DEBUG_PATHFINDING) {
             g_LogFile << "Goal is on ground, adjusted end height to: " << actualEnd.z
-                << " (ground: " << groundZ << ")" << std::endl;
+                << " (ground: " << endGround << ")" << std::endl;
         }
     }
 
@@ -1461,8 +1460,9 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         };
 
         float totalDistToGoal = actualStart.Dist3D(actualEnd);
-        if (totalDistToGoal > 1000.0f) att.maxNodes *= 16;
-        else if (totalDistToGoal > 200.0f) att.maxNodes *= 8;
+        if (totalDistToGoal > 2000.0f) att.maxNodes *= 16;
+        else if (totalDistToGoal > 1000.0f) att.maxNodes *= 8;
+        else if (totalDistToGoal > 200.0f) att.maxNodes *= 4;
         else if (totalDistToGoal > 50.0f) att.maxNodes *= 2;
 
         while (!openSet.empty() && iterations < att.maxNodes) {
@@ -1490,11 +1490,11 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
                 //bool nearStart = current.gScore < 20.0f;
                 //bool nearEnd = distToGoal < 20.0f;
 
-                if (!nearStart || !nearEnd) {
+                //if (!nearStart || !nearEnd) {
                     if (distToGoal > 1000.0f) { currentStep *= 8.0f; } // e.g. 8.0 * 2 = 32 yard steps
                     else if (distToGoal > 200.0f) { currentStep *= 4.0f; } // e.g. 4.0 * 4 = 16 yard steps
                     else if (distToGoal > 50.0f) { currentStep *= 2.0f; } // e.g. 4.0 * 2 = 8 yard steps
-                }
+                //}
                 // else: < 50 yards, use baseGridSize (4 yards) for precision
             }
 
@@ -1553,6 +1553,19 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             }
         }
 
+        // 1. FIND BEST PARTIAL NODE (If goal not reached)
+        int bestPartialIdx = -1;
+        if (goalIdx < 0 && !closedSet.empty()) {
+            float closestDist = 1e9f;
+            for (int idx : closedSet) {
+                float d = nodes[idx].pos.Dist3D(actualEnd);
+                if (d < closestDist) {
+                    closestDist = d;
+                    bestPartialIdx = idx;
+                }
+            }
+        }
+
         //DIAGNOSTICS
         if (goalIdx < 0 && DEBUG_PATHFINDING) {
             g_LogFile << "\n   [DIAGNOSTIC] Why did A* fail?" << std::endl;
@@ -1602,25 +1615,49 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             g_LogFile << "" << std::endl;
         }
 
-        // --- RESULT CHECK ---
+        // --- RESULT CHECK & RECONSTRUCTION ---
+        // Determine which node to start tracing back from
+        int traceStartIdx = -1;
+        bool isPartial = false;
         if (goalIdx >= 0) {
+            traceStartIdx = goalIdx; // Success
+        }
+        else if (bestPartialIdx >= 0) {
+            // Check if partial path is worth it (must be closer than start)
+            float startDist = actualStart.Dist3D(actualEnd);
+            float currentDist = nodes[bestPartialIdx].pos.Dist3D(actualEnd);
+
+            // Allow partial if we made progress (e.g. moved at least 5 yards closer)
+            if (currentDist < startDist - partialPathThreshold) {
+                traceStartIdx = bestPartialIdx;
+                isPartial = true;
+                if (DEBUG_PATHFINDING) {
+                    g_LogFile << "A* Partial Success: Returning path to closest point (Dist: " << currentDist << ")" << std::endl;
+                }
+            }
+        }
+
+        // Reconstruct Path if we have a valid start index
+        if (traceStartIdx >= 0) {
             std::vector<PathNode> path;
-            int curr = goalIdx;
-            while (curr >= 0) {
+            int curr = traceStartIdx;
+            // Safety check for loop limit to prevent infinite loops if parentIdx is corrupted
+            int safety = 0;
+            while (curr >= 0 && safety++ < 5000) {
                 path.push_back(PathNode(nodes[curr].pos, PATH_AIR));
                 curr = nodes[curr].parentIdx;
             }
             std::reverse(path.begin(), path.end());
 
-            // --- STRICT SUCCESS CHECK ---
-            // Even if A* found a "goal", verify it is actually the destination
-            if (path.back().pos.Dist3D(actualEnd) > 5.0f) {
+            // --- STRICT SUCCESS CHECK (Skipped if we explicitly allowed partial) ---
+            if (!isPartial && path.back().pos.Dist3D(actualEnd) > 5.0f) {
                 if (DEBUG_PATHFINDING) {
                     g_LogFile << "✗ Attempt " << (i + 1) << " found path but it stops short ("
                         << path.back().pos.Dist3D(actualEnd) << " yds). Retrying..." << std::endl;
                 }
-                // Continue loop to next attempt
-                continue;
+                // If you want to force retries for better paths, uncomment continue. 
+                // But since you want partial paths, we generally accept this.
+                // continue; 
             }
 
             // Path Smoothing
@@ -2185,7 +2222,7 @@ inline std::vector<float> GetPossibleZLayers(int mapId, float x, float y) {
 
 // MODIFIED: CalculatePath accepts ignoreWater and passes it to FindPath/Cache
 inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath, const Vector3& startPos,
-    int currentIndex, bool canFly, int mapId, bool isFlying, bool ignoreWater, bool path_loop = false) {
+    int currentIndex, bool canFly, int mapId, bool isFlying, bool ignoreWater, bool path_loop = false, float pathThreshold = 25.0f) {
     std::string mmapFolder = "C:/SMM/data/mmaps/";
 
     if (!std::filesystem::exists(mmapFolder)) {
@@ -2276,9 +2313,9 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
                     return {}; // STRICT FAILURE -> Stop Script
                 }
 
-                if (segment.back().pos.Dist3D(end) > 5.0f) {
+                if (segment.back().pos.Dist3D(end) > pathThreshold) {
                     g_LogFile << "[Pathfinding] Flight path incomplete. Final point is "
-                        << segment.back().pos.Dist3D(end) << " yards from destination (Threshold: 5.0f)." << std::endl;
+                        << segment.back().pos.Dist3D(end) << " yards from destination (Threshold: " << pathThreshold << ")." << std::endl;
                     return {}; // STRICT FAILURE -> Stop Script
                 }
             }
@@ -2292,9 +2329,9 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
                     return {}; // STRICT FAILURE -> Stop Script
                 }
 
-                if (segment.back().pos.Dist3D(end) > 5.0f) {
+                if (segment.back().pos.Dist3D(end) > pathThreshold) {
                     g_LogFile << "[Pathfinding] Ground path incomplete. Final point is "
-                        << segment.back().pos.Dist3D(end) << " yards from destination (Threshold: 5.0f)." << std::endl;
+                        << segment.back().pos.Dist3D(end) << " yards from destination (Threshold: " << pathThreshold << ")." << std::endl;
                     return {}; // STRICT FAILURE -> Stop Script
                 }
             }

@@ -34,6 +34,7 @@ std::atomic<bool> WebServer::running = false;
 std::thread WebServer::serverThread;
 std::atomic<bool> WebServer::botActive = false;
 std::atomic<bool> WebServer::profileLoadReq = false;
+std::atomic<bool> WebServer::autoLoad = false;
 std::string WebServer::currentProfile = "None";
 std::string WebServer::pendingProfile = "";
 unsigned long long WebServer::startTime = 0;
@@ -54,7 +55,7 @@ std::string EscapeJSON(const std::string& s) {
     return out;
 }
 
-// [FIX] Now a member function: WebServer::ReadLogFileTail
+// Now a member function: WebServer::ReadLogFileTail
 std::string WebServer::ReadLogFileTail(int charsToRead) {
     std::string filepath = "C:\\SMM\\SMM_Debug.log";
     std::ifstream file(filepath, std::ios::binary | std::ios::ate); // Open at end
@@ -86,6 +87,7 @@ std::string WebServer::GenerateJSONState() {
     // --- 1. BOT STATUS ---
     // We can access private members directly now
     ss << "\"running\": " << (botActive ? "true" : "false") << ",";
+    ss << "\"autoLoad\": " << (autoLoad ? "true" : "false") << ",";
 
     std::string profileName = "None";
     if (auto* p = g_ProfileLoader.GetActiveProfile()) profileName = p->profileName;
@@ -170,12 +172,50 @@ std::string WebServer::GenerateJSONState() {
 }
 
 // =============================================================
+// CONFIGURATION PERSISTENCE
+// =============================================================
+
+void WebServer::LoadConfig() {
+    std::ifstream f("C:\\SMM\\WebConfig.ini");
+    std::string line;
+    if (f.is_open()) {
+        while (getline(f, line)) {
+            if (line.find("AutoLoad=") == 0) {
+                autoLoad = (line.substr(9) == "1");
+            }
+        }
+    }
+}
+
+void WebServer::SaveConfig() {
+    std::ofstream f("C:\\SMM\\WebConfig.ini");
+    f << "AutoLoad=" << (autoLoad ? "1" : "0") << "\n";
+}
+
+// =============================================================
 // SERVER CLASS MEMBERS
 // =============================================================
 
 void WebServer::Start(int port) {
     if (running) return;
     running = true;
+    
+    // Load settings on startup
+    LoadConfig();
+
+    // Trigger Auto-Load if enabled
+    if (autoLoad) {
+        std::thread([]() {
+            std::string err;
+            if (g_ProfileLoader.LoadLastProfile(err)) {
+                if (g_LogFile.is_open()) g_LogFile << "[WebServer] Auto-Loaded Last Profile." << std::endl;
+            }
+            else {
+                if (g_LogFile.is_open()) g_LogFile << "[WebServer] Auto-Load Failed: " << err << std::endl;
+            }
+            }).detach();
+    }
+
     startTime = GetTickCount64();
     serverThread = std::thread(ServerThread, port);
     serverThread.detach();
@@ -265,6 +305,17 @@ void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
         catch (...) { contentLength = 0; }
     }
 
+    // Parse Profile Name Header
+    std::string profileNameHeader = "";
+    size_t pnPos = requestData.find("Profile-Name: ");
+    if (pnPos != std::string::npos) {
+        size_t endOfLine = requestData.find("\r\n", pnPos);
+        profileNameHeader = requestData.substr(pnPos + 14, endOfLine - (pnPos + 14));
+        // Simple sanitization (remove paths)
+        size_t lastSlash = profileNameHeader.find_last_of("/\\");
+        if (lastSlash != std::string::npos) profileNameHeader = profileNameHeader.substr(lastSlash + 1);
+    }
+
     // 3. Read Remaining Body (if necessary)
     size_t bodyStart = headerEndPos + 4;
     size_t currentBodySize = requestData.size() - bodyStart;
@@ -300,9 +351,10 @@ void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
         if (bodyPos != std::string::npos) {
             std::string body = requestData.substr(bodyPos + 4);
             std::string error;
-            if (g_ProfileLoader.CompileAndLoad(body, error)) {
+            // Pass the profile name from header
+            if (g_ProfileLoader.CompileAndLoad(body, error, profileNameHeader)) {
                 responseBody = "{\"status\":\"success\", \"message\":\"Profile Loaded!\"}";
-                currentProfile = "Uploaded Profile";
+                currentProfile = profileNameHeader.empty() ? "Uploaded Profile" : profileNameHeader;
             }
             else {
                 responseBody = "{\"status\":\"error\", \"message\":\"" + EscapeJSON(error) + "\"}";
@@ -326,6 +378,22 @@ void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
     else if (requestData.find("GET /api/state ") != std::string::npos) {
         responseBody = GenerateJSONState(); // Calls member function
         contentType = "application/json";
+    }
+    // Endpoint to toggle Auto Load
+    else if (requestData.find("POST /api/set_autoload ") != std::string::npos) {
+        size_t bodyPos = requestData.find("\r\n\r\n");
+        if (bodyPos != std::string::npos) {
+            std::string body = requestData.substr(bodyPos + 4);
+            // Expect body like "enabled=true" or simple "1"
+            if (body.find("true") != std::string::npos || body.find("1") != std::string::npos)
+                autoLoad = true;
+            else
+                autoLoad = false;
+
+            SaveConfig(); // Persist changes
+            responseBody = "{\"status\":\"success\"}";
+            contentType = "application/json";
+        }
     }
     // 5. GET /api/logs
     else if (requestData.find("GET /api/logs ") != std::string::npos) {
@@ -425,6 +493,10 @@ std::string WebServer::GetHTML() {
     <header>
         <div class="title">Shadow Bot Dashboard</div>
         <div class="controls">
+            <div class="chk-container" title="Automatically load the last used profile when bot starts">
+                <input type="checkbox" id="chkAutoLoad" onchange="toggleAutoLoad(this)">
+                <label for="chkAutoLoad">Auto-Load Last</label>
+            </div>
             <button class="btn-file">
                 Select Profile...
                 <input type="file" id="profileFile" onchange="uploadProfile()">
@@ -505,6 +577,13 @@ std::string WebServer::GetHTML() {
             catch(e) { console.error(e); }
         }
 
+        async function toggleAutoLoad(el) {
+            await fetch('/api/set_autoload', {
+                method: 'POST',
+                body: el.checked ? "true" : "false"
+            });
+        }
+
         async function loadLastProfile() {
             const status = document.getElementById('uploadStatus');
             status.innerText = "Reloading...";
@@ -538,7 +617,8 @@ std::string WebServer::GetHTML() {
                 try {
                     const res = await fetch('/api/upload_profile', {
                         method: 'POST',
-                        body: e.target.result
+                        body: e.target.result,
+                        headers: { 'Profile-Name': file.name } 
                     });
                     const data = await res.json();
                     if(data.status === 'success') {
@@ -614,6 +694,11 @@ std::string WebServer::GetHTML() {
                 document.getElementById('stat-running').innerText = "Status: " + (gameState.running ? "RUNNING" : "STOPPED");
                 document.getElementById('stat-profile').innerText = "Profile: " + (gameState.profile || "None");
                 document.getElementById('stat-uptime').innerText = "Uptime: " + gameState.uptime;
+
+                const chk = document.getElementById('chkAutoLoad');
+                if(gameState.autoLoad !== undefined && document.activeElement !== chk) {
+                    chk.checked = gameState.autoLoad;
+                }
 
                 if(document.getElementById('map').classList.contains('active')) drawMap();
                 if(document.getElementById('entities').classList.contains('active')) updateTable();

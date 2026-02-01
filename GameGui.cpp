@@ -16,6 +16,10 @@ std::mutex guiMutex;
 std::vector<GameEntity> globalEntities;
 HWND hListView = NULL;
 
+// Import Global Flags from dllmain.cpp
+extern std::atomic<bool> g_IsRunning;
+extern std::atomic<bool> g_IsPaused;
+
 // --- Helper Functions ---
 void AddColumn(HWND hList, int columnIndex, const char* title, int width) {
     LVCOLUMNA lvCol = { 0 };
@@ -163,6 +167,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
 // --- Thread Entry ---
 void StartGuiThread(HMODULE hDllInst) {
+    /* [DISABLED GUI CREATION]
     // 1. GENERATE A UNIQUE CLASS NAME
     // This prevents collisions with previous injections or Explorer's own windows.
     std::random_device rd;
@@ -200,14 +205,18 @@ void StartGuiThread(HMODULE hDllInst) {
         UnregisterClassA(className, hDllInst);
         return;
     }
+    if (hwnd) ShowWindow(hwnd, SW_SHOW);
+    */
 
     try {
+        //MSG msg = { 0 };
+        bool lastF3State = false;
 
-        ShowWindow(hwnd, SW_SHOW);
-
-        // 4. MESSAGE LOOP
-        MSG msg = { 0 };
+        // --- INPUT LOOP (NO GUI) ---
         while (g_IsRunning) {
+
+            // [DISABLED] Message Pump
+            /*
             while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
                 if (msg.message == WM_QUIT) {
                     g_IsRunning = false;
@@ -216,48 +225,40 @@ void StartGuiThread(HMODULE hDllInst) {
                 TranslateMessage(&msg);
                 DispatchMessageA(&msg);
             }
+            */
+
+            // 2. GLOBAL INPUT MONITORING (Kept Active)
+
+            // F4 - EXIT
+            if (GetAsyncKeyState(VK_F4) & 0x8000) {
+                g_IsRunning = false;
+            }
+
+            // F3 - PAUSE
+            bool currentF3State = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
+            if (currentF3State && !lastF3State) {
+                g_IsPaused = !g_IsPaused; // Toggle Global Pause
+                // Optional: Console feedback
+                // std::cout << (g_IsPaused ? ">>> PAUSED <<<" : ">>> RESUMED <<<") << std::endl;
+            }
+            lastF3State = currentF3State;
+
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
-    catch (const std::exception& e) {
-        // Log the error safely
-        if (FILE* f = fopen("C:\\SMM\\SMM_Crash_GUI.log", "a")) {
-            fprintf(f, "[GUI CRASH] Exception: %s\n", e.what());
-            fclose(f);
-        }
-    }
-    catch (...) {
-        if (FILE* f = fopen("C:\\SMM\\SMM_Crash_GUI.log", "a")) {
-            fprintf(f, "[GUI CRASH] Unknown exception.\n");
-            fclose(f);
-        }
-    }
-
-    // 5. CLEANUP SEQUENCE (CRITICAL)
-
-    // A. Kill the timer we set in WM_CREATE
-    KillTimer(hwnd, 1);
-
-    // B. Destroy the window
-    if (IsWindow(hwnd)) {
-        DestroyWindow(hwnd);
-    }
-
-    // C. PUMP MESSAGES until the window is truly gone.
-    // DestroyWindow() sends messages (WM_DESTROY, WM_NCDESTROY) to the queue.
-    // We must process them, or the window handle remains "active" and prevents UnregisterClass.
-    MSG cleanupMsg;
-    while (PeekMessageA(&cleanupMsg, NULL, 0, 0, PM_REMOVE)) {
-        DispatchMessageA(&cleanupMsg);
-    }
-
-    // D. Unregister the class
-    // Since we used a unique name, this is clean.
-    UnregisterClassA(className, hDllInst);
+    catch (...) {}
+    /* [DISABLED CLEANUP]
+    // KillTimer(hwnd, 1);
+    // if (IsWindow(hwnd)) DestroyWindow(hwnd);
+    // UnregisterClassA(className, hDllInst);
+    */
 }
 
 // CRITICAL FIX: Populate safe cache here (Main Thread)
 void UpdateGuiData(const std::vector<GameEntity>& newData) {
+    // DISABLED
+    return;
+
     std::lock_guard<std::mutex> lock(guiMutex);
 
     // We rebuild the list to ensure the cache is fresh

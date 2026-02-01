@@ -21,21 +21,26 @@ public:
     static std::string GetRequestedProfile();
     static void ConfirmProfileLoaded(const std::string& profileName);
 
-    // Dashboard HTML Generator
-    static std::string GetHTML();
-
 private:
+    // Internal Logic
     static void ServerThread(int port);
-    static void HandleClient(unsigned __int64 clientSocketRaw);
-    
-    // [FIX] These are now private static members so they can access startTime
+    static void HandleClient(unsigned __int64 clientSocketRaw); 
+    static std::string GetHTML();
     static std::string GenerateJSONState();
     static std::string ReadLogFileTail(int charsToRead);
 
+    // Configuration Logic
+    static void LoadConfig();
+    static void SaveConfig();
+
+    // Static State
     static std::atomic<bool> running;
     static std::thread serverThread;
+
     static std::atomic<bool> botActive;
     static std::atomic<bool> profileLoadReq;
+    static std::atomic<bool> autoLoad;
+
     static std::string currentProfile;
     static std::string pendingProfile;
     static unsigned long long startTime;

@@ -45,6 +45,59 @@
 std::atomic<bool> g_HasCrashed = false;
 ProfileLoader g_ProfileLoader;
 
+std::atomic<bool> g_IsRunning(true);
+std::atomic<bool> g_IsPaused(false);
+
+// --- STATUS FILE HELPERS ---
+const std::string STATUS_FILE = "C:\\SMM\\bot_status.txt";
+
+void UpdateStatus(const std::string& status) {
+    static std::string lastStatus = "";
+    static DWORD lastWriteTime = 0;
+    DWORD currentTime = GetTickCount();
+
+    // Write if status changed OR it's been > 2 seconds (Heartbeat)
+    if (status != lastStatus || (currentTime - lastWriteTime) > 2000) {
+        std::ofstream statusFile(STATUS_FILE, std::ios::trunc);
+        if (statusFile.is_open()) {
+            statusFile << status;
+            statusFile.close();
+            lastStatus = status;
+            lastWriteTime = currentTime;
+        }
+    }
+}
+
+std::string ReadStatus() {
+    std::ifstream statusFile(STATUS_FILE);
+    std::string line;
+    if (statusFile.is_open()) {
+        std::getline(statusFile, line);
+        statusFile.close();
+    }
+    // Trim whitespace just in case
+    line.erase(line.find_last_not_of(" \n\r\t") + 1);
+    return line;
+}
+
+int GetProcessCount(const wchar_t* procName) {
+    int count = 0;
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32W pe;
+        pe.dwSize = sizeof(pe);
+        if (Process32FirstW(hSnap, &pe)) {
+            do {
+                if (wcscmp(pe.szExeFile, procName) == 0) {
+                    count++;
+                }
+            } while (Process32NextW(hSnap, &pe));
+        }
+        CloseHandle(hSnap);
+    }
+    return count;
+}
+
 LONG WINAPI CrashHandler(EXCEPTION_POINTERS* pExceptionInfo) {
     DWORD code = pExceptionInfo->ExceptionRecord->ExceptionCode;
     // --- FIX START: FILTER EXCEPTIONS ---
@@ -99,7 +152,6 @@ LONG WINAPI CrashHandler(EXCEPTION_POINTERS* pExceptionInfo) {
 
 std::mutex g_EntityMutex;       // Create the mutex
 std::ofstream g_LogFile;        // Create the logger
-std::atomic<bool> g_IsRunning(true);
 
 extern "C" void CleanupFMapCache(int mapId, float x, float y);
 
@@ -313,6 +365,7 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
     try {
         analyzer.ReadPointer(procId, baseAddress + ZONE_TEXT, zoneNameLoc);
         analyzer.ReadString(procId, zoneNameLoc, zoneName);
+        zoneName.erase(std::remove(zoneName.begin(), zoneName.end(), ' '), zoneName.end());
         int mapId;
         int areaId;
         float top;
@@ -745,23 +798,7 @@ void MainThread(HMODULE hModule) {
     AddVectoredExceptionHandler(1, CrashHandler);
 
     g_GameState = &g_GameStateInstance;
-
-    // Create log file early
-    //
-    //if (!g_LogFile.is_open()) {
-    //    g_LogFile.open("SMM_Debug.log", std::ios::app);  // fallback to current dir
-    //}
-
     g_LogFile.open("C:\\SMM\\SMM_Debug.log", std::ios::out | std::ios::trunc);
-
-    auto log = [](const std::string& msg) {
-        // Write to global file
-        if (g_LogFile.is_open()) {
-            g_LogFile << msg << std::endl;
-            g_LogFile.flush(); // Only flush if debugging a crash, otherwise remove for speed
-        }
-        std::cout << msg << std::endl;
-        };
 
     // 1. ALLOCATE CONSOLE
     // This creates a popup cmd window so std::cout works
@@ -771,86 +808,75 @@ void MainThread(HMODULE hModule) {
     freopen_s(&fDummy, "CONOUT$", "w", stderr);
     freopen_s(&fDummy, "CONIN$", "r", stdin);
 
-    log("DLL Loaded! Console Attached.");
+    g_LogFile << "DLL Loaded! Console Attached." << std::endl;
 
     WebServer::Start(5678); // Starts web server on http://localhost:5678
-    log("Web Server started at http://localhost:8080");
-
+    g_LogFile << "Web Server started at http://localhost:8080" << std::endl;
     // Launch GUI in background thread
     std::thread guiThread(StartGuiThread, hModule);
-	//log("GUI Thread Started.");
 
     try {
         MemoryAnalyzer analyzer;
-        ULONG_PTR objMan_Direct = 0;
-        ULONG_PTR objMan_Entry = 0;
-        ULONG_PTR objMan_Base = 0;
-        ULONG_PTR entityArray = 0;
-        ULONG_PTR hashArray = 0;
-        ULONG_PTR luaEntry = 0;
-        int32_t hashArrayMaximum = 0;
-        int32_t hashArraySize = 0;
-        int32_t entityArraySize = 0;
-
-        WORD nextKey = 0;
-        int keyDuration = 0;
-
-        std::vector<PathNode> path = {};
-
         SimpleKeyboardClient kbd;
-        if (!kbd.Connect()) {
-            g_LogFile << "[ERROR] Failed to connect to driver!" << std::endl;
-            g_LogFile << "Make sure SimpleKeyboard.sys is loaded:" << std::endl;
-            g_LogFile << "  sc query SimpleKeyboard" << std::endl;
-        }
-        else {
-            g_LogFile << "[SUCCESS] Connected to driver\n" << std::endl;
-        }
+        SimpleMouseClient mouse;
+
+        // Connect Drivers once (assuming driver persistence)
+        if (!kbd.Connect()) g_LogFile << "Keyboard Driver Init Failed" << std::endl;
+        if (!mouse.Connect()) g_LogFile << "Mouse Driver Init Failed" << std::endl;
+        if (!analyzer.Connect()) g_LogFile << "Memory Driver Init Failed" << std::endl;
+
         ConsoleInput console(kbd);
-        SimpleMouseClient mouse; // Create Mouse
-        mouse.Connect();         // Connect Mouse
+        bool wasPaused = false;
 
-        // Find the Game Window
-        HWND hGameWindow = FindWindowA(NULL, "World of Warcraft");
-        MovementController pilot(kbd, mouse, hGameWindow);
+        // --- OUTER LOOP: RE-INITIALIZATION LOOP ---
+        // This loop allows the bot to "Restart" finding the process if "GAME_REBOOTED" is received
+        while (g_IsRunning) {
+            // 1. CHECK PROCESS COUNT
+            int procCount = GetProcessCount(L"WowClassic.exe");
 
-        if (!hGameWindow) {
-            g_LogFile << "Waiting for game window..." << std::endl;
-            while (!hGameWindow) {
-                hGameWindow = FindWindowA(NULL, "World of Warcraft");
+            if (procCount == 0) {
+                g_LogFile << "[System] WowClassic.exe not found." << std::endl;
+                UpdateStatus("NOT_IN_GAME");
                 Sleep(1000);
+                continue;
             }
-        }
-        mouse.SetLockWindow(hGameWindow); // Update lock window
-        g_LogFile << "Found Window: " << std::hex << hGameWindow << std::dec << std::endl;
 
-        // Bring Window to Foreground & Center Cursor ---
-        if (IsIconic(hGameWindow)) {
-            ShowWindow(hGameWindow, SW_RESTORE);
-        }
-        SetForegroundWindow(hGameWindow);
+            if (procCount > 1) {
+                g_LogFile << "[System] Multiple WowClassic.exe processes detected!" << std::endl;
+                UpdateStatus("NOT_IN_GAME"); // Signal Python to kill them
+                Sleep(1000);
+                continue;
+            }
 
-        if (!analyzer.Connect()) {
-            g_LogFile << "Failed to connect to driver!" << std::endl;
-            // Don't return, let user see error
-            Sleep(5000);
-        }
-        else {
-            // Hardcoded logic for DLL mode (since we can't easily pass args)
-            // We act as if "-i" was passed.
+            // 2. CHECK WINDOW
+            HWND hGameWindow = FindWindowA(NULL, "World of Warcraft");
+            if (!hGameWindow) {
+                g_LogFile << "[System] Window not found." << std::endl;
+                UpdateStatus("NOT_IN_GAME");
+                Sleep(1000);
+                continue;
+            }
+            
+            if (!g_IsRunning) break; 
+
+            // 3. ATTACH
+            MovementController pilot(kbd, mouse, hGameWindow);
+            mouse.SetLockWindow(hGameWindow); // Update lock window
+            // Bring Window to Foreground & Center Cursor ---
+            if (IsIconic(hGameWindow)) {
+                ShowWindow(hGameWindow, SW_RESTORE);
+            }
+            SetForegroundWindow(hGameWindow);
 
             DWORD procId = GetProcId(L"WowClassic.exe");
-            if (procId == 0) {
-                g_LogFile << "WowClassic.exe not found." << std::endl;
-            }
-            else {
-                // Driver Scan
+            if (procId != 0) {
                 baseAddress = FindMainModuleViaDriver(analyzer, procId);
 
-                // Initialize Systems
+                // --- INITIALIZE SYSTEMS ---
                 Camera cam(analyzer, mouse, procId);
                 GoapAgent agent(g_GameStateInstance, pilot, mouse, kbd, cam, analyzer, procId, baseAddress, hGameWindow);
                 InteractionController interact(pilot, mouse, kbd, cam, analyzer, procId, baseAddress, hGameWindow);
+
                 OverlayWindow overlay;
                 if (!overlay.Setup(hGameWindow)) {
                     std::cout << "Failed to create overlay." << std::endl;
@@ -858,6 +884,16 @@ void MainThread(HMODULE hModule) {
                 }
 
                 if (baseAddress != 0) {
+                    ULONG_PTR objMan_Direct = 0;
+                    ULONG_PTR objMan_Entry = 0;
+                    ULONG_PTR objMan_Base = 0;
+                    ULONG_PTR entityArray = 0;
+                    ULONG_PTR hashArray = 0;
+                    ULONG_PTR luaEntry = 0;
+                    int32_t hashArrayMaximum = 0;
+                    int32_t hashArraySize = 0;
+                    int32_t entityArraySize = 0;
+
                     // Read Offsets
                     if (analyzer.ReadPointer(procId, baseAddress + OBJECT_MANAGER_ENTRY_OFFSET, objMan_Entry))
                         g_LogFile << "Object Manager Entry: 0x" << std::hex << objMan_Entry << std::endl;
@@ -871,23 +907,17 @@ void MainThread(HMODULE hModule) {
 
                     // Update Camera
                     if (!cam.Update(baseAddress)) {
-                        std::cout << "Camera update failed." << std::endl;
+                        g_LogFile << "Camera update failed." << std::endl;
                         Sleep(1000);
                     }
-
                     console.SendDataRobust(std::wstring(L"/console autointeract 0"));
 
-                    // --- MAIN LOOP ---
                     bool isPaused = false;
                     bool lastF3State = false;
+                    bool needsReboot = false; // Flag to break the inner loop
                     std::vector<GameEntity> persistentEntityList;
                     persistentEntityList.reserve(3000);
                     std::string searchPattern = "##MAGSTR##table:";
-
-                    //std::string temp = "(-358.46, 6509.65, 116.46), (-395.20, 6475.67, 116.46), (-438.96, 6449.58, 116.46), (-482.82, 6425.01, 116.46), (-508.78, 6381.19, 116.46), (-529.89, 6335.85, 116.46), (-547.69, 6288.27, 116.46), (-568.29, 6241.66, 116.46), (-591.41, 6196.38, 116.46), (-630.93, 6164.87, 116.46), (-679.63, 6150.37, 116.46), (-728.66, 6137.20, 116.46), (-777.38, 6122.58, 116.46), (-826.50, 6112.96, 116.46), (-876.56, 6103.19, 116.46), (-926.79, 6102.21, 116.46), (-974.92, 6115.97, 116.46), (-1021.64, 6135.66, 116.46), (-1070.59, 6147.56, 116.46), (-1108.42, 6114.36, 116.46), (-1116.81, 6064.22, 116.46), (-1112.63, 6023.29, 145.06), (-1083.49, 5987.18, 164.99), (-1046.92, 5952.05, 164.99), (-1006.52, 5922.57, 164.99), (-965.26, 5892.46, 164.99), (-924.46, 5861.86, 164.99), (-915.96, 5812.52, 164.99), (-916.19, 5761.44, 164.99), (-908.62, 5711.04, 164.99), (-899.11, 5661.90, 164.99), (-855.82, 5636.18, 164.99), (-806.45, 5628.13, 164.99), (-756.05, 5619.92, 164.96), (-721.15, 5614.23, 129.60), (-682.91, 5608.00, 97.27), (-632.02, 5605.64, 97.27), (-583.31, 5593.95, 97.27), (-533.39, 5584.45, 97.27), (-483.33, 5592.52, 97.27), (-436.47, 5611.26, 97.27), (-389.20, 5630.16, 97.27), (-342.72, 5648.75, 97.27), (-295.78, 5667.52, 97.27), (-251.82, 5692.99, 97.27), (-213.12, 5725.18, 97.27), (-174.67, 5757.16, 97.27), (-125.34, 5769.89, 97.27), (-74.43, 5771.82, 97.27), (-23.49, 5774.45, 97.27), (6.49, 5734.40, 97.27), (21.24, 5686.60, 97.27), (36.31, 5637.81, 97.27), (45.13, 5588.17, 97.27), (53.44, 5538.02, 97.27), (56.05, 5487.54, 97.27), (41.91, 5438.62, 97.27), (19.79, 5392.02, 97.27), (-16.80, 5356.57, 97.27), (-51.41, 5319.75, 97.27), (-67.72, 5271.60, 97.30), (-54.05, 5223.70, 107.79), (-25.12, 5182.87, 107.79), (12.66, 5148.95, 107.79), (49.14, 5113.51, 107.79), (99.49, 5106.84, 107.79), (150.01, 5100.33, 107.79), (200.39, 5094.32, 107.79), (251.19, 5090.80, 107.79), (302.10, 5089.47, 107.79), (351.49, 5080.94, 107.79), (400.78, 5072.43, 107.79), (450.40, 5063.53, 107.79), (497.86, 5047.46, 107.79), (546.30, 5031.06, 107.79), (593.44, 5014.39, 107.79), (643.58, 5005.99, 107.79), (693.62, 5015.84, 107.79), (742.61, 5026.80, 107.79), (791.43, 5037.73, 107.79), (841.04, 5041.72, 98.02), (866.62, 5066.11, 62.65), (894.69, 5093.29, 31.05), (928.30, 5131.29, 31.05), (948.19, 5177.60, 31.05), (959.67, 5226.44, 31.05), (960.40, 5276.46, 31.05), (949.54, 5325.44, 31.05), (915.60, 5363.38, 31.05), (870.56, 5386.79, 31.05), (820.35, 5393.04, 31.05), (770.97, 5405.88, 31.05), (726.76, 5429.27, 31.05), (677.55, 5442.15, 31.05), (627.63, 5438.95, 31.05), (577.35, 5430.87, 31.05), (527.26, 5425.94, 31.05), (495.91, 5466.19, 31.05), (463.93, 5505.60, 31.05), (433.48, 5538.86, 53.98), (398.98, 5569.29, 75.79), (364.08, 5605.63, 75.79), (354.80, 5655.29, 75.79), (346.35, 5705.41, 75.79), (335.31, 5754.00, 69.02), (326.02, 5803.92, 69.02), (354.10, 5845.89, 69.02), (392.51, 5879.17, 69.02), (432.32, 5909.69, 73.53), (466.07, 5947.63, 73.53), (496.15, 5988.32, 73.53), (533.36, 6022.97, 73.53), (572.06, 6055.46, 73.53), (610.36, 6087.62, 73.53), (649.48, 6120.47, 73.53), (688.10, 6152.90, 73.53), (726.40, 6185.06, 73.53), (761.76, 6220.58, 73.53), (758.20, 6270.69, 73.53), (742.82, 6319.40, 73.53), (738.70, 6369.91, 73.53), (739.20, 6419.92, 73.53), (739.70, 6469.94, 73.53), (740.20, 6519.95, 73.53), (740.70, 6570.99, 73.53), (749.73, 6620.66, 73.53), (770.46, 6666.99, 73.53), (776.16, 6717.08, 73.53), (788.34, 6766.65, 73.53), (800.30, 6815.34, 73.53), (813.85, 6864.03, 73.53), (844.40, 6904.35, 73.53), (878.85, 6941.42, 73.53), (913.24, 6978.05, 73.53), (927.41, 7026.19, 73.53), (923.96, 7077.05, 73.53), (882.31, 7105.08, 73.53), (832.27, 7114.13, 73.53), (783.90, 7100.69, 73.53), (733.14, 7095.72, 73.53), (682.66, 7089.52, 73.53), (634.71, 7074.09, 73.53), (584.68, 7066.22, 73.53), (536.03, 7050.79, 73.53), (492.98, 7024.58, 73.53), (450.26, 6998.57, 73.53), (402.57, 6980.30, 73.53), (352.86, 6968.60, 73.53), (302.46, 6962.74, 73.53), (252.19, 6962.96, 73.53), (202.11, 6963.19, 73.53), (151.04, 6963.41, 73.53), (100.86, 6963.64, 73.53), (49.79, 6963.87, 73.53), (-0.26, 6972.52, 73.53), (-50.24, 6976.64, 73.53), (-100.09, 6980.74, 73.53), (-150.18, 6988.99, 73.53), (-198.67, 7004.94, 73.53), (-247.72, 7018.33, 73.53), (-298.02, 7014.87, 73.53), (-320.93, 6970.22, 73.53), (-334.14, 6921.07, 73.53)";
-                    //FollowPath(530, temp, true, true);
-
-                    g_LogFile << g_GameState->player.position.x << " " << g_GameState->player.position.y << " " << g_GameState->player.position.z << " " << std::endl;
 
                     RECT rect;
                     GetClientRect(hGameWindow, &rect);
@@ -895,30 +925,64 @@ void MainThread(HMODULE hModule) {
                     ClientToScreen(hGameWindow, &center);
                     SetCursorPos(center.x, center.y);
 
-                    while (!(GetAsyncKeyState(VK_F4) & 0x8000)) {
-                        overlay.ProcessMessages();
+                    g_LogFile << g_GameState->player.position.x << " " << g_GameState->player.position.y << " " << g_GameState->player.position.z << " " << std::endl;
 
-                        // 1. Pause Toggle (F3)
-                        bool currentF3State = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
-                        if (currentF3State && !lastF3State) {
-                            isPaused = !isPaused;
-                            if (isPaused) {
+                    // --- INNER LOOP: GAME LOOP ---
+                    // Exits if F4 is pressed (g_IsRunning = false) OR Reboot needed
+                    while (g_IsRunning && !needsReboot) {
+                        // --- PAUSE LOGIC ---
+                        if (g_IsPaused) {
+                            if (!wasPaused) {
                                 std::cout << ">>> PAUSED <<<" << std::endl;
                                 pilot.Stop();
+                                wasPaused = true;
                             }
-                            else {
+                            Sleep(100);
+                            continue; // Skip logic while paused
+                        }
+                        else {
+                            if (wasPaused) {
                                 std::cout << ">>> RESUMED <<<" << std::endl;
+                                wasPaused = false;
                             }
                         }
-                        lastF3State = currentF3State;
+
+                        UpdateStatus("IN_GAME");
 
                         // 2. Refresh Pointers & Entities
                         analyzer.ReadPointer(procId, baseAddress + OBJECT_MANAGER_OFFSET, objMan_Direct);
                         if (objMan_Direct == 0x0) {
-                            g_LogFile << "Not in game" << std::endl;
-                            Sleep(60000);
-                            break;
+                            g_LogFile << "Not in game detected. Entering Wait Mode..." << std::endl;
+                            UpdateStatus("NOT_IN_GAME");
+                            DWORD lastCheckTime = 0;
+
+                            // WAIT LOOP
+                            while (g_IsRunning) {
+
+                                // Check status file every 1000ms
+                                if (GetTickCount() - lastCheckTime > 1000) {
+                                    std::string cmd = ReadStatus();
+
+                                    if (cmd == "GAME_REBOOTED") {
+                                        std::cout << "Received GAME_REBOOTED." << std::endl;
+                                        needsReboot = true;
+                                        break;
+                                    }
+                                    else if (cmd == "GAME_OK") {
+                                        std::cout << "Received GAME_OK." << std::endl;
+                                        break;
+                                    }
+                                    lastCheckTime = GetTickCount();
+                                }
+
+                                // Sleep shortly to keep loop responsive
+                                Sleep(10);
+                            }
+
+                            if (needsReboot) break; // Break Inner Loop
+                            continue; // Continue Inner Loop (Check mem again)
                         }
+
                         analyzer.ReadPointer(procId, objMan_Entry + OBJECT_MANAGER_FIRST_OBJECT_OFFSET, objMan_Base);
                         analyzer.ReadPointer(procId, objMan_Base + ENTITY_ARRAY_OFFSET, entityArray);
                         analyzer.ReadInt32(procId, objMan_Base + ENTITY_ARRAY_SIZE_OFFSET, entityArraySize);
@@ -940,7 +1004,6 @@ void MainThread(HMODULE hModule) {
                         LuaAnchor::ReadLuaData(analyzer, procId, searchPattern, luaEntry, worldmap_db);
 
                         // Update UI / Overlay
-                        overlay.UpdatePosition();
                         RECT clientRect;
                         GetClientRect(hGameWindow, &clientRect);
                         int width = clientRect.right - clientRect.left;
@@ -981,7 +1044,6 @@ void MainThread(HMODULE hModule) {
                         if (!isPaused) {
                             try {
                                 auto* activeProfile = g_ProfileLoader.GetActiveProfile();
-                                //g_LogFile << g_ProfileSettings.herbalismEnabled << std::endl;
                                 if (activeProfile) {
                                     // Enforce Focus
                                     if (GetForegroundWindow() != hGameWindow) SetForegroundWindow(hGameWindow);
@@ -1000,29 +1062,19 @@ void MainThread(HMODULE hModule) {
                                     if ((g_GameState->player.bagFreeSlots <= 2)) {
                                         // If 30 minutes since last resupply mail items
                                         if (((g_GameState->globalState.bagEmptyTime != -1) && (GetTickCount() - g_GameState->globalState.bagEmptyTime < 1800000) && g_ProfileSettings.mailingEnabled) || g_GameState->interactState.mailing) {
-                                            //MailItems(530, Vector3{ 258.91f, 7870.72f, 23.01f }, 182567);
                                             MailItems();
                                         }
-                                        //else if (!g_GameState->interactState.interactActive) {
                                         else {
-                                            //Resupply(530, 1, Vector3{ 228.16f, 7933.88f, 25.08f }, 18245);
                                             Repair();
                                         }
                                     }
                                     // if (g_GameState->player.needRepair && !g_GameState->interactState.interactActive) {
                                     if (g_GameState->player.needRepair) {
-                                        // Repair(530, 1, Vector3{ 323.09f, 7839.83f, 22.09f }, 19383);
                                         Repair();
                                     }
                                     agent.Tick();
                                 }
                                 else {
-                                    // --- Status update while waiting ---
-                                    // static DWORD lastPrint = 0;
-                                    // if (GetTickCount() - lastPrint > 3000) {
-                                    //     std::cout << "[System] Waiting for profile to load..." << std::endl;
-                                    //     lastPrint = GetTickCount();
-                                    // }
                                     Sleep(100); // Sleep longer when idle to save CPU
                                 }
                             }
@@ -1032,22 +1084,15 @@ void MainThread(HMODULE hModule) {
                         }
                         Sleep(10); // Prevent high CPU usage
                     }
-
                     pilot.Stop();
-
-                    if (g_LogFile.is_open()) {
-                        g_LogFile.close();
-                    }
-                    //FreeLibraryAndExitThread(hModule, 0);
-
-                    g_IsRunning = false;
-                    RaiseException(0xDEADBEEF, 0, 0, nullptr); // Forcibly exit all threads (including GUI)
-
-                    Vector3 lastPoint = {};
                 }
             }
+            // Safety sleep between re-init attempts
+            Sleep(2000);
         }
+        RaiseException(0xDEADBEEF, 0, 0, nullptr); // Forcibly exit all threads (including GUI)
     }
+
     catch (const std::exception& ex) {
         std::string msg = std::string("EXCEPTION: ") + ex.what();
         g_LogFile << msg << std::endl;
@@ -1056,19 +1101,10 @@ void MainThread(HMODULE hModule) {
         g_LogFile << "UNKNOWN EXCEPTION CAUGHT" << std::endl;
     }
 
-    log("Unloading...");
-
-    // 2. Clean up Console Streams
     if (fDummy) fclose(fDummy);
     fclose(stdout);
     fclose(stderr);
     fclose(stdin);
-
-    // 3. Detach Console Window
-    //FreeConsole();
-
-    // 4. Unload DLL safely
-    // This removes the DLL from Explorer's memory, allowing you to re-inject.
     FreeLibraryAndExitThread(hModule, 0);
 }
 

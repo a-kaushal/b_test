@@ -4,6 +4,7 @@
 #include <vector>
 #include <cmath>
 #include <iostream>
+#include <random>
 
 // --- MOUSE SPECIFIC DEFINITIONS ---
 #define MOUSE_SIGNATURE_MAGIC 0x4D4F5553  // "MOUS"
@@ -319,6 +320,42 @@ public:
         if (x > br.x - margin) x = br.x - margin;
         if (y < tl.y + margin) y = tl.y + margin;
         if (y > br.y - margin) y = br.y - margin;
+    }
+
+    // Moves mouse to a random position within the inner 60% of the window
+    // Used to find a "safe spot" to click if the center is obstructed by UI
+    void RandomizePosition() {
+        if (!m_LockWindow) return;
+
+        RECT rect;
+        GetClientRect(m_LockWindow, &rect);
+        int width = rect.right - rect.left;
+        int height = rect.bottom - rect.top;
+
+        // Define a "Safe Box" (20% padding from edges to avoid sidebars/action bars)
+        int minX = (int)(width * 0.2);
+        int maxX = (int)(width * 0.8);
+        int minY = (int)(height * 0.2);
+        int maxY = (int)(height * 0.7); // Avoid bottom action bars
+
+        // Random generator
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        std::uniform_int_distribution<> disX(minX, maxX);
+        std::uniform_int_distribution<> disY(minY, maxY);
+
+        int randX = disX(gen);
+        int randY = disY(gen);
+
+        // Convert to Screen Coords
+        POINT pt = { randX, randY };
+        ClientToScreen(m_LockWindow, &pt);
+
+        if (!g_LogFile.is_open()) g_LogFile.open("SMM_Debug.log", std::ios::app);
+        g_LogFile << "[MOUSE] UI Blocked? Randomizing Position to (" << randX << ", " << randY << ")" << std::endl;
+
+        // Use your existing MoveAbsolute logic
+        MoveAbsolute(pt.x, pt.y);
     }
 
     void MoveToCenter() {
