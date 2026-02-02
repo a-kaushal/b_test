@@ -52,7 +52,7 @@ private:
         if (estimatedHolyPower > 5) estimatedHolyPower = 5;
         if (estimatedHolyPower < 0) estimatedHolyPower = 0;
 
-        g_LogFile << "[COMBAT] Cast " << std::string(spell.begin(), spell.end()) << " (Est HP: " << estimatedHolyPower << ")" << std::endl;
+        //g_LogFile << "[COMBAT] Cast " << std::string(spell.begin(), spell.end()) << " (Est HP: " << estimatedHolyPower << ")" << std::endl;
     }
 
 public:

@@ -1165,7 +1165,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
     AStarAttempt attempts[] = {
         // Base=4.0f means near the target we move in 4yd steps (Very precise).
         // Fixed coarse grid
-        { 4.0f, false,  10000, "Coarse Fixed",     true },
+        { 4.0f,  true,  10000, "Coarse Fixed",     true },
 
         { 2.0f,  false,  40000, "Standard Dynamic", true },
 
@@ -1205,7 +1205,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
     //}
 
     // --- ESCAPE LOGIC: USE UNIVERSAL SPIRAL ---
-    if (!globalNavMesh.IsClearSafePoint(actualStart, mapId)) {
+    /*if (!globalNavMesh.IsClearSafePoint(actualStart, mapId)) {
         if (DEBUG_PATHFINDING) g_LogFile << "[Flight] Start point is inside obstacle safety margin (" << AGENT_RADIUS << "yd). Seeking escape..." << std::endl;
 
         Vector3 safeStart = globalNavMesh.FindNearestSafePoint(actualStart, mapId, false);
@@ -1220,7 +1220,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         else {
             if (DEBUG_PATHFINDING) g_LogFile << "[Flight] ! Could not find a safe escape point nearby." << std::endl;
         }
-    }
+    }*/
 
     // FLIGHT POINT CHECK WITH A*
     //if (!globalNavMesh.CheckFlightPoint(actualStart, mapId, false)) {
@@ -1293,6 +1293,141 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         }
     }
 
+    Vector3 flightGoal = actualEnd; // The target for the Flight A*
+    Vector3 groundStart = actualStart; // The start for the Flight A*
+    std::vector<PathNode> groundApproach; // The walking path from landing to final goal
+    std::vector<PathNode> launchApproach; // The walking path from start to launch spot
+
+    // -------------------------------------------------------------------------
+    // 1. UNREACHABLE START RESCUE (The Logic You Requested)
+    // -------------------------------------------------------------------------
+
+    // Check if the final destination is valid for flight
+    bool isGoalFlyable = globalNavMesh.CheckFlightPoint(actualStart, mapId, true); // Allow ground proximity
+
+    if (!isGoalFlyable) {
+        if (DEBUG_PATHFINDING) g_LogFile << "[Flight] Start is NOT valid for flight (Indoor/Blocked). Searching for Start Flight Spot..." << std::endl;
+
+        // Spiral Search settings
+        const float MAX_LANDING_SEARCH = 60.0f; // Look up to 100y away
+        const float STEP_SIZE = 4.0f;
+        bool foundLanding = false;
+
+        // Spiral loop
+        for (float r = STEP_SIZE; r <= MAX_LANDING_SEARCH; r += STEP_SIZE) {
+            if (foundLanding) break;
+
+            // Check 8 directions
+            Vector3 offsets[] = {
+                Vector3(r,0,0), Vector3(-r,0,0), Vector3(0,r,0), Vector3(0,-r,0),
+                Vector3(r,r,0), Vector3(-r,-r,0), Vector3(r,-r,0), Vector3(-r,r,0)
+            };
+
+            for (const auto& off : offsets) {
+                Vector3 candidate = actualStart + off;
+
+                // 1. Snap Candidate to Ground (Crucial: Must be walkable)
+                float gZ = globalNavMesh.GetLocalGroundHeight(candidate);
+                if (gZ <= -90000.0f) continue; // No ground here
+                candidate.z = gZ + 1.0f;       // Stand on ground
+
+                // 2. Is this spot Flyable? (Can we land here?)
+                // We check if we can fly at 'Head Height' (gZ + 2.0f) or 'Hover Height' (gZ + 5.0f)
+                if (CanFlyAt(mapId, candidate.x, candidate.y, candidate.z + 2.0f)) {
+
+                    // 3. Is it connected to the Goal? (Ground Path Check)
+                    // We calculate path FROM Landing TO Goal (as you requested)
+                    std::vector<PathNode> approach = FindPath(candidate, actualStart, ignoreWater);
+
+                    if (!approach.empty() && approach.back().pos.Dist3D(actualStart) < 5.0f) {
+                        // SUCCESS!
+                        groundStart = candidate;
+                        // Lift flight goal slightly to ensure we don't crash into terrain while landing
+                        groundStart.z += 2.0f;
+                        launchApproach = approach;
+                        foundLanding = true;
+
+                        if (DEBUG_PATHFINDING) {
+                            g_LogFile << "[Flight] ✓ Found Launch Spot at (" << candidate.x << ", " << candidate.y << ")!" << std::endl;
+                            g_LogFile << "         Ground path length: " << approach.size() << " nodes." << std::endl;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!foundLanding) {
+            if (DEBUG_PATHFINDING) g_LogFile << "[Flight] ⚠ Could not find any connected launch spot nearby. A* might fail." << std::endl;
+        }
+    }
+    // -------------------------------------------------------------------------
+
+    // -------------------------------------------------------------------------
+    // 1. UNREACHABLE GOAL RESCUE (The Logic You Requested)
+    // -------------------------------------------------------------------------
+
+    // Check if the final destination is valid for flight
+    isGoalFlyable = globalNavMesh.CheckFlightPoint(actualEnd, mapId, true); // Allow ground proximity
+
+    if (!isGoalFlyable) {
+        if (DEBUG_PATHFINDING) g_LogFile << "[Flight] Destination is NOT valid for flight (Indoor/Blocked). Searching for Landing Spot..." << std::endl;
+
+        // Spiral Search settings
+        const float MAX_LANDING_SEARCH = 60.0f; // Look up to 100y away
+        const float STEP_SIZE = 4.0f;
+        bool foundLanding = false;
+
+        // Spiral loop
+        for (float r = STEP_SIZE; r <= MAX_LANDING_SEARCH; r += STEP_SIZE) {
+            if (foundLanding) break;
+
+            // Check 8 directions
+            Vector3 offsets[] = {
+                Vector3(r,0,0), Vector3(-r,0,0), Vector3(0,r,0), Vector3(0,-r,0),
+                Vector3(r,r,0), Vector3(-r,-r,0), Vector3(r,-r,0), Vector3(-r,r,0)
+            };
+
+            for (const auto& off : offsets) {
+                Vector3 candidate = actualEnd + off;
+
+                // 1. Snap Candidate to Ground (Crucial: Must be walkable)
+                float gZ = globalNavMesh.GetLocalGroundHeight(candidate);
+                if (gZ <= -90000.0f) continue; // No ground here
+                candidate.z = gZ + 1.0f;       // Stand on ground
+
+                // 2. Is this spot Flyable? (Can we land here?)
+                // We check if we can fly at 'Head Height' (gZ + 2.0f) or 'Hover Height' (gZ + 5.0f)
+                if (CanFlyAt(mapId, candidate.x, candidate.y, candidate.z + 2.0f)) {
+
+                    // 3. Is it connected to the Goal? (Ground Path Check)
+                    // We calculate path FROM Landing TO Goal (as you requested)
+                    std::vector<PathNode> approach = FindPath(candidate, actualEnd, ignoreWater);
+
+                    if (!approach.empty() && approach.back().pos.Dist3D(actualEnd) < 5.0f) {
+                        // SUCCESS!
+                        flightGoal = candidate;
+                        // Lift flight goal slightly to ensure we don't crash into terrain while landing
+                        flightGoal.z += 2.0f;
+                        groundApproach = approach;
+                        foundLanding = true;
+
+                        if (DEBUG_PATHFINDING) {
+                            g_LogFile << "[Flight] ✓ Found Landing Spot at (" << candidate.x << ", " << candidate.y << ")!" << std::endl;
+                            g_LogFile << "         Ground path length: " << approach.size() << " nodes." << std::endl;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!foundLanding) {
+            if (DEBUG_PATHFINDING) g_LogFile << "[Flight] ⚠ Could not find any connected landing spot nearby. A* might fail." << std::endl;
+        }
+    }
+    // -------------------------------------------------------------------------
+
     // 2. TRY DIRECT PATH FIRST (Optimization)
     if (DEBUG_PATHFINDING) g_LogFile << "Checking direct path..." << std::endl;
 
@@ -1300,79 +1435,100 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
     // Pass isFlying flag to collision check
     Vector3 failPos;
     FlightSegmentResult directCheck = globalNavMesh.CheckFlightSegmentDetailed(
-        actualStart, actualEnd, mapId, failPos, isFlying, true, true);
+        groundStart, flightGoal, mapId, failPos, isFlying, true, true);
 
     if (directCheck == SEGMENT_VALID) {
-        if (DEBUG_PATHFINDING) {
-            g_LogFile << "✓ Direct path clear!" << std::endl;
-        }
-        return { PathNode(actualStart, PATH_AIR), PathNode(actualEnd, PATH_AIR) };
-    }
-    else if (directCheck == SEGMENT_NO_FLY_ZONE) {
-        // --- SMART RECOVERY FOR NO-FLY ZONES ---
-        if (DEBUG_PATHFINDING) {
-            g_LogFile << "⚠ Direct path hit No-Fly Zone at (" << failPos.x << ", " << failPos.y << ", " << failPos.z << ")" << std::endl;
-            g_LogFile << "  Attempting to find nearest valid flyable point..." << std::endl;
-        }
+        if (DEBUG_PATHFINDING) g_LogFile << "✓ Direct path clear!" << std::endl;
 
-        Vector3 detourPoint = globalNavMesh.FindNearestFlyablePoint(failPos, mapId);
+        std::vector<PathNode> path;
 
-        // If we found a valid detour point (not 0,0,0)
-        if (detourPoint.x != 0 || detourPoint.y != 0 || detourPoint.z != 0) {
-            if (DEBUG_PATHFINDING) {
-                g_LogFile << "  Found detour point: (" << detourPoint.x << ", " << detourPoint.y << ", " << detourPoint.z << ")" << std::endl;
-                g_LogFile << "  Validating legs: Start->Detour and Detour->End..." << std::endl;
-            }
-
-            // Validate the legs
-            if (globalNavMesh.CheckFlightSegment(actualStart, detourPoint, mapId, isFlying, true, true) &&
-                globalNavMesh.CheckFlightSegment(detourPoint, actualEnd, mapId, isFlying, true, true)) {
-
-                if (DEBUG_PATHFINDING) {
-                    g_LogFile << "✓ Smart Recovery Successful! Created detour path." << std::endl;
-                }
-                return { PathNode(actualStart, PATH_AIR), PathNode(detourPoint, PATH_AIR), PathNode(actualEnd, PATH_AIR) };
-            }
-            else {
-                // --- NEW LOGIC: DETOUR LEGS BLOCKED (CHECK END POINT) ---
-                if (DEBUG_PATHFINDING) {
-                    g_LogFile << "  ✗ Detour legs were blocked. Checking if End Point is the issue..." << std::endl;
-                }
-
-                // Check if the destination itself is inside a No-Fly Zone
-                if (!CanFlyAt(mapId, actualEnd.x, actualEnd.y, actualEnd.z)) {
-                    if (DEBUG_PATHFINDING) {
-                        g_LogFile << "  ! END POINT is in a No-Fly Zone. Searching for nearest safe destination..." << std::endl;
-                    }
-
-                    Vector3 safeEnd = globalNavMesh.FindNearestFlyablePoint(actualEnd, mapId);
-
-                    // If we found a safe replacement for the destination
-                    if (safeEnd.x != 0 || safeEnd.y != 0 || safeEnd.z != 0) {
-                        if (DEBUG_PATHFINDING) {
-                            g_LogFile << "  Found safe destination: (" << safeEnd.x << ", " << safeEnd.y << ", " << safeEnd.z << ")" << std::endl;
-                            g_LogFile << "  Retrying with safe destination..." << std::endl;
-                        }
-
-                        // Retry the path: Start -> Detour -> SafeEnd
-                        if (globalNavMesh.CheckFlightSegment(actualStart, detourPoint, mapId, isFlying, true, true) &&
-                            globalNavMesh.CheckFlightSegment(detourPoint, safeEnd, mapId, isFlying, true, true)) {
-
-                            if (DEBUG_PATHFINDING) {
-                                g_LogFile << "✓ Smart Recovery (Modified End) Successful!" << std::endl;
-                            }
-                            return { PathNode(actualStart, PATH_AIR), PathNode(detourPoint, PATH_AIR), PathNode(safeEnd, PATH_AIR) };
-                        }
-                    }
-                }
-            }
+        // APPEND LAUNCH APPROACH
+        if (!launchApproach.empty()) {
+            // Add transition node (Launching)
+            path.insert(path.end(), launchApproach.begin(), launchApproach.end());
+            path.push_back(PathNode(groundStart, PATH_GROUND));
         }
         else {
-            if (DEBUG_PATHFINDING) {
-                g_LogFile << "  ✗ Could not find a valid flyable point nearby." << std::endl;
-            }
+            path.push_back(PathNode(groundStart, PATH_AIR));
         }
+
+        // APPEND GROUND APPROACH
+        if (!groundApproach.empty()) {
+            // Add transition node (Landing)
+            path.push_back(PathNode(flightGoal, PATH_GROUND));
+            path.insert(path.end(), groundApproach.begin(), groundApproach.end());
+        }
+        else {
+            path.push_back(PathNode(flightGoal, PATH_AIR));
+        }
+        return path;
     }
+    //else if (directCheck == SEGMENT_NO_FLY_ZONE) {
+    //    // --- SMART RECOVERY FOR NO-FLY ZONES ---
+    //    if (DEBUG_PATHFINDING) {
+    //        g_LogFile << "⚠ Direct path hit No-Fly Zone at (" << failPos.x << ", " << failPos.y << ", " << failPos.z << ")" << std::endl;
+    //        g_LogFile << "  Attempting to find nearest valid flyable point..." << std::endl;
+    //    }
+
+    //    Vector3 detourPoint = globalNavMesh.FindNearestFlyablePoint(failPos, mapId);
+
+    //    // If we found a valid detour point (not 0,0,0)
+    //    if (detourPoint.x != 0 || detourPoint.y != 0 || detourPoint.z != 0) {
+    //        if (DEBUG_PATHFINDING) {
+    //            g_LogFile << "  Found detour point: (" << detourPoint.x << ", " << detourPoint.y << ", " << detourPoint.z << ")" << std::endl;
+    //            g_LogFile << "  Validating legs: Start->Detour and Detour->End..." << std::endl;
+    //        }
+
+    //        // Validate the legs
+    //        if (globalNavMesh.CheckFlightSegment(actualStart, detourPoint, mapId, isFlying, true, true) &&
+    //            globalNavMesh.CheckFlightSegment(detourPoint, flightGoal, mapId, isFlying, true, true)) {
+
+    //            if (DEBUG_PATHFINDING) {
+    //                g_LogFile << "✓ Smart Recovery Successful! Created detour path." << std::endl;
+    //            }
+    //            return { PathNode(actualStart, PATH_AIR), PathNode(detourPoint, PATH_AIR), PathNode(flightGoal, PATH_AIR) };
+    //        }
+    //        else {
+    //            // --- NEW LOGIC: DETOUR LEGS BLOCKED (CHECK END POINT) ---
+    //            if (DEBUG_PATHFINDING) {
+    //                g_LogFile << "  ✗ Detour legs were blocked. Checking if End Point is the issue..." << std::endl;
+    //            }
+
+    //            // Check if the destination itself is inside a No-Fly Zone
+    //            if (!CanFlyAt(mapId, flightGoal.x, flightGoal.y, actualEnd.z)) {
+    //                if (DEBUG_PATHFINDING) {
+    //                    g_LogFile << "  ! END POINT is in a No-Fly Zone. Searching for nearest safe destination..." << std::endl;
+    //                }
+
+    //                Vector3 safeEnd = globalNavMesh.FindNearestFlyablePoint(actualEnd, mapId);
+
+    //                // If we found a safe replacement for the destination
+    //                if (safeEnd.x != 0 || safeEnd.y != 0 || safeEnd.z != 0) {
+    //                    if (DEBUG_PATHFINDING) {
+    //                        g_LogFile << "  Found safe destination: (" << safeEnd.x << ", " << safeEnd.y << ", " << safeEnd.z << ")" << std::endl;
+    //                        g_LogFile << "  Retrying with safe destination..." << std::endl;
+    //                    }
+
+    //                    // Retry the path: Start -> Detour -> SafeEnd
+    //                    if (globalNavMesh.CheckFlightSegment(actualStart, detourPoint, mapId, isFlying, true, true) &&
+    //                        globalNavMesh.CheckFlightSegment(detourPoint, safeEnd, mapId, isFlying, true, true)) {
+
+    //                        if (DEBUG_PATHFINDING) {
+    //                            g_LogFile << "✓ Smart Recovery (Modified End) Successful!" << std::endl;
+    //                        }
+    //                        return { PathNode(actualStart, PATH_AIR), PathNode(detourPoint, PATH_AIR), PathNode(safeEnd, PATH_AIR) };
+    //                    }
+    //                }
+    //            }
+    //        }
+    //    }
+    //    else {
+    //        if (DEBUG_PATHFINDING) {
+    //            g_LogFile << "  ✗ Could not find a valid flyable point nearby." << std::endl;
+    //        }
+    //    }
+    //}
+
 
     // Pre-allocate containers
     std::vector<FlightNode3D> nodes;
@@ -1397,8 +1553,8 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             g_LogFile << "   BaseGrid: " << att.baseGridSize << " | Dynamic: " << att.dynamic << std::endl;
         }
 
-        float currentSearchRadius = (actualStart.Dist3D(actualEnd) * 0.8f) + 200.0f; // Increased search radius slightly
-        Vector3 midpoint = (actualStart + actualEnd) * 0.5f;
+        float currentSearchRadius = (groundStart.Dist3D(flightGoal) * 0.8f) + 200.0f; // Increased search radius slightly
+        Vector3 midpoint = (groundStart + flightGoal) * 0.5f;
 
         // NOTE: GridKey ALWAYS uses baseGridSize for hashing to ensure nodes align correctly 
         // regardless of the step size used to reach them.
@@ -1422,7 +1578,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             size_t idx = nodes.size();
             nodes.emplace_back();
             nodes[idx].pos = snappedPos;
-            nodes[idx].hScore = snappedPos.Dist3D(actualEnd);
+            nodes[idx].hScore = snappedPos.Dist3D(flightGoal);
             gridToIndex[key] = idx;
             return idx;
             };
@@ -1430,19 +1586,19 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         // Initialize Start/End (Keep existing logic)
         size_t startIdx = nodes.size();
         nodes.emplace_back();
-        nodes[startIdx].pos = actualStart;
+        nodes[startIdx].pos = groundStart;
         nodes[startIdx].gScore = 0.0f;
-        nodes[startIdx].hScore = actualStart.Dist3D(actualEnd);
-        gridToIndex[GridKey(actualStart, att.baseGridSize)] = startIdx; // Hash with Base Grid
+        nodes[startIdx].hScore = groundStart.Dist3D(flightGoal);
+        gridToIndex[GridKey(groundStart, att.baseGridSize)] = startIdx; // Hash with Base Grid
 
         size_t endIdx = nodes.size();
         nodes.emplace_back();
-        nodes[endIdx].pos = actualEnd;
+        nodes[endIdx].pos = flightGoal;
         nodes[endIdx].hScore = 0.0f;
 
-        bool endIsValid = globalNavMesh.CheckFlightPoint(actualEnd, mapId, true);
+        bool endIsValid = globalNavMesh.CheckFlightPoint(flightGoal, mapId, true);
         if (endIsValid) {
-            gridToIndex[GridKey(actualEnd, att.baseGridSize)] = endIdx;
+            gridToIndex[GridKey(flightGoal, att.baseGridSize)] = endIdx;
         }
 
         openSet.push(startIdx);
@@ -1459,7 +1615,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             {1,0,-1}, {-1,0,-1}, {0,1,-1}, {0,-1,-1}
         };
 
-        float totalDistToGoal = actualStart.Dist3D(actualEnd);
+        float totalDistToGoal = groundStart.Dist3D(flightGoal);
         if (totalDistToGoal > 2000.0f) att.maxNodes *= 16;
         else if (totalDistToGoal > 1000.0f) att.maxNodes *= 8;
         else if (totalDistToGoal > 200.0f) att.maxNodes *= 4;
@@ -1474,7 +1630,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             iterations++;
 
             FlightNode3D& current = nodes[currentIdx];
-            float distToGoal = current.pos.Dist3D(actualEnd);
+            float distToGoal = current.pos.Dist3D(flightGoal);
 
             // --- DYNAMIC STEP SIZING LOGIC ---
             float currentStep = att.baseGridSize;
@@ -1482,8 +1638,8 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             if (att.dynamic) {
                 // If far away, use larger steps to cover ground quickly.
                 // Multipliers must be integers so nodes align with the base grid.
-                bool nearStart = current.pos.Dist3D(actualStart) < 20.0f;
-                bool nearEnd = current.pos.Dist3D(actualEnd) < 20.0f;
+                bool nearStart = current.pos.Dist3D(groundStart) < 20.0f;
+                bool nearEnd = current.pos.Dist3D(flightGoal) < 20.0f;
                 //if (nearStart || nearEnd) {
                     //currentStep /= 2.0f;  // Causes issues for some reason
                 //}
@@ -1501,7 +1657,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             // Check connection to goal (Keep existing logic)
             if (currentIdx == endIdx || distToGoal < (currentStep * 1.5f)) { // Adjusted threshold based on step
                 Vector3 failPos;
-                if (globalNavMesh.CheckFlightSegmentDetailed(current.pos, actualEnd, mapId, failPos, isFlying, false) == SEGMENT_VALID) {
+                if (globalNavMesh.CheckFlightSegmentDetailed(current.pos, flightGoal, mapId, failPos, isFlying, false) == SEGMENT_VALID) {
                     if (currentIdx != endIdx) {
                         nodes[endIdx].parentIdx = currentIdx;
                         nodes[endIdx].gScore = current.gScore + distToGoal;
@@ -1558,7 +1714,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         if (goalIdx < 0 && !closedSet.empty()) {
             float closestDist = 1e9f;
             for (int idx : closedSet) {
-                float d = nodes[idx].pos.Dist3D(actualEnd);
+                float d = nodes[idx].pos.Dist3D(flightGoal);
                 if (d < closestDist) {
                     closestDist = d;
                     bestPartialIdx = idx;
@@ -1586,7 +1742,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
                 float closestDist = 1e9f;
                 int closestIdx = -1;
                 for (int idx : closedSet) {
-                    float d = nodes[idx].pos.Dist3D(actualEnd);
+                    float d = nodes[idx].pos.Dist3D(flightGoal);
                     if (d < closestDist) {
                         closestDist = d;
                         closestIdx = idx;
@@ -1598,12 +1754,12 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
                         << nodes[closestIdx].pos.y << "," << nodes[closestIdx].pos.z << ")" << std::endl;
                     g_LogFile << "   - Distance from closest to goal: " << closestDist << "" << std::endl;
 
-                    g_LogFile << nodes[closestIdx].pos.x << " " << nodes[closestIdx].pos.y << " " << nodes[closestIdx].pos.z << " | " << actualEnd.x << " " << actualEnd.y << " " << actualEnd.z << " " << std::endl;
+                    g_LogFile << nodes[closestIdx].pos.x << " " << nodes[closestIdx].pos.y << " " << nodes[closestIdx].pos.z << " | " << flightGoal.x << " " << flightGoal.y << " " << flightGoal.z << " " << std::endl;
 
                     // Try to connect them
                     Vector3 failPos;
                     FlightSegmentResult testResult = globalNavMesh.CheckFlightSegmentDetailed(
-                        nodes[closestIdx].pos, actualEnd, mapId, failPos, isFlying, false, true);
+                        nodes[closestIdx].pos, flightGoal, mapId, failPos, isFlying, false, true);
 
                     g_LogFile << "   - Can connect closest to goal: "
                         << (testResult == SEGMENT_VALID ? "YES" : "NO") << "" << std::endl;
@@ -1624,8 +1780,9 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         }
         else if (bestPartialIdx >= 0) {
             // Check if partial path is worth it (must be closer than start)
-            float startDist = actualStart.Dist3D(actualEnd);
-            float currentDist = nodes[bestPartialIdx].pos.Dist3D(actualEnd);
+            float startDist = groundStart.Dist3D(flightGoal);
+            float currentDist = nodes[bestPartialIdx].pos.Dist3D(flightGoal);
+            g_LogFile << currentDist << " " << startDist << std::endl;
 
             // Allow partial if we made progress (e.g. moved at least 5 yards closer)
             if (currentDist < startDist - partialPathThreshold) {
@@ -1640,6 +1797,14 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         // Reconstruct Path if we have a valid start index
         if (traceStartIdx >= 0) {
             std::vector<PathNode> path;
+
+            // APPEND LAUNCH APPROACH
+            if (!launchApproach.empty()) {
+                // Optional: Add landing node
+                path.insert(path.end(), launchApproach.begin(), launchApproach.end());
+                path.push_back(PathNode(groundStart, PATH_GROUND));
+            }
+
             int curr = traceStartIdx;
             // Safety check for loop limit to prevent infinite loops if parentIdx is corrupted
             int safety = 0;
@@ -1650,10 +1815,10 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             std::reverse(path.begin(), path.end());
 
             // --- STRICT SUCCESS CHECK (Skipped if we explicitly allowed partial) ---
-            if (!isPartial && path.back().pos.Dist3D(actualEnd) > 5.0f) {
+            if (!isPartial && path.back().pos.Dist3D(flightGoal) > 5.0f) {
                 if (DEBUG_PATHFINDING) {
                     g_LogFile << "✗ Attempt " << (i + 1) << " found path but it stops short ("
-                        << path.back().pos.Dist3D(actualEnd) << " yds). Retrying..." << std::endl;
+                        << path.back().pos.Dist3D(flightGoal) << " yds). Retrying..." << std::endl;
                 }
                 // If you want to force retries for better paths, uncomment continue. 
                 // But since you want partial paths, we generally accept this.
@@ -1682,6 +1847,13 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
                 path = smoothed;
             }
 
+            // APPEND GROUND APPROACH
+            if (!groundApproach.empty()) {
+                // Optional: Add landing node
+                path.push_back(PathNode(flightGoal, PATH_GROUND));
+                path.insert(path.end(), groundApproach.begin(), groundApproach.end());
+            }
+
             if (DEBUG_PATHFINDING) g_LogFile << "✓ A* SUCCESS on Attempt " << (i + 1) << std::endl;
             return path;
         }
@@ -1696,7 +1868,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             float closestDist = 1e9f;
 
             for (int idx : closedSet) {
-                float d = nodes[idx].pos.Dist3D(actualEnd);
+                float d = nodes[idx].pos.Dist3D(flightGoal);
                 if (d < closestDist) {
                     closestDist = d;
                     bestIdx = idx;
@@ -1733,7 +1905,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
                 }
 
                 // 4. Calculate Ground Path to actual target
-                std::vector<PathNode> groundPath = FindPath(landPos, actualEnd, ignoreWater);
+                std::vector<PathNode> groundPath = FindPath(landPos, flightGoal, ignoreWater);
 
                 if (!groundPath.empty() && groundPath.back().pos.Dist3D(end) < 3.0f) {
                     if (DEBUG_PATHFINDING) g_LogFile << "   [FALLBACK] ✓ Found Ground Path (" << groundPath.size() << " wps). Stitching..." << std::endl;

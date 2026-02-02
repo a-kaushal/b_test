@@ -143,9 +143,6 @@
     <ClInclude Include="Pathfinding2.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Profile.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\crc32.h">
       <Filter>VMap\Headers</Filter>
     </ClInclude>
@@ -220,6 +217,9 @@
     </ClInclude>
     <ClInclude Include="Mailing.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Profile.h">
+      <Filter>Profile</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

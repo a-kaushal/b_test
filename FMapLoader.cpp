@@ -210,27 +210,17 @@ struct VoxelCell {
         // OVERLOADED
         return true;
 
-        std::cout << layers.empty() << std::endl;
-        if (layers.empty()) return false;  // Void/solid - can't fly
-
+        if (layers.empty()) return false;
         for (const auto& layer : layers) {
             float floor = layer.getFloorZ();
             float ceiling = layer.getCeilingZ();
-            std::cout << floor << " " << ceiling << std::endl;;
-            // Check if Z is within a walkable span
-            if ((z + FMAP_HEIGHT_RANGE) >= floor && z <= ceiling) {
-                // Can fly if this span has open sky above
-                std::cout << "isOpen Sky: " << layer.isOpenSky() << std::endl;;
-                return layer.isOpenSky() || (z < ceiling - FMAP_AGENT_HEIGHT);
+
+            // Strict boundary check (with 1.0f tolerance for snapping)
+            if (z >= (floor - 1.0f) && z <= ceiling) {
+                if (layer.isOpenSky()) return true;
+                if (z < (ceiling - FMAP_AGENT_HEIGHT)) return true;
             }
         }
-
-        // Above all layers - check if top layer is open sky
-        const VoxelLayer& topLayer = layers.back();
-        if (z > topLayer.getCeilingZ() && topLayer.isOpenSky()) {
-            return true;
-        }
-
         return false;
     }
 
@@ -476,7 +466,6 @@ public:
         return cell->canFlyAt(worldZ);
     }
 
-    // Line-of-sight check using DDA (Digital Differential Analyzer)
     bool checkLineOfSight(float x1, float y1, float z1, float x2, float y2, float z2) const {
         Vector3 start(x1, y1, z1);
         Vector3 end(x2, y2, z2);
@@ -693,8 +682,25 @@ public:
 
     bool canFlyAt(int mapId, float x, float y, float z) {
         FMapTile* tile = getTileAt(mapId, x, y);
+
+        // 1. Basic Voxel Check (Is the center point in a flyable layer?)
         if (!tile) return false;
-        return tile->canFlyAt(x, y, z);
+        if (!tile->canFlyAt(x, y, z)) return false;
+
+        // 2. Headroom Check (Center to Head + 2.5y)
+        // Mimics A* CheckFlightPoint: Ensures we don't hit the ceiling or a hanging object.
+        // We use checkLine to sweep the agent's collision box upwards.
+        if (checkLine(mapId, x, y, z, x, y, z + 2.5f)) {
+            return false; // BLOCKED
+        }
+
+        // 3. Footroom Check (Center to Feet - 0.5y)
+        // Mimics A* CheckFlightPoint: Ensures we aren't hovering with feet in the floor.
+        if (checkLine(mapId, x, y, z, x, y, z - 0.5f)) {
+            return false; // BLOCKED
+        }
+
+        return true; // Point is safe, has headroom, and has footroom.
     }
 };
 

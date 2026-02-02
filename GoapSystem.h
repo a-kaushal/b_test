@@ -360,6 +360,7 @@ public:
         }
         if ((index >= path.size()) || (path.back().pos.Dist3D(player.position) < finalDist) || (targetPos.Dist3D(player.position) < finalDist)) {
             pilot.Stop();
+            g_LogFile << "Reached Goal" << std::endl;
             // Dismount Logic
             if (player.flyingMounted || player.groundMounted || player.inWater) {
                 if (player.inWater) {
@@ -409,12 +410,12 @@ public:
         }
 
         if (index == (path.size() - 1)) {
-            if (dist < finalDist) {
+            if (dist < finalDist - 0.5f) {
                 index++;
                 return false;
             }
         }
-        else if (dist < approachDist) {
+        else if (dist < approachDist - 0.5f) {
             index++;
             return false;
         }
@@ -1156,8 +1157,8 @@ public:
                         lowHp = true;
                     }
                     if (doLog) {
-                        g_LogFile << "[Combat] Target Active @ " << npc->position.x << "," << npc->position.y << "," << npc->position.z
-                            << " | Dist: " << npc->distance << " | HP: " << npc->health << std::endl;
+                       // g_LogFile << "[Combat] Target Active @ " << npc->position.x << "," << npc->position.y << "," << npc->position.z
+                       //     << " | Dist: " << npc->distance << " | HP: " << npc->health << std::endl;
                     }
                 }
                 foundLiveTarget = true;
@@ -1168,7 +1169,7 @@ public:
         targetSelected = (ws.player.inCombatGuidLow == ws.combatState.targetGuidLow) && (ws.player.inCombatGuidHigh == ws.combatState.targetGuidHigh);
 
         std::string stateName = interact.GetState();
-        bool isMoving = (stateName == "STATE_APPROACH" || stateName == "STATE_APPROACH_POST_INTERACT" || targetSelected);
+        bool isMoving = (stateName == "STATE_APPROACH" || stateName == "STATE_APPROACH_POST_INTERACT" || !targetSelected);
 
         // If we are trying to select the target (NOT selected) and NOT moving (Aligning/Clicking), hide the path.
         if (!targetSelected && !isMoving) {
@@ -1182,9 +1183,11 @@ public:
 
         // Short-Circuit Interaction
         if (targetSelected) {
-            g_LogFile << "Interaction Reset" << std::endl;
             ws.combatState.inCombat = true;
-            if (interact.GetState() != "STATE_IDLE") interact.Reset();
+            if (interact.GetState() != "STATE_IDLE") {
+                g_LogFile << "Interaction Reset" << std::endl;
+                interact.Reset();
+            }
         }
 
         // --- PHASE 1: ACQUIRE TARGET (If not selected) ---
@@ -1192,27 +1195,27 @@ public:
             ws.combatState.inCombat = false; 
             
             if (clickCooldown == 0 || GetTickCount() - clickCooldown > 3000) {
-                g_LogFile << "[Combat] Target NOT Selected. Attempting to engage..." << std::endl;
+                //g_LogFile << "[Combat] Target NOT Selected. Attempting to engage..." << std::endl;
                 if (interact.GetState() == "STATE_COMPLETE") {
                     interact.Reset();
                 }
 
                 if (failedPath) {
-                    g_LogFile << "[Combat] Pathing Failed! Using Fallback (/targetenemy)." << std::endl;
+                    //g_LogFile << "[Combat] Pathing Failed! Using Fallback (/targetenemy)." << std::endl;
                     pilot.ExecuteLua(L"/targetenemy");
                     pilot.ExecuteLua(L"/startattack");
                     failedPath = false;
                     clickCooldown = GetTickCount();
                 }
                 else {
-                    g_LogFile << "[Combat] Requesting Interaction (Click) at 5.0y range." << std::endl;
-                    g_LogFile << interact.GetState() << std::endl;
+                    //g_LogFile << "[Combat] Requesting Interaction (Click) at 5.0y range." << std::endl;
+                    //g_LogFile << interact.GetState() << std::endl;
                     bool engaged = interact.EngageTarget(ws.combatState.enemyPosition, ws.combatState.targetGuidLow, ws.combatState.targetGuidHigh, ws.player, ws.combatState.path,
                         ws.combatState.index, ws.player.mapId, MELEE_RANGE, 5.0f, 3.0f, true, true, false, 100, MOUSE_RIGHT, true, failedPath, -1, failedInteract , true, 100);
-                    g_LogFile << interact.GetState() << std::endl;
+                    //g_LogFile << interact.GetState() << std::endl;
                     
                     if (engaged) {
-                        g_LogFile << "[Combat] Interaction Sequence Started." << std::endl;
+                        //g_LogFile << "[Combat] Interaction Sequence Started." << std::endl;
                         clickCooldown = GetTickCount();
                     }
                 }
@@ -1246,6 +1249,7 @@ public:
 
             // Face the target (Critical for casting)
             if (pilot.faceTarget(ws.player.position, ws.combatState.enemyPosition, ws.player.rotation)) {
+                g_LogFile << "Facing Target" << std::endl;
                 // Run the rotation
                 combatController.UpdateRotation(ws.player.position, ws.combatState.enemyPosition, ws.player.rotation, lowHp);
             }
@@ -1429,6 +1433,7 @@ public:
 
         if (failedInteract) {
             failInteractCount++;
+            failedInteract = false;
             if (failInteractCount > 3) {
                 g_LogFile << "Failed to interact 3 times, adding to blacklist" << std::endl;
                 ws.gatherState.blacklistNodesGuidLow.push_back(ws.gatherState.guidLow);
@@ -1475,11 +1480,13 @@ public:
 class ActionEscapeWater : public GoapAction {
 private:
     bool pressingSpace = false;
+    bool movingUp = false;
+    DWORD waterDelay = 0;
 
 public:
     // Execute only if player is in water
     bool CanExecute(const WorldState& ws) override {
-        return ws.player.inWater;
+        return ws.player.inWater || movingUp;
     }
 
     // Priority 51: 
@@ -1493,6 +1500,8 @@ public:
 
     void ResetState() override {
         pressingSpace = false;
+        movingUp = false;
+        waterDelay = 0;
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
@@ -1500,6 +1509,13 @@ public:
         if (!pressingSpace) {
             // Trigger the "escapeWater" logic in SteerTowards (holds Jump/Ascend)
             pilot.SteerTowards(ws.player.position, ws.player.rotation, ws.player.position, true, ws.player, false, true);
+            movingUp = true;
+            if (!ws.player.inWater && waterDelay == 0) {
+                waterDelay = GetTickCount();
+            }
+            if ((waterDelay != 0) && (GetTickCount() - waterDelay < 2000)) {
+                movingUp = false;
+            }
             //pressingSpace = true;
         }
 
@@ -2259,24 +2275,31 @@ private:
         //if (state.globalState.activePath.empty() || !pilot.IsMoving()) {
         if (!pilot.IsMoving()) {
             // NEW: Reset stuck state when idle
-            state.stuckState.stuckStartTime = 0;
-            state.stuckState.lastCheckTime = 0;
+            /*state.stuckState.stuckStartTime = 0;
+            state.stuckState.lastCheckTime = 0;*/
             return false;
         }
 
         DWORD now = GetTickCount();
-        if (now - state.stuckState.lastCheckTime > 500) { // Check every 1 second
+        // Only initialize the timer if it's 0 (first movement detected)
+        if (state.stuckState.lastCheckTime == 0) {
+            state.stuckState.lastCheckTime = now;
+            state.stuckState.lastPosition = state.player.position;
+            return false;
+        }
+
+        if (now - state.stuckState.lastCheckTime > 100) { // Check every 100 ms
             float distMoved = state.player.position.Dist3D(state.stuckState.lastPosition);
 
             // 3. Distance Check (Threshold: 2.0 units)
-            if ((!g_GameState->player.inWater && distMoved < 2.0f) || (g_GameState->player.inWater && distMoved < 0.5f)) {
+            if ((!g_GameState->player.inWater && distMoved < 1.0f) || (g_GameState->player.inWater && distMoved < 0.25f)) {
                 // We haven't moved enough
                 if (state.stuckState.stuckStartTime == 0) {
                     state.stuckState.stuckStartTime = now;
                 }
 
-                // If stuck for > 2 seconds, SET the flag
-                if (now - state.stuckState.stuckStartTime > 1000) {
+                // If stuck for > 500 ms, SET the flag
+                if (now - state.stuckState.stuckStartTime > 500) {
                     g_LogFile << "[GOAP] Stuck Detected! Engaging Unstuck Maneuver (Attempt "
                         << (state.stuckState.attemptCount + 1) << ")" << std::endl;
 
@@ -2310,8 +2333,12 @@ private:
                 }
             }
             else {
-                // We are moving fine. Reset the detection timer.
+                // ONLY reset here, when we have PROVEN we moved significantly
                 state.stuckState.stuckStartTime = 0;
+                state.stuckState.attemptCount = 0;
+            }
+
+            if ((!g_GameState->player.inWater && distMoved > 10.0f) || (g_GameState->player.inWater && distMoved > 0.25f)) {
             }
 
             state.stuckState.lastPosition = state.player.position;

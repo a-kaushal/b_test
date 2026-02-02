@@ -156,11 +156,11 @@ void UpdateGatherTarget(WorldState& ws) {
             }
         }
 
-        if ((d < bestDist) && (nearbyEnemyCount < 3)) {
+        if ((d < bestDist) && (nearbyEnemyCount < 4)) {
             bestDist = d;
             bestIndex = i;
         }
-        else if ((d < secondBestDist) && (nearbyEnemyCount < 3)) {
+        else if ((d < secondBestDist) && (nearbyEnemyCount < 4)) {
             secondBestDist = d;
             secondBestIndex = i;
         }

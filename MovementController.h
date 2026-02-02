@@ -368,7 +368,7 @@ public:
         }
 
         // If it's a ground path AND the total trip is < 30 yards, disable mounting.
-        if (!flyingPath && totalTravelDistance < 30.0f) {
+        if (!flyingPath && totalTravelDistance < 60.0f) {
             mountDisable = true;
         }
         if (flyingPath && totalTravelDistance < 5.0f) {
@@ -383,7 +383,7 @@ public:
 
         // Attempt to mount if: Requested (isFlying), Not Mounted, Not In Tunnel
         if ((((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && !player.inWater && !mountDisable && player.areaMountable) || 
-            (((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && player.inWater && escapeWater)) {
+            (((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && player.inWater)) {
             Stop();
             // Check 1: Are we on a cooldown from a previous failure?
             if (now < m_MountDisabledUntil) {
@@ -482,7 +482,7 @@ public:
 
         // Determine if we need "Elevator Mode" (Space/X) for extreme verticality
         //bool useElevator = (std::abs(targetPitch) > STEEP_CLIMB_THRESHOLD);
-        bool useElevator = ((std::abs(targetPitch) > 1.0f) || (dist2D < 3.0f && std::abs(dz) > 0.0f)) && flyingPath;
+        bool useElevator = ((std::abs(targetPitch) > 1.0f) || (dist2D < 1.0f && std::abs(dz) > 0.0f)) && flyingPath;
 
         // -- - DAMPING FACTOR FOR CLOSE RANGE-- -
         // If within 5 yards, reduce steering aggression by 50% to prevent overshooting
@@ -765,7 +765,7 @@ public:
         static DWORD lastLog = 0;
         if (GetTickCount() - lastLog > 200) {
             // Uncomment to debug specific angles if needed
-            // std::cout << "[Face] Diff: " << yawDiff << std::endl;
+            g_LogFile << "[Face] Diff: " << yawDiff << std::endl;
             lastLog = GetTickCount();
         }
 

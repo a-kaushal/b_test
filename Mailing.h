@@ -168,8 +168,8 @@ def main():
                     coords_3[0] += -112 / (1920 / width)
                     coords_3[1] += 88 / (1080 / height)      
 
-                # Loop 15 times, 4 seconds apart
-                for i in range(15):
+                # Loop 8 times, 4 seconds apart
+                for i in range(8):
                     print(f"Clicking... ({i+1}/15)")
                     send_packet(pipe, 3, int(coords_3[0]), int(coords_3[1]))
                     time.sleep(4)
