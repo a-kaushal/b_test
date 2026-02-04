@@ -381,6 +381,13 @@ public:
             m_IsMounting = false;
         }
 
+        if (mountDisable && ((flyingPath && !player.flyingMounted) || (!flyingPath && player.flyingMounted)) && (!player.inWater)) {
+            if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"))) {
+                inputCommand.Reset();
+            }
+            return;
+        }
+
         // Attempt to mount if: Requested (isFlying), Not Mounted, Not In Tunnel
         if ((((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && !player.inWater && !mountDisable && player.areaMountable) || 
             (((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && player.inWater)) {
@@ -406,9 +413,9 @@ public:
                     }
                     else {
                         // FAILED: Set cooldown for 2 minutes (120,000 ms)
-                        g_LogFile << "[Movement] Mount failed (Tunnel/Indoor?). Disabling mounting for 2 minutes." << std::endl;
+                        /*g_LogFile << "[Movement] Mount failed (Tunnel/Indoor?). Disabling mounting for 2 minutes." << std::endl;
                         m_MountDisabledUntil = now + 120000;
-                        m_IsMounting = false;
+                        m_IsMounting = false;*/
                         // Fall through to walk logic
                     }
                 }

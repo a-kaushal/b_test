@@ -117,6 +117,7 @@ std::string WebServer::GenerateJSONState() {
     ss << "\"isFlying\":" << (p.isFlying ? "true" : "false") << ",";
     ss << "\"isIndoor\":" << (p.isIndoor ? "true" : "false") << ",";
     ss << "\"onGround\":" << (p.onGround ? "true" : "false") << ",";
+    ss << "\"inWater\":" << (p.inWater ? "true" : "false") << ",";
     ss << "\"target\": \"0x" << std::hex << p.inCombatGuidLow << std::dec << "\",";
     ss << "\"selected\": \"0x" << std::hex << p.targetGuidLow << std::dec << "\"";
     ss << "},";
@@ -792,7 +793,7 @@ std::string WebServer::GetHTML() {
                     ["Free Bag Slots", p.bagFree],
                     ["Need Repair", p.needRepair ? "YES" : "No"],
                     ["Status", p.isDead ? "DEAD" : (p.inCombat ? "In Combat" : "Idle")],
-                    ["Flags", `Mounted: ${p.isMounted}, Ground Mounted: ${p.groundMounted}, Flying Mounted: ${p.flyingMounted}, Flying: ${p.isFlying}, Indoor: ${p.isIndoor}`],
+                    ["Flags", `Mounted: ${p.isMounted}, Ground Mounted: ${p.groundMounted}, Flying Mounted: ${p.flyingMounted}, Flying: ${p.isFlying}, Indoor: ${p.isIndoor}, On Ground: ${p.onGround}, In Water: ${p.inWater}`],
                     ["Target GUID", p.target],
                     ["Selected GUID", p.selected]
                 ];

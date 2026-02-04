@@ -409,13 +409,14 @@ public:
             dist = player.position.Dist3D(wp);
         }
 
+        //if (wpType == PATH_GROUND && dist > )
         if (index == (path.size() - 1)) {
-            if (dist < finalDist - 0.5f) {
+            if ((wpType == PATH_AIR && dist < finalDist) || (wpType == PATH_GROUND && dist < GROUND_PATH_THRESHOLD)) {
                 index++;
                 return false;
             }
         }
-        else if (dist < approachDist - 0.5f) {
+        else if ((wpType == PATH_AIR && dist < interactDist) || (wpType == PATH_GROUND && dist < GROUND_PATH_THRESHOLD)) {
             index++;
             return false;
         }
@@ -617,6 +618,11 @@ public:
             false,
             g_GameState->interactState.inGameLocation
         );
+
+        if (failedPath) {
+            ws.stuckState.isStuck = true;
+            failedPath = false;
+        }
 
         // Visualization
         ws.globalState.activePath = ws.interactState.path;
@@ -1014,7 +1020,8 @@ public:
                 ws.player.isFlying,
                 false,
                 false,
-                20.0f
+                20.0f,
+                false
             );
 
             if (!path.empty()) {
@@ -1847,8 +1854,7 @@ public:
                     g_GameState->globalState.ignoreUnderWater,
                     false
                 );
-                if (constructedPath.empty()) EndScript(pilot, (ws.waypointReturnState.flyingPath && g_GameState->player.areaMountable) ? 2 : 1);
-                g_LogFile << constructedPath.size() << std::endl;
+                //if (constructedPath.empty()) EndScript(pilot, (ws.waypointReturnState.flyingPath && g_GameState->player.areaMountable) ? 2 : 1);
 
                 // --- START HYBRID PATH LOGIC ---
                 // Trigger if we are effectively grounded (CD or Cave) BUT target is in the air
@@ -2107,6 +2113,8 @@ private:
     ConsoleInput consoleInput;  // Add this member
     WorldState& state;
 
+    int unstuckCount = 0;
+
 public:
     GoapAgent(WorldState& worldState, MovementController& mc, SimpleMouseClient& mouse, SimpleKeyboardClient& keyboard, Camera& cam, MemoryAnalyzer& mem, DWORD pid, ULONG_PTR base, HWND hGameWindow)
         : state(worldState), pilot(mc), interact(mc, mouse, keyboard, cam, mem, pid, base, hGameWindow), combatController(keyboard, pilot), consoleInput(keyboard) {
@@ -2292,14 +2300,16 @@ private:
             float distMoved = state.player.position.Dist3D(state.stuckState.lastPosition);
 
             // 3. Distance Check (Threshold: 2.0 units)
-            if ((!g_GameState->player.inWater && distMoved < 1.0f) || (g_GameState->player.inWater && distMoved < 0.25f)) {
+            if ((!g_GameState->player.inWater && g_GameState->player.isFlying && distMoved < 1.5f) 
+                || (!g_GameState->player.inWater && g_GameState->player.onGround && distMoved < 1.0f)
+                || (g_GameState->player.inWater && distMoved < 0.25f)) {
                 // We haven't moved enough
                 if (state.stuckState.stuckStartTime == 0) {
                     state.stuckState.stuckStartTime = now;
                 }
 
                 // If stuck for > 500 ms, SET the flag
-                if (now - state.stuckState.stuckStartTime > 500) {
+                if (now - state.stuckState.stuckStartTime > 1000) {
                     g_LogFile << "[GOAP] Stuck Detected! Engaging Unstuck Maneuver (Attempt "
                         << (state.stuckState.attemptCount + 1) << ")" << std::endl;
 
@@ -2322,6 +2332,7 @@ private:
                         state.stuckState.attemptCount = 0;
                         state.stuckState.stuckStartTime = 0;
                         state.stuckState.lastUnstuckTime = 0;
+                        unstuckCount = 0;
 
                         pilot.Stop();
                         return false;
@@ -2329,19 +2340,24 @@ private:
 
                     state.stuckState.isStuck = true;
                     state.stuckState.stuckStartTime = 0;
+                    unstuckCount = 0;
                     return true;
                 }
             }
             else {
-                // ONLY reset here, when we have PROVEN we moved significantly
-                state.stuckState.stuckStartTime = 0;
-                state.stuckState.attemptCount = 0;
+                unstuckCount++;
+                if (unstuckCount >= 10) {
+                    // ONLY reset here, when we have PROVEN we moved significantly
+                    state.stuckState.lastPosition = state.player.position;
+                    state.stuckState.stuckStartTime = 0;
+                    state.stuckState.attemptCount = 0;
+                    unstuckCount = 0;
+                }
             }
 
             if ((!g_GameState->player.inWater && distMoved > 10.0f) || (g_GameState->player.inWater && distMoved > 0.25f)) {
             }
 
-            state.stuckState.lastPosition = state.player.position;
             state.stuckState.lastCheckTime = now;
         }
         return false;

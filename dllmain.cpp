@@ -474,7 +474,7 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                     continue;
                 }
                 // READ TYPE
-                if (!analyzer.ReadInt32(procId, entity_ptr + ENTITY_OBJECT_TYPE_OFFSET, objType)) {
+                if (entity_ptr == 0 || !analyzer.ReadInt32(procId, entity_ptr + ENTITY_OBJECT_TYPE_OFFSET, objType)) {
                     // Fail silently or log
                     continue;
                 }
@@ -559,6 +559,7 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                         analyzer.ReadBool(procId, entity_ptr + ENTITY_ENEMY_ATTACKING, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->inCombat);
                         analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->health);
                         analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_MAX_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->maxHealth);
+                        analyzer.ReadInt32(procId, entity_ptr + ENTITY_LEVEL, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->level);
                         std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id = id;
 
                         creature_db.getCreatureReaction(std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id, true, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->reaction);
@@ -938,7 +939,7 @@ void MainThread(HMODULE hModule) {
                                 wasPaused = true;
                             }
                             Sleep(100);
-                            continue; // Skip logic while paused
+                            // continue; // Skip logic while paused
                         }
                         else {
                             if (wasPaused) {
@@ -1025,23 +1026,9 @@ void MainThread(HMODULE hModule) {
                         catch (...) {
                             g_LogFile << "[WARNING] GUI Update failed. Skipping frame." << std::endl;
                         }
-                        //pilot.Calibrate(g_GameState->player.rotation, g_GameState->player.vertRotation);
 
-                        //if (g_GameState->pathFollowState.pathIndexChange == true) {
-                        //    if (g_GameState->pathFollowState.path[g_GameState->pathFollowState.index - 1].pos.Dist3D(g_GameState->pathFollowState.presetPath[g_GameState->pathFollowState.presetIndex]) < 5.0) {
-                        //        if ((g_GameState->pathFollowState.presetIndex >= g_GameState->pathFollowState.presetPath.size() - 1) && (g_GameState->pathFollowState.looping == 1)) {
-                        //            g_GameState->pathFollowState.presetIndex = 0;
-                        //        }
-                        //        else if (g_GameState->pathFollowState.presetIndex < g_GameState->pathFollowState.presetPath.size() - 1) {
-                        //            g_GameState->pathFollowState.presetIndex++;
-                        //        }
-                        //        //path = CalculatePath(agent.state.presetPath, agent.state.player.position, agent.state.presetPathIndex, true, 530);
-                        //    }
-                        //    g_GameState->pathFollowState.pathIndexChange = false;
-                        //}
-                        
                         // 3. Execution Logic
-                        if (!isPaused) {
+                        if (!g_IsPaused) {
                             try {
                                 auto* activeProfile = g_ProfileLoader.GetActiveProfile();
                                 if (activeProfile) {

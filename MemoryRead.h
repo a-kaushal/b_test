@@ -27,10 +27,10 @@ struct HashNode {
 // Memory Offsets
 inline ULONG_PTR baseAddress;
 
-#define OBJECT_MANAGER_ENTRY_OFFSET 0x396CD50
+#define OBJECT_MANAGER_ENTRY_OFFSET 0x3943D50 // 0x396CD50 Old
 #define OBJECT_MANAGER_FIRST_OBJECT_OFFSET 0x8
 
-#define OBJECT_MANAGER_OFFSET 0x3DDE298
+#define OBJECT_MANAGER_OFFSET 0x3DB5298 // 0x3DDE298 Old
 #define ENTITY_ARRAY_OFFSET 0x8
 #define ENTITY_ARRAY_SIZE_OFFSET 0x10
 #define HASH_ARRAY_MAXIMUM_OFFSET 0x40
@@ -54,7 +54,7 @@ inline ULONG_PTR baseAddress;
 #define ENTITY_ENEMY_RANGED_COMBAT_GUID_LOW 0x11A80 // GUID of ranged enemy attack target (Has a value if enemy is performing a ranged or melee attack)
 #define ENTITY_ENEMY_RANGED_COMBAT_GUID_HIGH 0x11A88
 #define ENTITY_ENEMY_ATTACKING 0x11AB0
-#define ENTITY_LEVEL 0x11C20
+#define ENTITY_LEVEL 0x11C38 
 #define ENTITY_ENEMY_HEALTH 0x119F8
 #define ENTITY_ENEMY_MAX_HEALTH 0x11B38
 
@@ -68,23 +68,23 @@ inline ULONG_PTR baseAddress;
 #define ENTITY_PLAYER_MOUNT_STATE 0x8D0
 #define ENTITY_PLAYER_HEALTH 0x119F8
 #define ENTITY_PLAYER_MAX_HEALTH 0x11B38
-#define ENTITY_PLAYER_LEVEL 0x11C20
-#define ENTITY_PLAYER_EQUIPEMENT_OFFSET 0x14520 // Start of equipment array
-#define ENTITY_PLAYER_BAG_OFFSET 0x14700 // Offset to equipped bags guid
-#define ENTITY_PLAYER_BAG_GUID_OFFSET 0x14750 
-#define ENTITY_PLAYER_MAIN_BAG_OFFSET 0x14750 // Offset to main bag items array
+#define ENTITY_PLAYER_LEVEL 0x11C38 // 0x11C20 Old
+#define ENTITY_PLAYER_EQUIPEMENT_OFFSET 0x145E8 // 0x14520 Old // Start of equipment array
+#define ENTITY_PLAYER_BAG_OFFSET 0x147C8 // 0x14700 Old // Offset to equipped bags guid
+#define ENTITY_PLAYER_BAG_GUID_OFFSET 0x14818 // 0x14750 Old
+#define ENTITY_PLAYER_MAIN_BAG_OFFSET 0x14818 // 0x14750 Old // Offset to main bag items array
 #define ENTITY_PLAYER_IN_COMBAT_GUID_LOW 0x670 // Attacking Enemy
 #define ENTITY_PLAYER_IN_COMBAT_GUID_HIGH 0x678 // Attacking Enemy
 #define ENTITY_PLAYER_TARGET_GUID_LOW 0x11BF0 // Under attack from enemy
 #define ENTITY_PLAYER_TARGET_GUID_HIGH 0x11BF8 // Under attack from enemy
 
 
-#define MOUSE_OVER_GUID_OFFSET 0x3F2D038
-#define ZONE_TEXT 0x3F2C2A8
-#define TARGET_GUID_OFFSET 0x3BD5928
+#define MOUSE_OVER_GUID_OFFSET 0x3F04038 // 0x3F2D038 Old
+#define ZONE_TEXT 0x3F032A8 // 0x3F2C2A8 Old
+#define TARGET_GUID_OFFSET 0x3BAC928 // 0x3BD5928 Old
 
 
-#define CAMERA_MANAGER 0x3DEFB68
+#define CAMERA_MANAGER 0x3DC6B68 // 0x3DEFB68 Old
 #define CAMERA_OFFSET 0x488
 #define CAMERA_POSITION_X 0x10
 #define CAMERA_POSITION_Y 0x14
@@ -256,7 +256,7 @@ public:
         if (!result || operation.BytesProcessed != size) {
             // ONLY print error if NOT quiet
             if (!quiet) {
-                g_LogFile << "DeviceIoControl failed. Error: " << GetLastError() << std::endl;
+                g_LogFile << "DeviceIoControl failed. Error: " << GetLastError() << "  |  Address: " << address << std::endl;
             }
             return false;
         }

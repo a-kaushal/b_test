@@ -39,10 +39,10 @@ public:
         // Using a local variable for the manager is cleaner but re-reading member is fine.
 
         // 1. Re-read Camera Manager
-        if (!mem.ReadPointer(procId, baseAddress + 0x3DEFB68, cameraMgr)) return false;
+        if (!mem.ReadPointer(procId, baseAddress + CAMERA_MANAGER, cameraMgr)) return false;
 
         // 2. Re-read Camera Pointer
-        if (!mem.ReadPointer(procId, cameraMgr + 0x488, cameraPtr)) return false;
+        if (!mem.ReadPointer(procId, cameraMgr + CAMERA_OFFSET, cameraPtr)) return false;
 
         // 3. Safety Check: If ptr is 0, don't try to read floats
         if (cameraPtr == 0) return false;
