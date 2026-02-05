@@ -13,13 +13,20 @@
 #include <fstream>
 #include <chrono>
 #include <mutex>
-#include <algorithm> // Required for std::min
+#include <algorithm>
+#include <atomic> // Required for externs
 
 #pragma comment(lib, "Ws2_32.lib")
 
 // --- EXTERNS ---
 extern std::ofstream g_LogFile;
 extern std::mutex g_EntityMutex;
+
+// [FIX] Import Real Global Flags from dllmain.cpp
+// This ensures the web server sees the EXACT same state as the game loop
+extern std::atomic<bool> g_IsRunning;
+extern std::atomic<bool> g_IsPaused;
+
 #include "Vector.h"
 #include "Entity.h"
 #include "Pathfinding2.h" 
@@ -32,7 +39,7 @@ extern WorldState* g_GameState;
 // Static Member Initialization
 std::atomic<bool> WebServer::running = false;
 std::thread WebServer::serverThread;
-std::atomic<bool> WebServer::botActive = false;
+std::atomic<bool> WebServer::botActive = false; // Kept for internal logic, but we prioritize g_IsPaused
 std::atomic<bool> WebServer::profileLoadReq = false;
 std::atomic<bool> WebServer::autoLoad = false;
 std::string WebServer::currentProfile = "None";
@@ -55,7 +62,6 @@ std::string EscapeJSON(const std::string& s) {
     return out;
 }
 
-// Now a member function: WebServer::ReadLogFileTail
 std::string WebServer::ReadLogFileTail(int charsToRead) {
     std::string filepath = "C:\\SMM\\SMM_Debug.log";
     std::ifstream file(filepath, std::ios::binary | std::ios::ate); // Open at end
@@ -75,6 +81,24 @@ std::string WebServer::ReadLogFileTail(int charsToRead) {
     return content;
 }
 
+// --- DEBUG SERIALIZATION HELPERS ---
+
+std::string Vec3JSON(const Vector3& v) {
+    std::stringstream ss;
+    ss << "{\"x\":" << v.x << ",\"y\":" << v.y << ",\"z\":" << v.z << "}";
+    return ss.str();
+}
+
+// Serializes the base ActionState fields
+void SerializeActionBase(std::stringstream& ss, const ActionState& s) {
+    ss << "\"activePathCount\":" << s.activePath.size() << ",";
+    ss << "\"activeIndex\":" << s.activeIndex << ",";
+    ss << "\"actionChange\":" << (s.actionChange ? "true" : "false") << ",";
+    ss << "\"flyingPath\":" << (s.flyingPath ? "true" : "false") << ",";
+    ss << "\"inMotion\":" << (s.inMotion ? "true" : "false") << ",";
+    ss << "\"ignoreUnderWater\":" << (s.ignoreUnderWater ? "true" : "false");
+}
+
 std::string WebServer::GenerateJSONState() {
     if (!g_GameState) return "{}";
 
@@ -84,9 +108,10 @@ std::string WebServer::GenerateJSONState() {
     std::stringstream ss;
     ss << "{";
 
-    // --- 1. BOT STATUS ---
-    // We can access private members directly now
-    ss << "\"running\": " << (botActive ? "true" : "false") << ",";
+    // --- 1. BOT STATUS [FIXED] ---
+    // We explicitly send the 'paused' state derived from the global variable
+    ss << "\"running\": " << (g_IsRunning ? "true" : "false") << ",";
+    ss << "\"paused\": " << (g_IsPaused ? "true" : "false") << ",";
     ss << "\"autoLoad\": " << (autoLoad ? "true" : "false") << ",";
 
     std::string profileName = "None";
@@ -122,7 +147,7 @@ std::string WebServer::GenerateJSONState() {
     ss << "\"selected\": \"0x" << std::hex << p.targetGuidLow << std::dec << "\"";
     ss << "},";
 
-    // --- 3. PATH ---
+    // --- 3. PATH (Visual Only) ---
     ss << "\"path\": [";
     for (size_t i = 0; i < g_GameState->globalState.activePath.size(); ++i) {
         auto& node = g_GameState->globalState.activePath[i];
@@ -131,7 +156,113 @@ std::string WebServer::GenerateJSONState() {
     }
     ss << "],";
 
-    // --- 4. ENTITIES ---
+    // --- 4. DEBUG DUMP ---
+    ss << "\"debug\": {";
+
+    // GlobalState
+    ss << "\"GlobalState\": {";
+    SerializeActionBase(ss, g_GameState->globalState);
+    ss << ", \"vendorOpen\":" << (g_GameState->globalState.vendorOpen ? "true" : "false");
+    ss << ", \"chatOpen\":" << (g_GameState->globalState.chatOpen ? "true" : "false");
+    ss << ", \"mapId\":" << g_GameState->globalState.mapId;
+    ss << ", \"areaId\":" << g_GameState->globalState.areaId;
+    ss << ", \"mapName\":\"" << EscapeJSON(g_GameState->globalState.mapName) << "\"";
+    ss << "},";
+
+    // Looting
+    auto& l = g_GameState->lootState;
+    ss << "\"Looting\": {";
+    SerializeActionBase(ss, l);
+    ss << ", \"enabled\":" << (l.enabled ? "true" : "false");
+    ss << ", \"hasLoot\":" << (l.hasLoot ? "true" : "false");
+    ss << ", \"position\":" << Vec3JSON(l.position);
+    ss << ", \"guidLow\":\"0x" << std::hex << l.guidLow << std::dec << "\"";
+    ss << "},";
+
+    // Gathering
+    auto& g = g_GameState->gatherState;
+    ss << "\"Gathering\": {";
+    SerializeActionBase(ss, g);
+    ss << ", \"enabled\":" << (g.enabled ? "true" : "false");
+    ss << ", \"hasNode\":" << (g.hasNode ? "true" : "false");
+    ss << ", \"nodeActive\":" << (g.nodeActive ? "true" : "false");
+    ss << ", \"position\":" << Vec3JSON(g.position);
+    ss << ", \"blacklistCount\":" << g.blacklistNodesGuidLow.size();
+    ss << ", \"gatheredCount\":" << g.gatheredNodesGuidLow.size();
+    ss << "},";
+
+    // PathFollowing
+    auto& pf = g_GameState->pathFollowState;
+    ss << "\"PathFollowing\": {";
+    SerializeActionBase(ss, pf);
+    ss << ", \"enabled\":" << (pf.enabled ? "true" : "false");
+    ss << ", \"presetIndex\":" << pf.presetIndex;
+    ss << ", \"looping\":" << (pf.looping ? "true" : "false");
+    ss << ", \"hasPath\":" << (pf.hasPath ? "true" : "false");
+    ss << ", \"pathCount\":" << pf.path.size();
+    ss << "},";
+
+    // WaypointReturn
+    auto& wr = g_GameState->waypointReturnState;
+    ss << "\"WaypointReturn\": {";
+    SerializeActionBase(ss, wr);
+    ss << ", \"enabled\":" << (wr.enabled ? "true" : "false");
+    ss << ", \"hasTarget\":" << (wr.hasTarget ? "true" : "false");
+    ss << ", \"hasPath\":" << (wr.hasPath ? "true" : "false");
+    ss << ", \"attempts\":" << wr.pathfindingAttempts;
+    ss << ", \"waitingForUnstuck\":" << (wr.waitingForUnstuck ? "true" : "false");
+    ss << "},";
+
+    // Combat
+    auto& c = g_GameState->combatState;
+    ss << "\"Combat\": {";
+    SerializeActionBase(ss, c);
+    ss << ", \"enabled\":" << (c.enabled ? "true" : "false");
+    ss << ", \"inCombat\":" << (c.inCombat ? "true" : "false");
+    ss << ", \"underAttack\":" << (c.underAttack ? "true" : "false");
+    ss << ", \"attackerCount\":" << c.attackerCount;
+    ss << ", \"hasTarget\":" << (c.hasTarget ? "true" : "false");
+    ss << ", \"targetHealth\":" << c.targetHealth;
+    ss << ", \"enemyPos\":" << Vec3JSON(c.enemyPosition);
+    ss << ", \"targetGuid\":\"0x" << std::hex << c.targetGuidLow << std::dec << "\"";
+    ss << "},";
+
+    // StuckState
+    auto& s = g_GameState->stuckState;
+    ss << "\"StuckState\": {";
+    SerializeActionBase(ss, s);
+    ss << ", \"isStuck\":" << (s.isStuck ? "true" : "false");
+    ss << ", \"lastPosition\":" << Vec3JSON(s.lastPosition);
+    ss << ", \"attemptCount\":" << s.attemptCount;
+    ss << "},";
+
+    // InteractState
+    auto& i = g_GameState->interactState;
+    ss << "\"InteractState\": {";
+    SerializeActionBase(ss, i);
+    ss << ", \"enabled\":" << (i.enabled ? "true" : "false");
+    ss << ", \"interactActive\":" << (i.interactActive ? "true" : "false");
+    ss << ", \"interactId\":" << i.interactId;
+    ss << ", \"interactTimes\":" << i.interactTimes;
+    ss << ", \"vendorSell\":" << (i.vendorSell ? "true" : "false");
+    ss << ", \"repair\":" << (i.repair ? "true" : "false");
+    ss << ", \"targetGuid\":\"0x" << std::hex << i.targetGuidLow << std::dec << "\"";
+    ss << "},";
+
+    // RespawnState
+    auto& r = g_GameState->respawnState;
+    ss << "\"RespawnState\": {";
+    SerializeActionBase(ss, r);
+    ss << ", \"enabled\":" << (r.enabled ? "true" : "false");
+    ss << ", \"isDead\":" << (r.isDead ? "true" : "false");
+    ss << ", \"isPathingToCorpse\":" << (r.isPathingToCorpse ? "true" : "false");
+    ss << ", \"currentTargetPos\":" << Vec3JSON(r.currentTargetPos);
+    ss << ", \"layerCount\":" << r.possibleZLayers.size();
+    ss << "}"; // Last one
+
+    ss << "},"; // End Debug
+
+    // --- 5. ENTITIES ---
     ss << "\"entities\": [";
     bool first = true;
     for (const auto& ent : g_GameState->entities) {
@@ -166,9 +297,9 @@ std::string WebServer::GenerateJSONState() {
             }
         }
     }
-    ss << "]"; // End Entities
+    ss << "]";
 
-    ss << "}"; // End Root
+    ss << "}";
     return ss.str();
 }
 
@@ -181,8 +312,13 @@ void WebServer::LoadConfig() {
     std::string line;
     if (f.is_open()) {
         while (getline(f, line)) {
-            if (line.find("AutoLoad=") == 0) {
-                autoLoad = (line.substr(9) == "1");
+            if (line.find("AutoLoad=") != std::string::npos) {
+                if (line.find("1") != std::string::npos || line.find("true") != std::string::npos) {
+                    autoLoad = true;
+                }
+                else {
+                    autoLoad = false;
+                }
             }
         }
     }
@@ -200,11 +336,8 @@ void WebServer::SaveConfig() {
 void WebServer::Start(int port) {
     if (running) return;
     running = true;
-    
-    // Load settings on startup
     LoadConfig();
 
-    // Trigger Auto-Load if enabled
     if (autoLoad) {
         std::thread([]() {
             std::string err;
@@ -226,9 +359,8 @@ void WebServer::Stop() {
     running = false;
 }
 
-// Getters/Setters for Bot State
-bool WebServer::IsBotActive() { return botActive; }
-void WebServer::SetBotActive(bool active) { botActive = active; }
+bool WebServer::IsBotActive() { return !g_IsPaused; } // Getter reflects global state
+void WebServer::SetBotActive(bool active) { g_IsPaused = !active; } // Setter toggles global state
 bool WebServer::IsProfileLoadRequested() { return profileLoadReq; }
 std::string WebServer::GetRequestedProfile() { return pendingProfile; }
 void WebServer::ConfirmProfileLoaded(const std::string& profileName) {
@@ -274,29 +406,24 @@ void WebServer::ServerThread(int port) {
 void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
     SOCKET clientSocket = (SOCKET)clientSocketRaw;
 
-    const int BUFFER_SIZE = 4096; // 4KB chunks are sufficient for reading
+    const int BUFFER_SIZE = 4096;
     std::vector<char> buffer(BUFFER_SIZE);
     std::string requestData;
 
-    // 1. Read Headers
     int bytesRecv;
     size_t headerEndPos = std::string::npos;
 
     while ((bytesRecv = recv(clientSocket, buffer.data(), BUFFER_SIZE, 0)) > 0) {
         requestData.append(buffer.data(), bytesRecv);
         headerEndPos = requestData.find("\r\n\r\n");
-        if (headerEndPos != std::string::npos) {
-            break; // Headers fully received
-        }
+        if (headerEndPos != std::string::npos) break;
     }
 
     if (headerEndPos == std::string::npos) {
-        // Malformed request or connection closed early
         closesocket(clientSocket);
         return;
     }
 
-    // 2. Parse Content-Length to handle the Body
     size_t contentLength = 0;
     size_t clPos = requestData.find("Content-Length: ");
     if (clPos != std::string::npos) {
@@ -306,24 +433,21 @@ void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
         catch (...) { contentLength = 0; }
     }
 
-    // Parse Profile Name Header
     std::string profileNameHeader = "";
     size_t pnPos = requestData.find("Profile-Name: ");
     if (pnPos != std::string::npos) {
         size_t endOfLine = requestData.find("\r\n", pnPos);
         profileNameHeader = requestData.substr(pnPos + 14, endOfLine - (pnPos + 14));
-        // Simple sanitization (remove paths)
         size_t lastSlash = profileNameHeader.find_last_of("/\\");
         if (lastSlash != std::string::npos) profileNameHeader = profileNameHeader.substr(lastSlash + 1);
     }
 
-    // 3. Read Remaining Body (if necessary)
     size_t bodyStart = headerEndPos + 4;
     size_t currentBodySize = requestData.size() - bodyStart;
 
     while (currentBodySize < contentLength) {
         bytesRecv = recv(clientSocket, buffer.data(), BUFFER_SIZE, 0);
-        if (bytesRecv <= 0) break; // Error or closed
+        if (bytesRecv <= 0) break;
         requestData.append(buffer.data(), bytesRecv);
         currentBodySize += bytesRecv;
     }
@@ -332,27 +456,22 @@ void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
     std::string contentType = "text/html";
     int statusCode = 200;
 
-    // --- ROUTING LOGIC ---
-
-    // 1. POST /api/start
-    if (requestData.find("POST /api/start ") != std::string::npos) {
-        botActive = true;
+    // [FIX] Update Globals directly
+    if (requestData.find("POST /api/start") != std::string::npos) {
+        g_IsPaused = false; // UNPAUSE
         responseBody = "{\"status\":\"ok\"}";
         contentType = "application/json";
     }
-    // 2. POST /api/stop
-    else if (requestData.find("POST /api/stop ") != std::string::npos) {
-        botActive = false;
+    else if (requestData.find("POST /api/stop") != std::string::npos) {
+        g_IsPaused = true; // PAUSE
         responseBody = "{\"status\":\"ok\"}";
         contentType = "application/json";
     }
-    // 3. POST /api/upload_profile
-    else if (requestData.find("POST /api/upload_profile ") != std::string::npos) {
+    else if (requestData.find("POST /api/upload_profile") != std::string::npos) {
         size_t bodyPos = requestData.find("\r\n\r\n");
         if (bodyPos != std::string::npos) {
             std::string body = requestData.substr(bodyPos + 4);
             std::string error;
-            // Pass the profile name from header
             if (g_ProfileLoader.CompileAndLoad(body, error, profileNameHeader)) {
                 responseBody = "{\"status\":\"success\", \"message\":\"Profile Loaded!\"}";
                 currentProfile = profileNameHeader.empty() ? "Uploaded Profile" : profileNameHeader;
@@ -363,8 +482,7 @@ void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
             contentType = "application/json";
         }
     }
-    // NEW ENDPOINT: POST /api/load_last
-    else if (requestData.find("POST /api/load_last ") != std::string::npos) {
+    else if (requestData.find("POST /api/load_last") != std::string::npos) {
         std::string error;
         if (g_ProfileLoader.LoadLastProfile(error)) {
             responseBody = "{\"status\":\"success\", \"message\":\"Last Profile Reloaded!\"}";
@@ -375,38 +493,32 @@ void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
         }
         contentType = "application/json";
     }
-    // 4. GET /api/state (Complete State for Dashboard)
-    else if (requestData.find("GET /api/state ") != std::string::npos) {
-        responseBody = GenerateJSONState(); // Calls member function
+    else if (requestData.find("GET /api/state") != std::string::npos) {
+        responseBody = GenerateJSONState();
         contentType = "application/json";
     }
-    // Endpoint to toggle Auto Load
-    else if (requestData.find("POST /api/set_autoload ") != std::string::npos) {
+    else if (requestData.find("POST /api/set_autoload") != std::string::npos) {
         size_t bodyPos = requestData.find("\r\n\r\n");
         if (bodyPos != std::string::npos) {
             std::string body = requestData.substr(bodyPos + 4);
-            // Expect body like "enabled=true" or simple "1"
             if (body.find("true") != std::string::npos || body.find("1") != std::string::npos)
                 autoLoad = true;
             else
                 autoLoad = false;
 
-            SaveConfig(); // Persist changes
+            SaveConfig();
             responseBody = "{\"status\":\"success\"}";
             contentType = "application/json";
         }
     }
-    // 5. GET /api/logs
-    else if (requestData.find("GET /api/logs ") != std::string::npos) {
-        responseBody = ReadLogFileTail(50000); // Calls member function
+    else if (requestData.find("GET /api/logs") != std::string::npos) {
+        responseBody = ReadLogFileTail(50000);
         contentType = "text/plain";
     }
-    // 6. GET / (Dashboard HTML)
     else {
         responseBody = GetHTML();
     }
 
-    // Send Response
     std::stringstream ss;
     ss << "HTTP/1.1 " << statusCode << " OK\r\n"
         << "Content-Type: " << contentType << "\r\n"
@@ -423,7 +535,6 @@ void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
     closesocket(clientSocket);
 }
 
-// THIS IS THE NEW HTML DASHBOARD
 std::string WebServer::GetHTML() {
     std::stringstream ss;
 
@@ -436,15 +547,14 @@ std::string WebServer::GetHTML() {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Shadow Bot Dashboard</title>
     <style>
+        * { box-sizing: border-box; }
         :root { --bg: #1e1e1e; --panel: #252526; --accent: #007acc; --text: #d4d4d4; --border: #333; }
         body { background-color: var(--bg); color: var(--text); font-family: 'Segoe UI', Tahoma, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         
-        /* HEADER */
         header { background-color: #2d2d30; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
         .title { font-weight: bold; font-size: 18px; color: #fff; }
         .controls { display: flex; gap: 10px; }
         
-        /* BUTTONS */
         button { padding: 8px 16px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; color: white; transition: opacity 0.2s; }
         button:hover { opacity: 0.8; }
         .btn-start { background-color: #28a745; }
@@ -453,36 +563,58 @@ std::string WebServer::GetHTML() {
         .btn-file { background-color: #444; position: relative; overflow: hidden; }
         .btn-file input[type=file] { position: absolute; top: 0; right: 0; min-width: 100%; min-height: 100%; opacity: 0; cursor: pointer; }
 
-        /* TABS */
         .tabs { display: flex; background: var(--panel); border-bottom: 1px solid var(--border); }
         .tab { padding: 10px 20px; cursor: pointer; background: var(--panel); color: #888; }
         .tab.active { background: var(--bg); color: #fff; border-top: 2px solid var(--accent); font-weight: bold; }
         .tab:hover { color: #fff; }
 
-        /* CONTENT AREA */
         .content { flex: 1; position: relative; overflow: hidden; }
         .view { display: none; height: 100%; width: 100%; }
         .view.active { display: block; }
 
-        /* CONSOLE VIEW */
         #log-container { height: 100%; overflow-y: scroll; font-family: 'Consolas', monospace; font-size: 12px; padding: 10px; white-space: pre-wrap; color: #ccc; }
 
-        /* MAP VIEW */
         #map-wrapper { height: 100%; width: 100%; position: relative; background: #000; display: flex; justify-content: center; align-items: center; }
         canvas { display: block; }
         .legend { position: absolute; bottom: 20px; left: 20px; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 4px; pointer-events: none; }
         .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
 
-        /* TABLE VIEW */
         #table-wrapper { height: 100%; overflow: auto; padding: 20px; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         th { text-align: left; background: var(--panel); padding: 8px; position: sticky; top: 0; }
-        /* Copyable Cells */
         td { border-bottom: 1px solid var(--border); padding: 6px; cursor: pointer; transition: background 0.1s; }
         td:hover { background: #3e3e42; }
         tr:hover { background: #2a2d2e; }
 
-        /* FOOTER STATUS */
+        #debug-wrapper { height: 100%; overflow: auto; padding: 20px; }
+        .debug-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
+        
+        .debug-card { 
+            background: var(--panel); 
+            border: 1px solid var(--border); 
+            border-radius: 4px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3); 
+            transition: box-shadow 0.3s, border-color 0.3s;
+        }
+        
+        /* [FIXED] Highlighter Class */
+        .active-card {
+            border: 2px solid #28a745 !important;
+            box-shadow: 0 0 15px rgba(40, 167, 69, 0.6) !important;
+        }
+
+        .debug-card h3 { background: #333; margin: 0; padding: 10px 15px; font-size: 14px; border-bottom: 1px solid var(--border); color: #fff; text-transform: uppercase; letter-spacing: 0.5px; }
+        .debug-table { width: 100%; border-collapse: collapse; font-family: 'Consolas', monospace; font-size: 12px; table-layout: fixed; }
+        .debug-table td { border-bottom: 1px solid #333; padding: 6px 15px; vertical-align: top; word-wrap: break-word; overflow-wrap: break-word; }
+        .debug-table tr:last-child td { border-bottom: none; }
+        .debug-table tr:nth-child(even) { background: rgba(255,255,255,0.03); }
+        .dt-key { color: #aaa; width: 45%; }
+        .dt-val { color: #fff; font-weight: bold; text-align: right; width: 55%; }
+        .val-true { color: #4caf50; }
+        .val-false { color: #f44336; opacity: 0.7; }
+        .val-num { color: #64b5f6; }
+        .val-obj { color: #e1bee7; font-size: 11px; text-align: left; font-weight: normal; }
+
         .status-bar { background: var(--accent); color: white; padding: 4px 15px; font-size: 12px; display: flex; gap: 20px; }
     </style>
 </head>
@@ -494,7 +626,7 @@ std::string WebServer::GetHTML() {
     <header>
         <div class="title">Shadow Bot Dashboard</div>
         <div class="controls">
-            <div class="chk-container" title="Automatically load the last used profile when bot starts">
+            <div class="chk-container">
                 <input type="checkbox" id="chkAutoLoad" onchange="toggleAutoLoad(this)">
                 <label for="chkAutoLoad">Auto-Load Last</label>
             </div>
@@ -503,11 +635,8 @@ std::string WebServer::GetHTML() {
                 <input type="file" id="profileFile" onchange="uploadProfile()">
             </button>
             <span id="uploadStatus" style="font-size: 12px; color: #aaa; align-self: center;"></span>
-
             <button class="btn-blue" onclick="loadLastProfile()">Reload Last</button>
-
             <div style="width: 1px; background: #555; margin: 0 10px;"></div>
-    
             <button class="btn-start" onclick="sendCommand('start')">START</button>
             <button class="btn-stop" onclick="sendCommand('stop')">STOP</button>
         </div>
@@ -517,6 +646,7 @@ std::string WebServer::GetHTML() {
         <div class="tab active" onclick="switchTab('console')">Console Log</div>
         <div class="tab" onclick="switchTab('map')">Live Map</div>
         <div class="tab" onclick="switchTab('entities')">Entity Table</div>
+        <div class="tab" onclick="switchTab('debug')">Debug State</div>
     </div>
 
     <div class="content">
@@ -531,9 +661,7 @@ std::string WebServer::GetHTML() {
                     <div><span class="dot" style="background:cyan"></span> Player</div>
                     <div><span class="dot" style="background:lime"></span> Path</div>
                     <div><span class="dot" style="background:#ff0000"></span> Enemy NPC</div>
-                    <div><span class="dot" style="background:#ffff00"></span> Neutral NPC</div>
                     <div><span class="dot" style="background:#00ff00"></span> Friendly NPC</div>
-                    <div><span class="dot" style="background:#d02090"></span> Object</div>
                 </div>
             </div>
         </div>
@@ -555,6 +683,12 @@ std::string WebServer::GetHTML() {
                 </table>
             </div>
         </div>
+
+        <div id="debug" class="view">
+            <div id="debug-wrapper">
+                <div id="debug-grid" class="debug-grid"></div>
+            </div>
+        </div>
     </div>
 
     <div class="status-bar">
@@ -567,51 +701,30 @@ std::string WebServer::GetHTML() {
     // PART 3: SCRIPT
     ss << R"HTML(
     <script>
-        // --- GLOBAL STATE ---
         let gameState = {};
         const canvas = document.getElementById('mapCanvas');
         const ctx = canvas.getContext('2d');
 
-        // --- CONTROLS ---
-        async function sendCommand(cmd) {
-            try { await fetch('/api/' + cmd, { method: 'POST' }); } 
-            catch(e) { console.error(e); }
-        }
-
-        async function toggleAutoLoad(el) {
-            await fetch('/api/set_autoload', {
-                method: 'POST',
-                body: el.checked ? "true" : "false"
-            });
-        }
-
+        async function sendCommand(cmd) { try { await fetch('/api/' + cmd, { method: 'POST' }); } catch(e) {} }
+        async function toggleAutoLoad(el) { await fetch('/api/set_autoload', { method: 'POST', body: el.checked ? "true" : "false" }); }
+        
         async function loadLastProfile() {
             const status = document.getElementById('uploadStatus');
             status.innerText = "Reloading...";
             try {
                 const res = await fetch('/api/load_last', { method: 'POST' });
                 const data = await res.json();
-                if(data.status === 'success') {
-                    status.innerText = "Reloaded!";
-                    status.style.color = "lime";
-                    setTimeout(() => status.innerText = "", 3000);
-                } else {
-                    status.innerText = "Error: " + data.message;
-                    status.style.color = "red";
-                }
-            } catch(err) {
-                status.innerText = "Request Failed";
-            }
+                status.innerText = data.status === 'success' ? "Reloaded!" : "Error";
+                status.style.color = data.status === 'success' ? "lime" : "red";
+                setTimeout(() => status.innerText = "", 3000);
+            } catch(err) { status.innerText = "Failed"; }
         }
 
         async function uploadProfile() {
             const input = document.getElementById('profileFile');
             const status = document.getElementById('uploadStatus');
             if (input.files.length === 0) return;
-
             const file = input.files[0];
-            status.innerText = "Reading...";
-            
             const reader = new FileReader();
             reader.onload = async function(e) {
                 status.innerText = "Uploading...";
@@ -622,43 +735,21 @@ std::string WebServer::GetHTML() {
                         headers: { 'Profile-Name': file.name } 
                     });
                     const data = await res.json();
-                    if(data.status === 'success') {
-                        status.innerText = "Success!";
-                        status.style.color = "lime";
-                        setTimeout(() => status.innerText = "", 3000);
-                    } else {
-                        status.innerText = "Error: " + data.message;
-                        status.style.color = "red";
-                    }
-                } catch(err) {
-                    status.innerText = "Upload Failed";
-                }
+                    status.innerText = data.status === 'success' ? "Success!" : "Error";
+                    status.style.color = data.status === 'success' ? "lime" : "red";
+                    setTimeout(() => status.innerText = "", 3000);
+                } catch(err) { status.innerText = "Failed"; }
             };
             reader.readAsText(file);
         }
 
-        // --- CLIPBOARD HELPER ---
         function copyToClipboard(text, el) {
-            // Robust fallback for non-secure contexts (HTTP)
-            const textArea = document.createElement("textarea");
-            textArea.value = text;
-            textArea.style.position = "fixed";
-            document.body.appendChild(textArea);
-            textArea.focus();
-            textArea.select();
-            try {
-                document.execCommand('copy');
-                // Visual feedback
-                const prev = el.style.background;
-                el.style.background = '#666';
-                setTimeout(() => el.style.background = "", 150);
-            } catch (err) {
-                console.error('Copy failed', err);
-            }
-            document.body.removeChild(textArea);
+            navigator.clipboard.writeText(text);
+            const prev = el.style.background;
+            el.style.background = '#666';
+            setTimeout(() => el.style.background = "", 150);
         }
 
-        // --- UI LOGIC ---
         function switchTab(name) {
             document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
@@ -675,10 +766,68 @@ std::string WebServer::GetHTML() {
         }
         window.onresize = resizeCanvas;
 
-        // --- DATA POLLING ---
+        // --- DEBUG GRID RENDERER [FIXED: PRIORITY HIGHLIGHTING] ---
+        function renderDebugGrid() {
+            const container = document.getElementById('debug-grid');
+            if (!gameState.debug) return;
+            
+            let html = '';
+            
+            // Visual Order
+            const order = ["GlobalState", "Combat", "Looting", "Gathering", "PathFollowing", "InteractState", "StuckState", "RespawnState"];
+            const keys = Object.keys(gameState.debug).sort((a,b) => {
+                let ia = order.indexOf(a); let ib = order.indexOf(b);
+                if(ia === -1) ia = 99; if(ib === -1) ib = 99;
+                return ia - ib;
+            });
+
+            // --- PRIORITY LOGIC ---
+            // Only ONE state can be 'active' at a time.
+            let activeStateName = null;
+            const d = gameState.debug;
+
+            // 1. Critical
+            if (d.StuckState && d.StuckState.isStuck) activeStateName = "StuckState";
+            else if (d.Combat && (d.Combat.inCombat || d.Combat.underAttack)) activeStateName = "Combat";
+            else if (d.RespawnState && (d.RespawnState.isDead || d.RespawnState.isPathingToCorpse)) activeStateName = "RespawnState";
+            
+            // 2. High Priority
+            else if (d.Looting && d.Looting.hasLoot) activeStateName = "Looting";
+            else if (d.InteractState && d.InteractState.interactActive) activeStateName = "InteractState";
+            else if (d.Gathering && (d.Gathering.hasNode || d.Gathering.nodeActive)) activeStateName = "Gathering";
+            
+            // 3. Movement / Idle
+            else if (d.PathFollowing && d.PathFollowing.hasPath) activeStateName = "PathFollowing";
+            else if (d.WaypointReturn && (d.WaypointReturn.hasPath || d.WaypointReturn.waitingForUnstuck)) activeStateName = "WaypointReturn";
+            else if (d.GlobalState && d.GlobalState.inMotion) activeStateName = "GlobalState"; 
+
+            keys.forEach(catName => {
+                const data = gameState.debug[catName];
+                const cardClass = (catName === activeStateName) ? "debug-card active-card" : "debug-card";
+
+                html += `<div class="${cardClass}"><h3>${catName}</h3><table class="debug-table">`;
+                for(let key in data) {
+                    let val = data[key];
+                    let displayVal = val;
+                    let cls = "";
+                    if (typeof val === 'boolean') {
+                        cls = val ? "val-true" : "val-false";
+                        displayVal = val ? "TRUE" : "FALSE";
+                    } else if (typeof val === 'number') {
+                        cls = "val-num";
+                    } else if (typeof val === 'object' && val !== null) {
+                        cls = "val-obj";
+                        displayVal = JSON.stringify(val);
+                    }
+                    html += `<tr><td class="dt-key">${key}</td><td class="dt-val ${cls}">${displayVal}</td></tr>`;
+                }
+                html += `</table></div>`;
+            });
+            container.innerHTML = html;
+        }
+
         async function poll() {
             try {
-                // 1. Logs
                 if(document.getElementById('console').classList.contains('active')) {
                     const res = await fetch('/api/logs');
                     const text = await res.text();
@@ -688,12 +837,27 @@ std::string WebServer::GetHTML() {
                     if(isAtBottom) container.scrollTop = container.scrollHeight;
                 }
 
-                // 2. State
                 const res = await fetch('/api/state');
                 gameState = await res.json();
 
-                document.getElementById('stat-running').innerText = "Status: " + (gameState.running ? "RUNNING" : "STOPPED");
-                document.getElementById('stat-profile').innerText = "Profile: " + (gameState.profile || "None");
+                // [FIXED] Banner Status Logic with g_IsPaused support
+                const bar = document.querySelector('.status-bar');
+                const profile = gameState.profile || "None";
+                const isPaused = gameState.paused; // from g_IsPaused
+
+                if (profile === "None") {
+                    bar.style.background = "#d32f2f"; // RED (No Profile)
+                    bar.style.color = "white";
+                } else if (isPaused === true || isPaused === "true") {
+                    bar.style.background = "#ffc107"; // YELLOW (Paused)
+                    bar.style.color = "black";
+                } else {
+                    bar.style.background = "#28a745"; // GREEN (Running)
+                    bar.style.color = "white";
+                }
+
+                document.getElementById('stat-running').innerText = "Status: " + (isPaused ? "PAUSED" : "RUNNING");
+                document.getElementById('stat-profile').innerText = "Profile: " + profile;
                 document.getElementById('stat-uptime').innerText = "Uptime: " + gameState.uptime;
 
                 const chk = document.getElementById('chkAutoLoad');
@@ -703,11 +867,11 @@ std::string WebServer::GetHTML() {
 
                 if(document.getElementById('map').classList.contains('active')) drawMap();
                 if(document.getElementById('entities').classList.contains('active')) updateTable();
+                if(document.getElementById('debug').classList.contains('active')) renderDebugGrid();
 
-            } catch(e) { console.log("Poll error", e); }
+            } catch(e) { console.log(e); }
         }
 
-        // --- MAP DRAWING ---
         function drawMap() {
             if(!gameState.player) return;
             const px = gameState.player.x;
@@ -715,17 +879,11 @@ std::string WebServer::GetHTML() {
             const scale = 4.0;
             const cx = canvas.width / 2;
             const cy = canvas.height / 2;
-
             ctx.fillStyle = "#000";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
+            const toScreen = (x, y) => ({ x: cx + (x - px) * scale, y: cy - (y - py) * scale });
 
-            const toScreen = (x, y) => ({
-                x: cx + (x - px) * scale,
-                y: cy - (y - py) * scale
-            });
-
-            // Path
-            if(gameState.path && gameState.path.length > 0) {
+            if(gameState.path) {
                 ctx.beginPath();
                 ctx.strokeStyle = "lime";
                 ctx.lineWidth = 2;
@@ -735,41 +893,25 @@ std::string WebServer::GetHTML() {
                 });
                 ctx.stroke();
             }
-
-            // Entities
             if(gameState.entities) {
                 gameState.entities.forEach(ent => {
                     const s = toScreen(ent.x, ent.y);
                     if(s.x < -10 || s.x > canvas.width+10 || s.y < -10 || s.y > canvas.height+10) return;
-
                     ctx.beginPath();
                     ctx.arc(s.x, s.y, 4, 0, Math.PI*2);
-                    
-                    if(ent.type === 'Enemy') {
-                        if (ent.reaction === 2) ctx.fillStyle = '#00ff00';      // Friendly
-                        else if (ent.reaction === 1) ctx.fillStyle = '#ffff00'; // Neutral
-                        else ctx.fillStyle = '#ff0000';                         // Hostile
-                    }
-                    else if(ent.type === 'Object') ctx.fillStyle = '#d02090';   // Purple
+                    if(ent.type === 'Enemy') ctx.fillStyle = (ent.reaction === 2) ? '#00ff00' : (ent.reaction === 1 ? '#ffff00' : '#ff0000');
+                    else if(ent.type === 'Object') ctx.fillStyle = '#d02090';
                     else if(ent.type === 'Player') ctx.fillStyle = 'blue';
                     else ctx.fillStyle = 'gray';
-                    
                     ctx.fill();
                 });
             }
-
-            // Player Arrow
             const rot = gameState.player.rot; 
             ctx.save();
             ctx.translate(cx, cy);
             ctx.rotate(rot + Math.PI); 
-            ctx.beginPath();
-            ctx.moveTo(0, -8);
-            ctx.lineTo(-6, 8);
-            ctx.lineTo(6, 8);
-            ctx.closePath();
-            ctx.fillStyle = "cyan";
-            ctx.fill();
+            ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(-6, 8); ctx.lineTo(6, 8); ctx.closePath();
+            ctx.fillStyle = "cyan"; ctx.fill();
             ctx.restore();
         }
 
@@ -779,73 +921,33 @@ std::string WebServer::GetHTML() {
             const filter = document.getElementById('typeFilter').value;
             tbody.innerHTML = '';
             
-            // 1. Player Table
             if (filter === 'Player') {
                 thead.innerHTML = `<th>Property</th><th>Value</th>`;
                 const p = gameState.player;
                 if (!p) return;
                 const rows = [
                     ["Position", `${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`],
-                    ["Rotation", p.rot.toFixed(3) + " rad"],
+                    ["Rotation", p.rot.toFixed(3)],
                     ["Health", `${p.hp} / ${p.maxHp}`],
-                    ["Level", p.level],
-                    ["Map ID", p.mapId],
-                    ["Free Bag Slots", p.bagFree],
-                    ["Need Repair", p.needRepair ? "YES" : "No"],
-                    ["Status", p.isDead ? "DEAD" : (p.inCombat ? "In Combat" : "Idle")],
-                    ["Flags", `Mounted: ${p.isMounted}, Ground Mounted: ${p.groundMounted}, Flying Mounted: ${p.flyingMounted}, Flying: ${p.isFlying}, Indoor: ${p.isIndoor}, On Ground: ${p.onGround}, In Water: ${p.inWater}`],
-                    ["Target GUID", p.target],
-                    ["Selected GUID", p.selected]
+                    ["Target GUID", p.target]
                 ];
-                rows.forEach(r => {
-                    const color = (r[0] === "Need Repair" && p.needRepair) ? "color:red;font-weight:bold" : "";
-                    tbody.innerHTML += `<tr><td><b>${r[0]}</b></td><td style="${color}" onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${r[1]}</td></tr>`;
-                });
+                rows.forEach(r => tbody.innerHTML += `<tr><td><b>${r[0]}</b></td><td onclick="copyToClipboard(this.innerText, this)">${r[1]}</td></tr>`);
                 return;
             }
 
-            // 2. Entity Table
-            thead.innerHTML = `<th>Type</th><th>Name</th><th>Dist</th><th>Pos (X,Y,Z)</th><th>Health</th><th>Combat?</th><th>Target GUID</th>`;
+            thead.innerHTML = `<th>Type</th><th>Name</th><th>Dist</th><th>Pos</th><th>Health</th>`;
             if (!gameState.entities) return;
 
-            const filtered = gameState.entities
-                .filter(e => filter === 'All' || e.type === filter)
-                .sort((a, b) => a.dist - b.dist);
-
-            filtered.forEach(ent => {
-                let healthInfo = "N/A";
-                let combatInfo = "-";
-                let targetInfo = "-";
-                let color = '#ccc';
-                let typeDisplay = ent.type;
-
-                if (ent.type === 'Enemy') {
-                    healthInfo = `${ent.hp} / ${ent.maxHp} (Lvl ${ent.level})`;
-                    combatInfo = ent.inCombat ? "<span style='color:red;font-weight:bold'>YES</span>" : "No";
-                    targetInfo = ent.targetGuid || "None";
-
-                    if (ent.reaction === 2) { color = '#00ff00'; typeDisplay = "Friendly NPC"; }
-                    else if (ent.reaction === 1) { color = '#ffff00'; typeDisplay = "Neutral NPC"; }
-                    else { color = '#ff0000'; typeDisplay = "Enemy NPC"; }
-                } 
-                else if (ent.type === 'Object') {
-                    healthInfo = ent.nodeActive ? "Active" : "Depleted";
-                    combatInfo = "-";
-                    targetInfo = "-";
-                    color = '#d02090'; // Purple
-                }
-
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td style="color:${color}; font-weight:bold;" onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${typeDisplay}</td>
-                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${ent.name} (ID: ${ent.id})</td>
-                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${ent.dist.toFixed(1)}</td>
-                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${ent.x.toFixed(1)}, ${ent.y.toFixed(1)}, ${ent.z.toFixed(1)}</td>
-                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${healthInfo}</td>
-                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${combatInfo}</td>
-                    <td style="font-family:monospace; font-size:11px;" onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${targetInfo}</td>
-                `;
-                tbody.appendChild(tr);
+            gameState.entities.filter(e => filter === 'All' || e.type === filter).sort((a, b) => a.dist - b.dist).forEach(ent => {
+                let info = (ent.type === 'Enemy') ? `${ent.hp}/${ent.maxHp}` : "-";
+                let color = (ent.type === 'Enemy' && ent.reaction === 0) ? '#ff0000' : '#ccc';
+                tbody.innerHTML += `<tr>
+                    <td style="color:${color}">${ent.type}</td>
+                    <td onclick="copyToClipboard(this.innerText, this)">${ent.name}</td>
+                    <td>${ent.dist.toFixed(1)}</td>
+                    <td>${ent.x.toFixed(1)}, ${ent.y.toFixed(1)}</td>
+                    <td>${info}</td>
+                </tr>`;
             });
         }
 

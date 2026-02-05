@@ -57,7 +57,7 @@ const float FMAP_VERTICAL_TOLERANCE = 2.0f;  // Tolerance for floor snapping
 const size_t MAX_CACHE_SIZE = 100;
 const size_t CACHE_CLEANUP_THRESHOLD = 120;
 
-const float GROUND_PATH_THRESHOLD = 0.5f;
+const float GROUND_PATH_THRESHOLD = 1.0f;
 
 const bool DEBUG_PATHFINDING = true;  // Enable for flight debugging
 
@@ -1047,7 +1047,7 @@ public:
 
 static NavMesh globalNavMesh;
 
-inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, bool ignoreWater, bool pointAdjust = true, bool zCheck = true) {
+inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, bool ignoreWater, bool pointAdjust = true, bool zCheck = true, float zExtent = 5.0f) {
     if (!globalNavMesh.query || !globalNavMesh.mesh) return {};
 
     // --- ESCAPE LOGIC FOR GROUND PATHS ---
@@ -1114,7 +1114,7 @@ inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, 
     float detourStart[3] = { start.y, start.z, start.x };
     float detourEnd[3] = { end.y, end.z, end.x };
     // Reduced from { 500.0f, 1000.0f, 500.0f } to prevent snapping through walls
-    float extent[3] = { 5.0f, 5.0f, 5.0f };
+    float extent[3] = { 5.0f, zExtent, 5.0f };
 
     globalNavMesh.query->findNearestPoly(detourStart, extent, &filter, &startRef, startPt);
     globalNavMesh.query->findNearestPoly(detourEnd, extent, &filter, &endRef, endPt);
@@ -2165,7 +2165,7 @@ inline std::vector<float> GetPossibleZLayers(int mapId, float x, float y) {
 
 // MODIFIED: CalculatePath accepts ignoreWater and passes it to FindPath/Cache
 inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath, const Vector3& startPos,
-    int currentIndex, bool canFly, int mapId, bool isFlying, bool ignoreWater, bool path_loop = false, float pathThreshold = 25.0f, bool zCheck = true) {
+    int currentIndex, bool canFly, int mapId, bool isFlying, bool ignoreWater, bool path_loop = false, float pathThreshold = 25.0f, bool zCheck = true, float groundZExtent = 5.0f) {
     std::string mmapFolder = "C:/SMM/data/mmaps/";
 
     if (!std::filesystem::exists(mmapFolder)) {
@@ -2264,7 +2264,7 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
             }
             else {
                 // --- ATTEMPT GROUND PATH ---
-                segment = FindPath(start, end, ignoreWater, true, zCheck);
+                segment = FindPath(start, end, ignoreWater, true, zCheck, groundZExtent);
 
                 // --- VALIDATION: Check Final Point ---
                 if (segment.empty()) {

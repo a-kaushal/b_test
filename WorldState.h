@@ -131,6 +131,7 @@ struct InteractState : public ActionState {
     bool repair = false;
     bool repairDone = false;
     bool vendorDone = false;
+    bool sellComplete = false;
     ULONG_PTR targetGuidLow = 0;
     ULONG_PTR targetGuidHigh = 0;
     bool locationChange = false;

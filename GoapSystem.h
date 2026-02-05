@@ -145,7 +145,7 @@ public:
     // Main Entry Point
     // returns TRUE if interaction sequence is complete
     bool EngageTarget(Vector3 targetPos, ULONG_PTR targetGuidLow, ULONG_PTR targetGuidHigh, PlayerInfo& player, std::vector<PathNode>& currentPath, int& pathIndex, int mapId, float approachDist, float interactDist, float finalDist,
-        bool checkTarget, bool targetGuid, bool canFly, int postClickWaitMs, MouseButton click, bool movingTarget, bool& failedPath, int targetId, bool& failedInteract, bool mountDisable = false, int waitTime = 1500, bool groundInteract = false,
+        bool checkTarget, bool targetGuid, bool canFly, int postClickWaitMs, MouseButton click, bool movingTarget, bool& failedPath, int targetId, bool& failedInteract, bool mountDisable = false, int waitTime = 1500, bool groundInteract = true,
         Vector3 updatedPos = {-1, -1, -1}) {
         bool fly_entry_state = canFly;
         if (updatedPos.x == -1) updatedPos = targetPos;
@@ -548,6 +548,7 @@ private:
     bool failedPath = false;
     // Track the last ID to detect overrides
     int lastInteractId = -1;
+    bool reloadedGame = 0;
 
 public:
     ActionInteract(InteractionController& ic, SimpleKeyboardClient& k, SimpleMouseClient& m)
@@ -575,6 +576,7 @@ public:
         g_GameState->interactState.vendorDone = false;
         g_GameState->interactState.locationChangeTime = -1;
         g_GameState->interactState.locationChange = false;
+        reloadedGame = 0;
         lastInteractId = -1;
     }
 
@@ -615,7 +617,7 @@ public:
             failedInteract,
             false,
             1500,
-            false,
+            true,
             g_GameState->interactState.inGameLocation
         );
 
@@ -647,6 +649,13 @@ public:
                 interactPause = GetTickCount();
             }
             if (ws.interactState.mailing) {
+                if (!reloadedGame) {
+                    input.SendDataRobust(std::wstring(L"/reload"));
+                    Sleep(1000);
+                    reloadedGame = 1;
+                    interact.Reset();
+                    return false;
+                }
                 if (PerformMailing(mouse)) {
                     Sleep(100);
                     input.SendDataRobust(std::wstring(L"/run ToggleBackpack() CloseMail()"));
@@ -660,7 +669,7 @@ public:
             }
 
             // Wait a moment for the transaction (optional, helps prevent instant state flip)
-            if (GetTickCount() - interactPause > 2500) {
+            if ((GetTickCount() - interactPause > 2500) && ((ws.interactState.vendorSell && ws.interactState.sellComplete) || !ws.interactState.vendorSell)) {
                 if (ws.globalState.vendorOpen) {
                     input.SendDataRobust(std::wstring(L"/run CloseMerchant()"));
                 }
@@ -1021,7 +1030,8 @@ public:
                 false,
                 false,
                 20.0f,
-                false
+                false,
+                20.0f
             );
 
             if (!path.empty()) {
@@ -1064,7 +1074,7 @@ public:
             // Continue steering if path not finished
             if (!pathFinished) {
                 PathNode& targetNode = ws.respawnState.path[ws.respawnState.index];
-                if (ws.player.position.Dist2D(targetNode.pos) < 0.5f) {
+                if (ws.player.position.Dist2D(targetNode.pos) < 1.0f) {
                     ws.respawnState.index++;
                 }
                 else {
@@ -1432,7 +1442,7 @@ public:
             failedInteract,
             false,
             1500,
-            false,
+            true,
             {}
         );
         ws.globalState.activePath = ws.gatherState.path;
@@ -2283,8 +2293,8 @@ private:
         //if (state.globalState.activePath.empty() || !pilot.IsMoving()) {
         if (!pilot.IsMoving()) {
             // NEW: Reset stuck state when idle
-            /*state.stuckState.stuckStartTime = 0;
-            state.stuckState.lastCheckTime = 0;*/
+            state.stuckState.stuckStartTime = 0;
+            state.stuckState.lastCheckTime = 0;
             return false;
         }
 
@@ -2350,10 +2360,11 @@ private:
                     // ONLY reset here, when we have PROVEN we moved significantly
                     state.stuckState.lastPosition = state.player.position;
                     state.stuckState.stuckStartTime = 0;
-                    state.stuckState.attemptCount = 0;
                     unstuckCount = 0;
                 }
             }
+
+            if (now - state.stuckState.stuckStartTime > 120000) state.stuckState.attemptCount = 0;
 
             if ((!g_GameState->player.inWater && distMoved > 10.0f) || (g_GameState->player.inWater && distMoved > 0.25f)) {
             }

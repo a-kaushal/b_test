@@ -12,14 +12,12 @@ public:
     // Scans the target process for the specific string pattern.
     // Returns the address if found, or 0 if not found.
     static ULONG_PTR Find(MemoryAnalyzer& analyzer, DWORD pid, const std::string& magicString) {
-        std::cout << "[LuaAnchor] Starting scan for pattern: " << magicString << std::endl;
-
         // 1. Get all memory regions from the kernel driver
         //    This is much faster than blindly scanning 0x0000 to 0x7FFF...
         auto regions = analyzer.EnumerateMemoryRegions(pid);
 
         if (regions.empty()) {
-            std::cerr << "[LuaAnchor] Failed to enumerate regions or process is empty." << std::endl;
+            g_LogFile << "[LuaAnchor] Failed to enumerate regions or process is empty." << std::endl;
             return 0;
         }
 
@@ -29,8 +27,6 @@ public:
         // 3. Iterate over every memory region
         for (const auto& region : regions) {
 
-            // --- OPTIMIZATION FILTERS ---
-
             // Lua variables are stored on the Heap, which is always MEM_COMMIT.
             if (region.State != MEM_COMMIT) continue;
 
@@ -39,20 +35,23 @@ public:
             if ((region.Protect & PAGE_READWRITE) == 0 && (region.Protect & PAGE_WRITECOPY) == 0) {
                 continue;
             }
-            // Optional: Lua memory is usually MEM_PRIVATE (Private Heap). 
-            // However, some custom allocators might use MEM_MAPPED. 
-            // Scanning only PRIVATE is faster, but scanning both is safer.
+            // Reading a Guard Page triggers an exception (Access Violation) in the target process.
+            if (region.Protect & PAGE_GUARD) {
+                continue;
+            }
+            // Skip No Access explicitly (though implicit in R/W check above)
             if (region.Type == MEM_IMAGE) continue; // Skip DLLs/Exes
 
             // 4. Scan this specific region
             ULONG_PTR result = ScanRegion(analyzer, pid, region.BaseAddress, region.RegionSize, pattern);
-            if (Validator(analyzer, pid, result)) {
-                std::cout << "[LuaAnchor] Found pattern at: 0x" << std::hex << result << std::dec << std::endl;
-                return result;
+            if (result != 0) {
+                if (Validator(analyzer, pid, result)) {
+                    // std::cout << "[LuaAnchor] Found pattern at: 0x" << std::hex << result << std::dec << std::endl;
+                    return result;
+                }
             }
         }
-
-        std::cout << "[LuaAnchor] Pattern not found." << std::endl;
+        g_LogFile << "[LuaAnchor] Pattern not found." << std::endl;
         return 0;
     }
 
@@ -94,111 +93,125 @@ public:
             return address;
         }
         catch (...) {
-            std::cerr << "[Error] Failed to convert hex string: " << hexString << std::endl;
+            g_LogFile << "[Error] Failed to convert hex string: " << hexString << std::endl;
             return 0;
         }
     }
 
     static void ReadLuaData(MemoryAnalyzer& analyzer, DWORD pid, const std::string& magicString, ULONG_PTR& entryPtr, WoWDataTool& worldMap) {
-        std::string rawMemoryString;
-        bool firstRead = false;
-        if (entryPtr == 0) {
-            // 2. Find the address
-            firstRead = true;
-            entryPtr = LuaAnchor::Find(analyzer, pid, magicString);
-            g_LogFile << ">>> Lua Base Address: 0x" << std::hex << entryPtr << std::dec << std::endl;
-        }
-
-        if ((entryPtr != 0) && (analyzer.ReadString(pid, entryPtr, rawMemoryString, 60))) {
-            // 3. Read the full string from memory
-            // We read ~60 bytes to ensure we get the whole "##...##" block
-            //g_LogFile << "[Found String] " << rawMemoryString << std::endl;
-
-            // 4. Extract the actual pointer from the text
-            uintptr_t tableAddress = LuaAnchor::ExtractAddressFromLuaString(rawMemoryString);
-
-            if (tableAddress != 0) {
-                //g_LogFile << ">>> Lua Table Address: 0x" << std::hex << tableAddress << std::dec << std::endl;
-
-                // 5. Now you can read the array data!
-                // Remember to find the OFFSET_ARRAY_PTR (usually 0x10 or 0x18) manually first.
-                uintptr_t arrayPtr = 0;
-                // Example offset 0x18 (Common in x64 Lua)
-                if (analyzer.ReadPointer(pid, tableAddress + 0x20, arrayPtr)) {
-
-                    // Read the first 3 values (Double precision)
-                    double val, val1, val2, val3, val4, val5, val6, val7, val8, val9, val10, val11, val12, val13, val14, val15, val16;
-                    double prof1Id, prof1Level, prof1Max, prof2Id, prof2Level, prof2Max;
-                    analyzer.ReadDouble(pid, arrayPtr + 0x00, val); // Verification Value
-                    analyzer.ReadDouble(pid, arrayPtr + 0x18, val1);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x30, val2);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x48, val3);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x60, val4);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x78, val5);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x90, val6);
-                    analyzer.ReadDouble(pid, arrayPtr + 0xA8, val7);
-                    analyzer.ReadDouble(pid, arrayPtr + 0xC0, val8);
-                    analyzer.ReadDouble(pid, arrayPtr + 0xD8, val9);
-                    analyzer.ReadDouble(pid, arrayPtr + 0xF0, val10);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x108, val11);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x120, val12);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x138, val13);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x150, val14);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x168, val15);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x180, val16);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x1C8, prof1Id);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x1E0, prof1Level);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x1F8, prof1Max);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x210, prof2Id);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x228, prof2Level);
-                    analyzer.ReadDouble(pid, arrayPtr + 0x240, prof2Max);
-
-                    //g_LogFile << prof1Id << " " << prof1Level << " " << prof1Max << " " << prof2Id << " " << prof2Level << " " << prof2Max << std::endl;
-
-                    ((val1 > 0.5) ? g_GameState->player.needRepair = true : g_GameState->player.needRepair = false);
-                    ((val2 > 0.5) ? g_GameState->player.isIndoor = true : g_GameState->player.isIndoor = false);
-                    ((val3 > 0.5) ? g_GameState->player.areaMountable = true : g_GameState->player.areaMountable = false);
-                    (((val6 > 0.5) && (val4 > 0.5)) ? g_GameState->player.flyingMounted = true : g_GameState->player.flyingMounted = false);
-                    (((val6 < 0.5) && (val4 > 0.5)) ? g_GameState->player.groundMounted = true : g_GameState->player.groundMounted = false);
-                    g_GameState->player.isMounted = g_GameState->player.flyingMounted || g_GameState->player.groundMounted;
-                    ((val7 > 0.5) ? g_GameState->player.isGhost = true : g_GameState->player.isGhost = false);
-                    ((val10 > 0.5) ? g_GameState->player.canRespawn = true : g_GameState->player.canRespawn = false);
-                    ((val11 > 0.5) ? g_GameState->player.isDeadBody = true : g_GameState->player.isDeadBody = false);
-                    ((val12 > 0.5) ? g_GameState->globalState.vendorOpen = true : g_GameState->globalState.vendorOpen = false);
-                    ((val13 > 0.5) ? g_GameState->globalState.chatOpen = true : g_GameState->globalState.chatOpen = false);
-                    ((val16 > 0.5) ? g_GameState->player.onGround = true : g_GameState->player.onGround = false);
-                    //((val14 > 0.5) ? g_LogFile << "Mail Window Open" << std::endl : g_LogFile << "Mail Window Closed" << std::endl);
-                    
-                    g_GameState->player.isDead = g_GameState->player.isGhost || g_GameState->player.isDeadBody;
-                    if (g_GameState->player.isDead) {
-                        float top, bottom, left, right;
-                        worldMap.reverseHash(val15, g_GameState->player.corpseMapId, top, bottom, left, right,
-                            g_GameState->player.corpseAreaId, g_GameState->player.corpseMapName);
-                        worldMap.convertNormToWorld(val8, val9, top, bottom, left, right, g_GameState->player.corpseX, g_GameState->player.corpseY);
-                        g_GameState->player.corpseMapHash = val15;
-                        g_GameState->respawnState.isDead = g_GameState->player.isDead;
-                        //g_LogFile << g_GameState->player.corpseX << " " << g_GameState->player.corpseY << std::endl;
-                    }
-                    else {
-                        g_GameState->player.corpseMapId = -1;
-                        g_GameState->player.corpseMapName = -1;
-                        g_GameState->player.corpseMapHash = -1; // Map name hash
-                        g_GameState->player.corpseX = -1;
-                        g_GameState->player.corpseY = -1;
-                        g_GameState->player.corpseMapHash = -1;
-                    }
-
-                    if (firstRead == true) {
-                        g_LogFile << "Data: [" << g_GameState->player.needRepair << ", " << g_GameState->player.isIndoor << ", " << g_GameState->player.areaMountable << ", " << val4 << ", " << val5
-                            << ", " << val6 << " " << val7 << " " << val8 << " " << val9 << " " << val10 << " " << val11 << " " << val12 << " " << val13 << " "
-                            << val14 << " " << val15 << " " << val16 << "]" << std::endl;
-                    }
+        try {
+            std::string rawMemoryString = "";
+            bool firstRead = false;
+            if (entryPtr == 0) {
+                entryPtr = LuaAnchor::Find(analyzer, pid, magicString);
+                if (entryPtr != 0) {
+                    firstRead = true;
+                    g_LogFile << ">>> Lua Base Address Found: 0x" << std::hex << entryPtr << std::dec << std::endl;
+                }
+                else {
+                    return; // Still looking
                 }
             }
+
+            // Read the string anchor
+            if (!analyzer.ReadString(pid, entryPtr, rawMemoryString, 60)) {
+                // g_LogFile << "[LuaAnchor] ReadString failed. Resetting EntryPtr." << std::endl;
+                entryPtr = 0;
+                return;
+            }
+
+            // Validation: Does the string still look like our anchor?
+            if (rawMemoryString.find("##MAGSTR##") == std::string::npos) {
+                // g_LogFile << "[LuaAnchor] Magic header missing. Resetting EntryPtr." << std::endl;
+                entryPtr = 0;
+                return;
+            }
+
+            uintptr_t tableAddress = LuaAnchor::ExtractAddressFromLuaString(rawMemoryString);
+            if (tableAddress == 0) return;
+
+            uintptr_t arrayPtr = 0;
+            // 0x20 is a common offset for Lua tables in WoW, but ensure this is correct for your version
+            if (!analyzer.ReadPointer(pid, tableAddress + 0x20, arrayPtr) || arrayPtr == 0) {
+                return; // Read failed or null pointer
+            }
+
+            double values[25];
+
+            // Read Verification Value (Index 0)
+            if (!analyzer.ReadDouble(pid, arrayPtr + 0x00, values[0])) return;
+
+            analyzer.ReadDouble(pid, arrayPtr + 0x18, values[1]);
+            analyzer.ReadDouble(pid, arrayPtr + 0x30, values[2]);
+            analyzer.ReadDouble(pid, arrayPtr + 0x48, values[3]);
+            analyzer.ReadDouble(pid, arrayPtr + 0x60, values[4]);
+            analyzer.ReadDouble(pid, arrayPtr + 0x78, values[5]);
+            analyzer.ReadDouble(pid, arrayPtr + 0x90, values[6]);
+            analyzer.ReadDouble(pid, arrayPtr + 0xA8, values[7]);
+            analyzer.ReadDouble(pid, arrayPtr + 0xC0, values[8]);
+            analyzer.ReadDouble(pid, arrayPtr + 0xD8, values[9]);
+            analyzer.ReadDouble(pid, arrayPtr + 0xF0, values[10]);
+            analyzer.ReadDouble(pid, arrayPtr + 0x108, values[11]);
+            analyzer.ReadDouble(pid, arrayPtr + 0x120, values[12]);
+            analyzer.ReadDouble(pid, arrayPtr + 0x138, values[13]);
+            analyzer.ReadDouble(pid, arrayPtr + 0x150, values[14]);
+            analyzer.ReadDouble(pid, arrayPtr + 0x168, values[15]);
+            analyzer.ReadDouble(pid, arrayPtr + 0x180, values[16]);
+            analyzer.ReadDouble(pid, arrayPtr + 0x198, values[17]);
+
+            double prof1Id, prof1Level, prof1Max, prof2Id, prof2Level, prof2Max;
+            analyzer.ReadDouble(pid, arrayPtr + 0x1C8, prof1Id);
+            analyzer.ReadDouble(pid, arrayPtr + 0x1E0, prof1Level);
+            analyzer.ReadDouble(pid, arrayPtr + 0x1F8, prof1Max);
+            analyzer.ReadDouble(pid, arrayPtr + 0x210, prof2Id);
+            analyzer.ReadDouble(pid, arrayPtr + 0x228, prof2Level);
+            analyzer.ReadDouble(pid, arrayPtr + 0x240, prof2Max);
+
+            //g_LogFile << prof1Id << " " << prof1Level << " " << prof1Max << " " << prof2Id << " " << prof2Level << " " << prof2Max << std::endl;
+
+            ((values[1] > 0.5) ? g_GameState->player.needRepair = true : g_GameState->player.needRepair = false);
+            ((values[2] > 0.5) ? g_GameState->player.isIndoor = true : g_GameState->player.isIndoor = false);
+            ((values[3] > 0.5) ? g_GameState->player.areaMountable = true : g_GameState->player.areaMountable = false);
+            (((values[6] > 0.5) && (values[4] > 0.5)) ? g_GameState->player.flyingMounted = true : g_GameState->player.flyingMounted = false);
+            (((values[6] < 0.5) && (values[4] > 0.5)) ? g_GameState->player.groundMounted = true : g_GameState->player.groundMounted = false);
+            g_GameState->player.isMounted = g_GameState->player.flyingMounted || g_GameState->player.groundMounted;
+            ((values[7] > 0.5) ? g_GameState->player.isGhost = true : g_GameState->player.isGhost = false);
+            ((values[10] > 0.5) ? g_GameState->player.canRespawn = true : g_GameState->player.canRespawn = false);
+            ((values[11] > 0.5) ? g_GameState->player.isDeadBody = true : g_GameState->player.isDeadBody = false);
+            ((values[12] > 0.5) ? g_GameState->globalState.vendorOpen = true : g_GameState->globalState.vendorOpen = false);
+            ((values[13] > 0.5) ? g_GameState->globalState.chatOpen = true : g_GameState->globalState.chatOpen = false);
+            ((values[16] > 0.5) ? g_GameState->player.onGround = true : g_GameState->player.onGround = false);
+            ((values[17] > 0.5) ? g_GameState->interactState.sellComplete = true : g_GameState->interactState.sellComplete = false);
+            //((values[14 > 0.5) ? g_LogFile << "Mail Window Open" << std::endl : g_LogFile << "Mail Window Closed" << std::endl);
+
+            g_GameState->player.isDead = g_GameState->player.isGhost || g_GameState->player.isDeadBody;
+            if (g_GameState->player.isDead) {
+                float top, bottom, left, right;
+                worldMap.reverseHash(values[15], g_GameState->player.corpseMapId, top, bottom, left, right,
+                    g_GameState->player.corpseAreaId, g_GameState->player.corpseMapName);
+                worldMap.convertNormToWorld(values[8], values[9], top, bottom, left, right, g_GameState->player.corpseX, g_GameState->player.corpseY);
+                g_GameState->player.corpseMapHash = values[15];
+                g_GameState->respawnState.isDead = g_GameState->player.isDead;
+                //g_LogFile << g_GameState->player.corpseX << " " << g_GameState->player.corpseY << std::endl;
+            }
+            else {
+                g_GameState->player.corpseMapId = -1;
+                g_GameState->player.corpseMapName = -1;
+                g_GameState->player.corpseMapHash = -1; // Map name hash
+                g_GameState->player.corpseX = -1;
+                g_GameState->player.corpseY = -1;
+                g_GameState->player.corpseMapHash = -1;
+            }
+
+            if (firstRead == true) {
+                g_LogFile << "Data: [" << g_GameState->player.needRepair << ", " << g_GameState->player.isIndoor << ", " << g_GameState->player.areaMountable << ", " << values[4] << ", " << values[5]
+                    << ", " << values[6] << " " << values[7] << " " << values[8] << " " << values[9] << " " << values[10] << " " << values[11] << " " << values[12] << " " << values[13] << " "
+                    << values[14] << " " << values[15] << " " << values[16] << "]" << std::endl;
+            }
         }
-        else {
+        catch (...) {
+            // If ANYTHING goes wrong (bad cast, weird memory), reset.
             entryPtr = 0;
-            g_LogFile << "Anchor not found. Check if addon is loaded." << std::endl;
         }
     }
 
@@ -255,15 +268,15 @@ private:
         std::string rawMemoryString;
         if ((entryPtr != 0) && (analyzer.ReadString(pid, entryPtr, rawMemoryString, 60))) {
             uintptr_t tableAddress = LuaAnchor::ExtractAddressFromLuaString(rawMemoryString);
-            g_LogFile << "tbl" << tableAddress << std::endl;
+            // g_LogFile << "tbl" << tableAddress << std::endl;
             if (tableAddress != 0) {
                 uintptr_t arrayPtr = 0;
                 if (analyzer.ReadPointer(pid, tableAddress + 0x20, arrayPtr)) {
                     double val1;
                     analyzer.ReadDouble(pid, arrayPtr + 0x00, val1);
-                    g_LogFile << val1 << std::endl;
+                    // g_LogFile << val1 << std::endl;
                     if (val1 == 54381046.0) {
-                        g_LogFile << "Found" << std::endl;
+                        // g_LogFile << "Found" << std::endl;
                         return true;
                     }
                 }

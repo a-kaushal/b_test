@@ -100,44 +100,37 @@ int GetProcessCount(const wchar_t* procName) {
 
 LONG WINAPI CrashHandler(EXCEPTION_POINTERS* pExceptionInfo) {
     DWORD code = pExceptionInfo->ExceptionRecord->ExceptionCode;
-    // --- FIX START: FILTER EXCEPTIONS ---
-    // Ignore RPC errors (0x6BA), C++ Exceptions (0xE06D7363), and Debugger signals
-    if (code == 0x000006BA || code == 0xE06D7363 || code == 0x40010006) {
-        // Return EXCEPTION_CONTINUE_SEARCH to let Windows handle it normally
+
+    // 1. IGNORE NOISE (RPC errors, Debugger signals)
+    // NOTE: 0xE06D7363 is a C++ Exception. We are NOT ignoring it anymore.
+    // If a vector resize fails, it throws 0xE06D7363. We want to catch that.
+    if (code == 0x000006BA || code == 0x40010006) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
-    // Only handle FATAL memory errors
-    if (code != EXCEPTION_ACCESS_VIOLATION &&         // 0xC0000005
-        code != EXCEPTION_ARRAY_BOUNDS_EXCEEDED &&    // 0xC000008C
-        code != EXCEPTION_STACK_OVERFLOW &&           // 0xC00000FD
-        code != EXCEPTION_ILLEGAL_INSTRUCTION) {      // 0xC000001D
-
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    // --- FIX END ---
-    // If another thread is already handling a crash, sleep and let it finish
+    // If another thread is already handling a crash, wait
     if (g_HasCrashed.exchange(true)) {
         Sleep(10000);
         return EXCEPTION_EXECUTE_HANDLER;
     }
+    
+    // VISUAL ALERT: Pop a message box so we know it crashed even if logs fail
+    std::stringstream ss;
+    ss << "CRASH DETECTED!\nCode: 0x" << std::hex << code
+        << "\nAddr: 0x" << pExceptionInfo->ExceptionRecord->ExceptionAddress;
+    /*MessageBoxA(NULL, ss.str().c_str(), "SMM Bot Crash", MB_ICONERROR | MB_OK);*/
 
-    // 1. Log the crash details
     if (g_LogFile.is_open()) {
-        g_LogFile << "\n[CRITICAL] === CRASH DETECTED ===" << std::endl;
-        g_LogFile << "Exception Code: 0x" << std::hex << pExceptionInfo->ExceptionRecord->ExceptionCode << std::endl;
-        g_LogFile << "Fault Address: 0x" << std::hex << pExceptionInfo->ExceptionRecord->ExceptionAddress << std::endl;
-        g_LogFile.flush();
+        g_LogFile << "\n[CRITICAL] " << ss.str() << std::endl;
     }
 
-    // 2. Create Dump
+    // 4. WRITE DUMP
     HANDLE hFile = CreateFileA("C:\\SMM\\SMM_Crash.dmp", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
         MINIDUMP_EXCEPTION_INFORMATION dumpInfo;
         dumpInfo.ThreadId = GetCurrentThreadId();
         dumpInfo.ExceptionPointers = pExceptionInfo;
         dumpInfo.ClientPointers = TRUE;
-
         MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), hFile, MiniDumpNormal, &dumpInfo, NULL, NULL);
         CloseHandle(hFile);
     }
@@ -345,12 +338,8 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
     // --- SANITY CHECK 1: INVALID SIZES ---
     // If these values are garbage (negative or unreasonably huge), we MUST abort.
     // WoW Classic Object Manager rarely exceeds 10,000 objects.
-    if (entityArraySize < 0 || entityArraySize > 100000) {
-        if (g_LogFile.is_open()) g_LogFile << "[CRITICAL] Garbage EntityArraySize detected: " << entityArraySize << ". Skipping frame." << std::endl;
-        return;
-    }
-    if (hashArrayMaximum < 0 || hashArrayMaximum > 100000) {
-        if (g_LogFile.is_open()) g_LogFile << "[CRITICAL] Garbage HashArrayMaximum detected: " << hashArrayMaximum << ". Skipping frame." << std::endl;
+    if (entityArraySize < 0 || entityArraySize > 100000 || hashArrayMaximum < 0 || hashArrayMaximum > 100000) {
+        if (g_LogFile.is_open()) g_LogFile << "[CRITICAL] Garbage Sizes (Hash: " << hashArrayMaximum << " Ent: " << entityArraySize << ")" << std::endl;
         return;
     }
 
@@ -800,6 +789,7 @@ void MainThread(HMODULE hModule) {
 
     g_GameState = &g_GameStateInstance;
     g_LogFile.open("C:\\SMM\\SMM_Debug.log", std::ios::out | std::ios::trunc);
+    g_LogFile << std::unitbuf;
 
     // 1. ALLOCATE CONSOLE
     // This creates a popup cmd window so std::cout works
@@ -813,8 +803,19 @@ void MainThread(HMODULE hModule) {
 
     WebServer::Start(5678); // Starts web server on http://localhost:5678
     g_LogFile << "Web Server started at http://localhost:8080" << std::endl;
-    // Launch GUI in background thread
-    std::thread guiThread(StartGuiThread, hModule);
+
+    // GUARD THE GUI THREAD
+    std::thread guiThread([hModule]() {
+        try {
+            StartGuiThread(hModule);
+        }
+        catch (const std::exception& e) {
+            if (g_LogFile.is_open()) g_LogFile << "[GUI THREAD CRASH] " << e.what() << std::endl;
+        }
+        catch (...) {
+            if (g_LogFile.is_open()) g_LogFile << "[GUI THREAD CRASH] Unknown error." << std::endl;
+        }
+    });
 
     try {
         MemoryAnalyzer analyzer;
@@ -916,6 +917,7 @@ void MainThread(HMODULE hModule) {
                     bool isPaused = false;
                     bool lastF3State = false;
                     bool needsReboot = false; // Flag to break the inner loop
+                    int objManEntryReadFail = 0;
                     std::vector<GameEntity> persistentEntityList;
                     persistentEntityList.reserve(3000);
                     std::string searchPattern = "##MAGSTR##table:";
@@ -931,145 +933,176 @@ void MainThread(HMODULE hModule) {
                     // --- INNER LOOP: GAME LOOP ---
                     // Exits if F4 is pressed (g_IsRunning = false) OR Reboot needed
                     while (g_IsRunning && !needsReboot) {
-                        // --- PAUSE LOGIC ---
-                        if (g_IsPaused) {
-                            if (!wasPaused) {
-                                std::cout << ">>> PAUSED <<<" << std::endl;
-                                pilot.Stop();
-                                wasPaused = true;
-                            }
-                            Sleep(100);
-                            // continue; // Skip logic while paused
-                        }
-                        else {
-                            if (wasPaused) {
-                                std::cout << ">>> RESUMED <<<" << std::endl;
-                                wasPaused = false;
-                            }
-                        }
-
-                        UpdateStatus("IN_GAME");
-
-                        // 2. Refresh Pointers & Entities
-                        analyzer.ReadPointer(procId, baseAddress + OBJECT_MANAGER_OFFSET, objMan_Direct);
-                        if (objMan_Direct == 0x0) {
-                            g_LogFile << "Not in game detected. Entering Wait Mode..." << std::endl;
-                            UpdateStatus("NOT_IN_GAME");
-                            DWORD lastCheckTime = 0;
-
-                            // WAIT LOOP
-                            while (g_IsRunning) {
-
-                                // Check status file every 1000ms
-                                if (GetTickCount() - lastCheckTime > 1000) {
-                                    std::string cmd = ReadStatus();
-
-                                    if (cmd == "GAME_REBOOTED") {
-                                        std::cout << "Received GAME_REBOOTED." << std::endl;
-                                        needsReboot = true;
-                                        break;
-                                    }
-                                    else if (cmd == "GAME_OK") {
-                                        std::cout << "Received GAME_OK." << std::endl;
-                                        break;
-                                    }
-                                    lastCheckTime = GetTickCount();
-                                }
-
-                                // Sleep shortly to keep loop responsive
-                                Sleep(10);
-                            }
-
-                            if (needsReboot) break; // Break Inner Loop
-                            continue; // Continue Inner Loop (Check mem again)
-                        }
-
-                        analyzer.ReadPointer(procId, objMan_Entry + OBJECT_MANAGER_FIRST_OBJECT_OFFSET, objMan_Base);
-                        analyzer.ReadPointer(procId, objMan_Base + ENTITY_ARRAY_OFFSET, entityArray);
-                        analyzer.ReadInt32(procId, objMan_Base + ENTITY_ARRAY_SIZE_OFFSET, entityArraySize);
-                        analyzer.ReadInt32(procId, objMan_Base + HASH_ARRAY_MAXIMUM_OFFSET, hashArrayMaximum);
-                        analyzer.ReadPointer(procId, objMan_Base + HASH_ARRAY_OFFSET, hashArray);
-                        analyzer.ReadInt32(procId, objMan_Base + HASH_ARRAY_SIZE_OFFSET, hashArraySize);
-
-                        // --- [RECOMMENDED] Sanity Check to prevent Driver Crash on bad reads ---
-                        if (hashArrayMaximum > 100000 || hashArrayMaximum < 0) {
-                            g_LogFile << "[WARNING] Garbage Hash Size: " << hashArrayMaximum << ". Skipping frame." << std::endl;
-                            continue;
-                        }
-
-                        // LOCK before writing
-                        std::lock_guard<std::mutex> lock(g_EntityMutex);
-                        ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, entityArraySize, g_GameState->player, persistentEntityList, agent);
-                        g_GameState->entities = persistentEntityList;
-                        // Read Lua data
-                        LuaAnchor::ReadLuaData(analyzer, procId, searchPattern, luaEntry, worldmap_db);
-
-                        // Update UI / Overlay
-                        RECT clientRect;
-                        GetClientRect(hGameWindow, &clientRect);
-                        int width = clientRect.right - clientRect.left;
-                        int height = clientRect.bottom - clientRect.top;
-                        cam.UpdateScreenSize(width, height);
-
-                        // Draw Path (Optional visualization)
-                        overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
-                        for (size_t i = g_GameState->globalState.activeIndex; i < min(g_GameState->globalState.activeIndex + 6, g_GameState->globalState.activePath.size()); ++i) {
-                            int screenPosx, screenPosy;
-                            if (i >= g_GameState->globalState.activePath.size()) break;
-                            if (cam.WorldToScreen(g_GameState->globalState.activePath[i].pos, screenPosx, screenPosy)) {
-                                overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
-                            }
-                        }
                         try {
-                            UpdateGuiData(g_GameState->entities);
-                        }
-                        catch (...) {
-                            g_LogFile << "[WARNING] GUI Update failed. Skipping frame." << std::endl;
-                        }
+                            // --- PAUSE LOGIC ---
+                            if (g_IsPaused) {
+                                if (!wasPaused) {
+                                    std::cout << ">>> PAUSED <<<" << std::endl;
+                                    pilot.Stop();
+                                    wasPaused = true;
+                                }
+                                Sleep(100);
+                                // continue; // Skip logic while paused
+                            }
+                            else {
+                                if (wasPaused) {
+                                    std::cout << ">>> RESUMED <<<" << std::endl;
+                                    wasPaused = false;
+                                }
+                            }
 
-                        // 3. Execution Logic
-                        if (!g_IsPaused) {
+                            UpdateStatus("IN_GAME");
+
+                            // 2. Refresh Pointers & Entities
+                            // Always refresh the Object Manager Entry Pointer first
+                            // The value at 'baseAddress + OBJECT_MANAGER_ENTRY_OFFSET' changes on /reload
+                            if (!analyzer.ReadPointer(procId, baseAddress + OBJECT_MANAGER_ENTRY_OFFSET, objMan_Entry)) {
+                                // If we can't read the entry, the game might be in the middle of a reload
+                                if (objManEntryReadFail % 5 == 0) {
+                                    g_LogFile << "Object Manager Entry Read Failed" << std::endl;
+                                }
+                                objManEntryReadFail++;
+                                if (objManEntryReadFail < 40) {
+                                    Sleep(500);
+                                    continue;
+                                }
+                            }
+                            else objManEntryReadFail = 0;
+
+                            analyzer.ReadPointer(procId, baseAddress + OBJECT_MANAGER_OFFSET, objMan_Direct);
+                            if (objMan_Direct == 0x0 || objMan_Entry == 0x0) {
+                                g_LogFile << "Not in game detected. Entering Wait Mode..." << std::endl;
+                                UpdateStatus("NOT_IN_GAME");
+                                DWORD lastCheckTime = 0;
+
+                                // WAIT LOOP
+                                while (g_IsRunning) {
+
+                                    // Check status file every 1000ms
+                                    if (GetTickCount() - lastCheckTime > 1000) {
+                                        std::string cmd = ReadStatus();
+
+                                        if (cmd == "GAME_REBOOTED") {
+                                            std::cout << "Received GAME_REBOOTED." << std::endl;
+                                            needsReboot = true;
+                                            break;
+                                        }
+                                        else if (cmd == "GAME_OK") {
+                                            std::cout << "Received GAME_OK." << std::endl;
+                                            break;
+                                        }
+                                        lastCheckTime = GetTickCount();
+                                    }
+
+                                    // Sleep shortly to keep loop responsive
+                                    Sleep(10);
+                                }
+
+                                if (needsReboot) break; // Break Inner Loop
+                                continue; // Continue Inner Loop (Check mem again)
+                            }
+
+                            analyzer.ReadPointer(procId, objMan_Entry + OBJECT_MANAGER_FIRST_OBJECT_OFFSET, objMan_Base);
+                            analyzer.ReadPointer(procId, objMan_Base + ENTITY_ARRAY_OFFSET, entityArray);
+                            analyzer.ReadInt32(procId, objMan_Base + ENTITY_ARRAY_SIZE_OFFSET, entityArraySize);
+                            analyzer.ReadInt32(procId, objMan_Base + HASH_ARRAY_MAXIMUM_OFFSET, hashArrayMaximum);
+                            analyzer.ReadPointer(procId, objMan_Base + HASH_ARRAY_OFFSET, hashArray);
+                            analyzer.ReadInt32(procId, objMan_Base + HASH_ARRAY_SIZE_OFFSET, hashArraySize);
+
+                            // --- [RECOMMENDED] Sanity Check to prevent Driver Crash on bad reads ---
+                            if (hashArrayMaximum > 100000 || hashArrayMaximum < 0) {
+                                g_LogFile << "[WARNING] Garbage Hash Size: " << hashArrayMaximum << ". Skipping frame." << std::endl;
+                                continue;
+                            }
+
+                            // LOCK before writing
+                            std::lock_guard<std::mutex> lock(g_EntityMutex);
+                            ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, entityArraySize, g_GameState->player, persistentEntityList, agent);
+                            g_GameState->entities = persistentEntityList;
+                            // Read Lua data
+                            LuaAnchor::ReadLuaData(analyzer, procId, searchPattern, luaEntry, worldmap_db);
+
+                            if (luaEntry == 0) {
+                                g_LogFile << "Lua Entry not found. Game likely reloaded" << std::endl;
+                                Sleep(1000);
+                                continue;
+                            }
+
+                            // Update UI / Overlay
+                            RECT clientRect;
+                            GetClientRect(hGameWindow, &clientRect);
+                            int width = clientRect.right - clientRect.left;
+                            int height = clientRect.bottom - clientRect.top;
+                            cam.UpdateScreenSize(width, height);
+
+                            // Draw Path (Optional visualization)
+                            overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
+                            for (size_t i = g_GameState->globalState.activeIndex; i < min(g_GameState->globalState.activeIndex + 6, g_GameState->globalState.activePath.size()); ++i) {
+                                int screenPosx, screenPosy;
+                                if (i >= g_GameState->globalState.activePath.size()) break;
+                                if (cam.WorldToScreen(g_GameState->globalState.activePath[i].pos, screenPosx, screenPosy)) {
+                                    overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
+                                }
+                            }
                             try {
-                                auto* activeProfile = g_ProfileLoader.GetActiveProfile();
-                                if (activeProfile) {
-                                    // Enforce Focus
-                                    if (GetForegroundWindow() != hGameWindow) SetForegroundWindow(hGameWindow);
-
-                                    // This runs your profile script (once) to populate the queue
-                                    if (auto* profile = g_ProfileLoader.GetActiveProfile()) {
-                                        profile->Tick();
-                                    }
-
-                                    if (UnderAttackCheck() == true) {
-                                        //g_LogFile << "Under Attack Detected!" << std::endl;
-                                    }
-                                    if (g_GameState->gatherState.enabled == true) {
-                                        UpdateGatherTarget(g_GameStateInstance);
-                                    }
-                                    if ((g_GameState->player.bagFreeSlots <= 2)) {
-                                        // If 30 minutes since last resupply mail items
-                                        if (((g_GameState->globalState.bagEmptyTime != -1) && (GetTickCount() - g_GameState->globalState.bagEmptyTime < 1800000) && g_ProfileSettings.mailingEnabled) || g_GameState->interactState.mailing) {
-                                            MailItems();
-                                        }
-                                        else {
-                                            Repair();
-                                        }
-                                    }
-                                    // if (g_GameState->player.needRepair && !g_GameState->interactState.interactActive) {
-                                    if (g_GameState->player.needRepair) {
-                                        Repair();
-                                    }
-                                    agent.Tick();
-                                }
-                                else {
-                                    Sleep(100); // Sleep longer when idle to save CPU
-                                }
+                                UpdateGuiData(g_GameState->entities);
                             }
                             catch (...) {
-                                g_LogFile << "Agent Tick Fail" << std::endl;
+                                g_LogFile << "[WARNING] GUI Update failed. Skipping frame." << std::endl;
                             }
+
+                            // 3. Execution Logic
+                            if (!g_IsPaused) {
+                                try {
+                                    auto* activeProfile = g_ProfileLoader.GetActiveProfile();
+                                    if (activeProfile) {
+                                        // Enforce Focus
+                                        if (GetForegroundWindow() != hGameWindow) SetForegroundWindow(hGameWindow);
+
+                                        // This runs your profile script (once) to populate the queue
+                                        if (auto* profile = g_ProfileLoader.GetActiveProfile()) {
+                                            profile->Tick();
+                                        }
+
+                                        if (UnderAttackCheck() == true) {
+                                            //g_LogFile << "Under Attack Detected!" << std::endl;
+                                        }
+                                        if (g_GameState->gatherState.enabled == true) {
+                                            UpdateGatherTarget(g_GameStateInstance);
+                                        }
+                                        if ((g_GameState->player.bagFreeSlots <= 2)) {
+                                            // If 30 minutes since last resupply mail items
+                                            if (((g_GameState->globalState.bagEmptyTime != -1) && (GetTickCount() - g_GameState->globalState.bagEmptyTime < 1800000) && g_ProfileSettings.mailingEnabled) || g_GameState->interactState.mailing) {
+                                                MailItems();
+                                            }
+                                            else {
+                                                Repair();
+                                            }
+                                        }
+                                        // if (g_GameState->player.needRepair && !g_GameState->interactState.interactActive) {
+                                        if (g_GameState->player.needRepair) {
+                                            Repair();
+                                        }
+                                        agent.Tick();
+                                    }
+                                    else {
+                                        Sleep(100); // Sleep longer when idle to save CPU
+                                    }
+                                }
+                                catch (...) {
+                                    g_LogFile << "Agent Tick Fail" << std::endl;
+                                }
+                            }
+                            Sleep(10); // Prevent high CPU usage
                         }
-                        Sleep(10); // Prevent high CPU usage
+                        catch (const std::exception& e) {
+                            // This catches std::vector alloc errors and keeps the bot alive!
+                            g_LogFile << "[Frame Exception] " << e.what() << std::endl;
+                        }
+                        catch (...) {
+                            g_LogFile << "[Frame Exception] Unknown error occurred." << std::endl;
+                        }
+                        Sleep(10);
                     }
                     pilot.Stop();
                 }
@@ -1077,6 +1110,7 @@ void MainThread(HMODULE hModule) {
             // Safety sleep between re-init attempts
             Sleep(2000);
         }
+        g_LogFile << "Exiting" << std::endl;
         RaiseException(0xDEADBEEF, 0, 0, nullptr); // Forcibly exit all threads (including GUI)
     }
 
