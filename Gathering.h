@@ -50,6 +50,12 @@ void UpdateGatherTarget(WorldState& ws) {
         int nearbyEnemyCount = 0;
         //int nearbyStrongEnemyCount = 0;
 
+        /*ws.gatherState.nodeActive = true;
+        ws.gatherState.hasNode = true;
+        ws.gatherState.position = Vector3{ 27.0877f, 3154.21f, 5.02512f };
+        ws.gatherState.mapId = ws.player.mapId;
+        return;*/
+
         // 1. Check basic object type (Must be GameObject)
         if (entity.objType != "Object") continue;
 

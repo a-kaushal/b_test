@@ -974,7 +974,7 @@ void MainThread(HMODULE hModule) {
                                 g_LogFile << "Not in game detected. Entering Wait Mode..." << std::endl;
                                 UpdateStatus("NOT_IN_GAME");
                                 DWORD lastCheckTime = 0;
-
+                                
                                 // WAIT LOOP
                                 while (g_IsRunning) {
 
@@ -1021,7 +1021,7 @@ void MainThread(HMODULE hModule) {
                             g_GameState->entities = persistentEntityList;
                             // Read Lua data
                             LuaAnchor::ReadLuaData(analyzer, procId, searchPattern, luaEntry, worldmap_db);
-
+                            
                             if (luaEntry == 0) {
                                 g_LogFile << "Lua Entry not found. Game likely reloaded" << std::endl;
                                 Sleep(1000);

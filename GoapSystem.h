@@ -96,6 +96,7 @@ private:
 
     bool groundOverride = false;
     bool randomClick = false;
+    bool recalculatedPath = false;
 
     int sx, sy;
 
@@ -120,6 +121,7 @@ public:
         groundOverride = false;
         currentPath.clear();
         randomClick = false;
+        recalculatedPath = false;
     }
 
     void SetState(InteractState newState) {
@@ -166,6 +168,7 @@ public:
             // Recalculate
             currentPath = CalculatePath({ targetPos }, player.position, 0, canFly, mapId, player.isFlying, g_GameState->globalState.ignoreUnderWater);
             pathIndex = 0;
+            recalculatedPath = true;
             pathCalcTimer = GetTickCount();
         }
 
@@ -353,7 +356,7 @@ public:
 
 public:
     // Helper: Logic to follow path and dismount
-    bool MoveToTargetLogic(Vector3 targetPos, std::vector<PathNode>& path, int& index, PlayerInfo& player, DWORD& timer, float approachDist, float interactDist, 
+    bool MoveToTargetLogic(Vector3 targetPos, std::vector<PathNode>& path, int& index, PlayerInfo& player, DWORD& timer, float approachDist, float interactDist,
         float finalDist, bool fly, bool mountDisable = false) {
         if (path.empty()) {
             return true; // Treat as "Arrived" to prevent crash
@@ -380,7 +383,7 @@ public:
                     if (timer == 0) { timer = GetTickCount(); keyboard.SendKey('X', 0, true); }
                     return false;
                 }
-                if (path.back().pos.Dist3D(player.position) < finalDist || targetPos.Dist3D(player.position) < finalDist) {
+                else if (path.back().pos.Dist3D(player.position) < finalDist || targetPos.Dist3D(player.position) < finalDist) {
                     if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"))) {
                         inputCommand.Reset();
                         return true;
@@ -416,11 +419,41 @@ public:
                 return false;
             }
         }
+        else if ((wpType == PATH_AIR && player.position.Dist3D(path.back().pos) < finalDist)
+            || (wpType == PATH_GROUND && player.position.Dist2D(path.back().pos) < GROUND_PATH_THRESHOLD)) {
+            index = path.size();
+            return false;
+        }
         else if ((wpType == PATH_AIR && dist < interactDist) || (wpType == PATH_GROUND && dist < GROUND_PATH_THRESHOLD)) {
             index++;
             return false;
         }
-        pilot.SteerTowards(player.position, player.rotation, wp, wpType, player, mountDisable);
+
+        float goalDist = 0.0f;
+        if (!player.groundMounted && wpType == PATH_GROUND) {
+            goalDist += player.position.Dist3D(path[index].pos);
+            for (int k = index; k < path.size() - 1; k++) {
+                if (path[k].type == PATH_GROUND) {
+                    goalDist += path[k].pos.Dist3D(path[k + 1].pos);
+                }
+                else break;
+            }
+        }
+        else if (!player.flyingMounted) {
+            goalDist += player.position.Dist3D(path[index].pos);
+            for (int k = index; k < path.size() - 1; k++) {
+                if (path[k].type == PATH_AIR) {
+                    goalDist += path[k].pos.Dist3D(path[k + 1].pos);
+                }
+                else break;
+            }
+        }
+        else {
+            goalDist = 10000.0f;
+        }
+
+        //g_LogFile << wp.z << " " << wpType << " " << goalDist << std::endl;
+        pilot.SteerTowards(player.position, player.rotation, wp, wpType, player, goalDist, mountDisable);
         return false;
     }
 
@@ -651,9 +684,10 @@ public:
             if (ws.interactState.mailing) {
                 if (!reloadedGame) {
                     input.SendDataRobust(std::wstring(L"/reload"));
-                    Sleep(1000);
+                    g_GameState->globalState.reloaded = true;
                     reloadedGame = 1;
                     interact.Reset();
+                    Sleep(10000);
                     return false;
                 }
                 if (PerformMailing(mouse)) {
@@ -916,7 +950,7 @@ public:
         Vector3 safeSpot = ws.player.position + (dir * 10.0f);
 
         // FIX: Added ws.player.isFlying
-        pilot.SteerTowards(ws.player.position, ws.player.rotation, safeSpot, false, ws.player);
+        //pilot.SteerTowards(ws.player.position, ws.player.rotation, safeSpot, false, ws.player);
 
         // If we are far enough away, we consider this action "Complete" (for this tick)
         // But for continuous evasion, return false so we keep running until state changes.
@@ -1078,7 +1112,7 @@ public:
                     ws.respawnState.index++;
                 }
                 else {
-                    pilot.SteerTowards(ws.player.position, ws.player.rotation, targetNode.pos, false, ws.player, true);
+                    pilot.SteerTowards(ws.player.position, ws.player.rotation, targetNode.pos, false, ws.player, 0.0f, true);
                 }
             }
         }
@@ -1202,7 +1236,7 @@ public:
         if (targetSelected) {
             ws.combatState.inCombat = true;
             if (interact.GetState() != "STATE_IDLE") {
-                g_LogFile << "Interaction Reset" << std::endl;
+                // g_LogFile << "Interaction Reset" << std::endl;
                 interact.Reset();
             }
         }
@@ -1248,25 +1282,25 @@ public:
             inRoutine = false;
             // Recalculate path if needed
             if (ws.combatState.path.empty() || ws.combatState.index >= ws.combatState.path.size() || (GetTickCount() - pathTimer > REPATH_DELAY)) {
-                if (doLog) g_LogFile << "[Combat] Recalculating Chase Path. Dist: " << distToTarget << std::endl;
+                //if (doLog) g_LogFile << "[Combat] Recalculating Chase Path. Dist: " << distToTarget << std::endl;
                 ws.combatState.path = CalculatePath({ ws.combatState.enemyPosition }, ws.player.position, 0, false, ws.player.mapId, false, g_GameState->globalState.ignoreUnderWater);
                 ws.combatState.index = 0;
                 pathTimer = GetTickCount();
             }
 
-            interact.MoveToTargetLogic(ws.combatState.enemyPosition, ws.combatState.path, ws.combatState.index, ws.player, pathTimer, MELEE_RANGE, MELEE_RANGE, MELEE_RANGE, false, true);
+            interact.MoveToTargetLogic(ws.combatState.enemyPosition, ws.combatState.path, ws.combatState.index, ws.player, pathTimer, MELEE_RANGE, MELEE_RANGE, MELEE_RANGE / 2, false, true);
         }
         else {
             // B. COMBAT (In Range)
             if (inRoutine == false) {
-                g_LogFile << "[Combat] In Range (" << distToTarget << "). Stopping to Rotate." << std::endl;
+                //g_LogFile << "[Combat] In Range (" << distToTarget << "). Stopping to Rotate." << std::endl;
                 pilot.Stop();
             }
             inRoutine = true;
 
             // Face the target (Critical for casting)
             if (pilot.faceTarget(ws.player.position, ws.combatState.enemyPosition, ws.player.rotation)) {
-                g_LogFile << "Facing Target" << std::endl;
+                //g_LogFile << "Facing Target" << std::endl;
                 // Run the rotation
                 combatController.UpdateRotation(ws.player.position, ws.combatState.enemyPosition, ws.player.rotation, lowHp);
             }
@@ -1525,12 +1559,12 @@ public:
         // Only press the key once to initiate the "Hold"
         if (!pressingSpace) {
             // Trigger the "escapeWater" logic in SteerTowards (holds Jump/Ascend)
-            pilot.SteerTowards(ws.player.position, ws.player.rotation, ws.player.position, true, ws.player, false, true);
+            pilot.SteerTowards(ws.player.position, ws.player.rotation, ws.player.position, true, ws.player, 10000.0f, false, true);
             movingUp = true;
             if (!ws.player.inWater && waterDelay == 0) {
                 waterDelay = GetTickCount();
             }
-            if ((waterDelay != 0) && (GetTickCount() - waterDelay < 2000)) {
+            if ((waterDelay != 0) && (GetTickCount() - waterDelay > 2000)) {
                 movingUp = false;
             }
             //pressingSpace = true;
@@ -1749,94 +1783,7 @@ public:
         case PHASE_MOUNT:
         {
             currentPhase = PHASE_NAVIGATE;
-            break;
-            Vector3 returnTarget = ws.waypointReturnState.savedPath[ws.waypointReturnState.savedIndex].pos;
-            float targetGroundZ = globalNavMesh.GetLocalGroundHeight(returnTarget);
-            bool targetOnGround = (targetGroundZ > -90000.0f && std::abs(returnTarget.z - targetGroundZ) < GROUND_HEIGHT_THRESHOLD);
-
-            bool isFlying = true;
-
-            // If target is on ground, use ground pathfinding
-            if (targetOnGround) {
-                g_LogFile << "[RETURN] Target is on ground, using ground pathfinding" << std::endl;
-                ws.waypointReturnState.flyingPath = false;
-                currentPhase = PHASE_NAVIGATE;
-                break;
-            }
-
-            // Target is in air, need to fly
-            if (ws.player.isFlying || ws.player.flyingMounted || ws.player.groundMounted) {
-                g_LogFile << "[RETURN] Already mounted" << std::endl;
-                ws.waypointReturnState.flyingPath = true;
-                currentPhase = PHASE_NAVIGATE;
-                break;
-            }
-
-            DWORD now = GetTickCount();
-
-            // --- 0. MOUNTING LOGIC REPLACEMENT ---
-            // Verify state: If we are mounted, reset our internal flags
-            if (ws.player.flyingMounted) {
-                pilot.m_IsMounting = false;
-            }
-
-            // Attempt to mount if: Requested (isFlying), Not Mounted
-            if (isFlying && !ws.player.flyingMounted) {
-
-                // Check 1: Are we on a cooldown from a previous failure?
-                if (now < pilot.m_MountDisabledUntil) {
-                    // If disabled, switch to ground path
-                    g_LogFile << "[RETURN] Mount disabled (cooldown). Switching to ground path." << std::endl;
-                    ws.waypointReturnState.flyingPath = false;
-                    currentPhase = PHASE_NAVIGATE;
-                    break;
-                }
-
-                // Check 2: Are we currently waiting for a mount attempt to finish?
-                else if (pilot.m_IsMounting) {
-                    // Wait for 3.8 seconds (3800ms) before verifying
-                    if (now - pilot.m_MountAttemptStart > 3800) {
-                        // Check if it succeeded
-                        if (ws.player.areaMountable) {
-                            pilot.m_IsMounting = false;
-                        }
-                        else if (ws.player.flyingMounted) {
-                            pilot.m_IsMounting = false; // Success, proceed to fly
-                        }
-                        else {
-                            // FAILED: Set cooldown for 2 minutes (120,000 ms)
-                            g_LogFile << "[Movement] Mount failed (Tunnel/Indoor?). Disabling mounting for 2 minutes." << std::endl;
-                            pilot.m_MountDisabledUntil = now + 120000;
-                            pilot.m_IsMounting = false;
-
-                            // Switch to ground path
-                            g_LogFile << "[RETURN] Switching to ground path." << std::endl;
-                            ws.waypointReturnState.flyingPath = false;
-                            currentPhase = PHASE_NAVIGATE;
-                            break;
-                        }
-                    }
-                    else {
-                        // Still waiting (Casting time / Latency). Stop moving.
-                        return false;
-                    }
-                }
-                // Check 3: Start a new attempt
-                else {
-                    // Send command
-                    consoleInput->SendDataRobust(std::wstring(L"/run if not(IsFlyableArea()and IsMounted())then CallCompanion(\"Mount\", 1) end "));
-                    pilot.m_MountAttemptStart = now;
-                    pilot.m_IsMounting = true;
-                    return false; // Stop moving to allow cast
-                }
-            }
-
-            // --- 0b. Reset Input if mounted ---
-            if (ws.player.flyingMounted == true) {
-                consoleInput->Reset();
-            }
-
-            return false;
+            break;            
         }
 
         case PHASE_NAVIGATE:
@@ -1864,72 +1811,9 @@ public:
                     g_GameState->globalState.ignoreUnderWater,
                     false
                 );
-                //if (constructedPath.empty()) EndScript(pilot, (ws.waypointReturnState.flyingPath && g_GameState->player.areaMountable) ? 2 : 1);
-
-                // --- START HYBRID PATH LOGIC ---
-                // Trigger if we are effectively grounded (CD or Cave) BUT target is in the air
-                bool mountRestricted = (GetTickCount() < pilot.m_MountDisabledUntil);
-
-                // Check if target is actually "In Air" (more than 5 yards above ground)
-                float targetGroundZ = globalNavMesh.GetLocalGroundHeight(returnTarget);
-                bool targetInAir = (targetGroundZ > -90000.0f) && (returnTarget.z > targetGroundZ + 5.0f);
 
                 if (constructedPath.size() > 0) {
-                    if ((ws.waypointReturnState.flyingPath == false) && (constructedPath.back().pos.Dist3D(returnTarget) > 10.0f)) {
-                        g_LogFile << "[Hybrid] Mount restricted (Cave/CD) & Target in Air. Generating Hybrid Path..." << std::endl;
-                        float distTraveled = 0.0f;
-                        int transitionIndex = -1;
-                        std::vector<PathNode> hybridPath;
-
-                        // 3. Find Transition Point
-                        for (size_t i = 0; i < constructedPath.size(); ++i) {
-                            // Check if this point is outdoor/flyable
-                            bool isFlyable = CanFlyAt(mapId, constructedPath[i].pos.x, constructedPath[i].pos.y, constructedPath[i].pos.z);
-
-                            g_LogFile << "Calculated Path: " << constructedPath[i].pos.x << " " << constructedPath[i].pos.y << " " << constructedPath[i].pos.z << " " << isFlyable << " " << mapId << std::endl;
-
-                            // We need a spot that is BOTH flyable AND reached after cooldown expires
-                            if (isFlyable) {
-                                transitionIndex = i;
-                                break;
-                            }
-                        }
-
-                        // 4. Stitch Paths
-                        if (transitionIndex != -1) {
-                            // A. Add Walking segment
-                            for (int i = 0; i <= transitionIndex; ++i) {
-                                hybridPath.push_back(constructedPath[i]);
-                            }
-
-                            // B. Add Flight segment (From transition point to original Air Target)
-                            // We use 'true' for isFlying here to generate 3D nodes
-                            std::vector<PathNode> flightPath = Calculate3DFlightPath(constructedPath[transitionIndex].pos, returnTarget, mapId, true);
-
-                            if (!flightPath.empty()) {
-                                // Append flight nodes
-                                hybridPath.insert(hybridPath.end(), flightPath.begin(), flightPath.end());
-                            }
-
-                            // 5. Apply to State
-                            ws.waypointReturnState.path = hybridPath;
-                            ws.waypointReturnState.hasPath = true;
-                            ws.waypointReturnState.index = 0;
-                            ws.waypointReturnState.flyingPath = true; // Enable flight logic in controller
-
-                            // CRITICAL: Clear the cooldown flag immediately.
-                            // The bot will walk the PATH_GROUND nodes, and only attempt to mount
-                            // once it hits the first PATH_AIR node (which we calculated is safe).
-                            pilot.m_MountDisabledUntil = 0;
-
-                            g_LogFile << "[Hybrid] Generated " << hybridPath.size() << " nodes (Walk -> Fly)." << std::endl;
-                            break; // Exit the case, path is ready
-                        }
-                    }
-                    else {
-                        ws.waypointReturnState.path = constructedPath;
-                    }
-                    // --- END HYBRID PATH LOGIC ---
+                    ws.waypointReturnState.path = constructedPath;
                 }
 
                 if ((ws.waypointReturnState.path.empty()) || (constructedPath.size() == 0)) {
@@ -1978,13 +1862,40 @@ public:
             else {
                 dist = ws.player.position.Dist3D(target);
             }
-
             if (((targetType == PATH_AIR) && (dist < ACCEPTANCE_RADIUS)) || ((targetType == PATH_GROUND) && (dist < GROUND_ACCEPTANCE_RADIUS))) {
                 ws.waypointReturnState.index++;
                 return false;
             }
 
-            pilot.SteerTowards(ws.player.position, ws.player.rotation, target, targetType, ws.player);
+            float goalDist = 0.0f;
+            if (!g_GameState->player.groundMounted && targetType == PATH_GROUND) {
+                goalDist += g_GameState->player.position.Dist3D(ws.waypointReturnState.path[ws.waypointReturnState.index].pos);
+                for (int k = ws.waypointReturnState.index; k < ws.waypointReturnState.path.size() - 1; k++) {
+                    if (ws.waypointReturnState.path[k].type == PATH_GROUND) {
+                        goalDist += ws.waypointReturnState.path[k].pos.Dist3D(ws.waypointReturnState.path[k + 1].pos);
+                    }
+                    else break;
+                }
+            }
+            else if (!g_GameState->player.flyingMounted && targetType == PATH_AIR) {
+                goalDist += g_GameState->player.position.Dist3D(ws.waypointReturnState.path[ws.waypointReturnState.index].pos);
+                for (int k = ws.waypointReturnState.index; k < ws.waypointReturnState.path.size() - 1; k++) {
+                    if (ws.waypointReturnState.path[k].type == PATH_AIR) {
+                        goalDist += ws.waypointReturnState.path[k].pos.Dist3D(ws.waypointReturnState.path[k + 1].pos);
+                    }
+                    else break;
+                }
+            }
+            else {
+                goalDist = 10000.0f;
+            }
+
+            /*for (int i = 0; i < ws.waypointReturnState.path.size(); i++) {
+                g_LogFile << ws.waypointReturnState.path[i].pos.x << " " << ws.waypointReturnState.path[i].pos.y << " " << ws.waypointReturnState.path[i].pos.z << " " << ws.waypointReturnState.path[i].type << std::endl;
+            }
+            g_LogFile << ws.waypointReturnState.index << std::endl;
+            g_LogFile << target.z << " " << targetType << " " << goalDist << std::endl;*/
+            pilot.SteerTowards(ws.player.position, ws.player.rotation, target, targetType, ws.player, goalDist);
             return false;
         }        
 
@@ -2105,9 +2016,33 @@ public:
             return false; // Not done with action, just sub-step
         }
 
+        float goalDist = 0.0f;
+        if (!g_GameState->player.groundMounted && targetType == PATH_GROUND) {
+            goalDist += g_GameState->player.position.Dist3D(ws.pathFollowState.path[ws.pathFollowState.index].pos);
+            for (int k = ws.pathFollowState.index; k < ws.pathFollowState.path.size() - 1; k++) {
+                if (ws.pathFollowState.path[k].type == PATH_GROUND) {
+                    goalDist += ws.pathFollowState.path[k].pos.Dist3D(ws.pathFollowState.path[k + 1].pos);
+                }
+                else break;
+            }
+        }
+        else if (!g_GameState->player.flyingMounted) {
+            goalDist += g_GameState->player.position.Dist3D(ws.pathFollowState.path[ws.pathFollowState.index].pos);
+            for (int k = ws.pathFollowState.index; k < ws.pathFollowState.path.size() - 1; k++) {
+                if (ws.pathFollowState.path[k].type == PATH_AIR) {
+                    goalDist += ws.pathFollowState.path[k].pos.Dist3D(ws.pathFollowState.path[k + 1].pos);
+                }
+                else break;
+            }
+        }
+        else {
+            goalDist = 10000.0f;
+        }
+
+        //g_LogFile << goalDist << std::endl;
         // 4. Steer
         bool canFly = (ws.globalState.flyingPath);
-        pilot.SteerTowards(ws.player.position, ws.player.rotation, target, targetType, ws.player);
+        pilot.SteerTowards(ws.player.position, ws.player.rotation, target, targetType, ws.player, goalDist);
         return false; // Still running
     }
 };
@@ -2291,8 +2226,15 @@ private:
 
         // 2. Only check if we are actually trying to go somewhere (active path)
         //if (state.globalState.activePath.empty() || !pilot.IsMoving()) {
+        // 2. Only check if we are actually trying to go somewhere
         if (!pilot.IsMoving()) {
-            // NEW: Reset stuck state when idle
+
+            // Detect if we are Mouse Steering (Turning in place).
+            if (pilot.GetSteering()) {
+                return false;
+            }
+
+            // Truly Idle: Reset stuck state
             state.stuckState.stuckStartTime = 0;
             state.stuckState.lastCheckTime = 0;
             return false;

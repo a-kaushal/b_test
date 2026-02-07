@@ -1,4 +1,6 @@
 #include "WebServer.h"
+#include "json.hpp" // Make sure this file is in your project directory
+using json = nlohmann::json;
 
 // [CRITICAL] WinSock2 must be included FIRST
 #include <winsock2.h>
@@ -515,6 +517,71 @@ void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
         responseBody = ReadLogFileTail(50000);
         contentType = "text/plain";
     }
+    // --- PATHFINDING TESTER ENDPOINTS ---
+    else if (requestData.find("GET /api/get_player_info") != std::string::npos) {
+        if (g_GameState) {
+            std::lock_guard<std::mutex> lock(g_EntityMutex);
+            auto& p = g_GameState->player;
+            std::stringstream ss;
+            ss << "{\"x\":" << p.position.x << ",\"y\":" << p.position.y << ",\"z\":" << p.position.z
+                << ",\"mapId\":" << p.mapId << "}";
+            responseBody = ss.str();
+            contentType = "application/json";
+        }
+        else {
+            responseBody = "{}";
+        }
+    }
+    else if (requestData.find("POST /api/test_path") != std::string::npos) {
+        size_t bodyPos = requestData.find("\r\n\r\n");
+        if (bodyPos != std::string::npos) {
+            std::string body = requestData.substr(bodyPos + 4);
+            try {
+                auto j = json::parse(body);
+
+                Vector3 start(j["start"]["x"], j["start"]["y"], j["start"]["z"]);
+                Vector3 end(j["end"]["x"], j["end"]["y"], j["end"]["z"]);
+                int mapId = j["mapId"];
+                bool canFly = j["canFly"];
+                bool strict = j["strict"];
+
+                // Simulate Input Path
+                std::vector<Vector3> inputPath = { end };
+
+                // CALL PATHFINDER
+                std::vector<PathNode> result = CalculatePath(
+                    inputPath, start, 0,
+                    canFly, mapId, canFly, // isFlying = canFly for testing
+                    false, false, 25.0f, strict
+                );
+
+                // UPDATE GLOBAL OVERLAY
+                if (g_GameState && !result.empty()) {
+                    std::lock_guard<std::mutex> lock(g_EntityMutex);
+                    g_GameState->globalState.activePath = result;
+                    g_GameState->globalState.activeIndex = 0;
+                    //g_GameState->globalState.activePathName = "DEBUG_TEST";
+                }
+
+                // RESPONSE
+                json resp;
+                resp["success"] = !result.empty();
+                resp["count"] = result.size();
+                std::vector<json> pathArr;
+                for (const auto& n : result) {
+                    pathArr.push_back({ {"x", n.pos.x}, {"y", n.pos.y}, {"z", n.pos.z}, {"type", n.type} });
+                }
+                resp["path"] = pathArr;
+
+                responseBody = resp.dump();
+                contentType = "application/json";
+            }
+            catch (const std::exception& e) {
+                responseBody = "{\"success\":false, \"error\":\"" + std::string(e.what()) + "\"}";
+                contentType = "application/json";
+            }
+        }
+    }
     else {
         responseBody = GetHTML();
     }
@@ -647,6 +714,7 @@ std::string WebServer::GetHTML() {
         <div class="tab" onclick="switchTab('map')">Live Map</div>
         <div class="tab" onclick="switchTab('entities')">Entity Table</div>
         <div class="tab" onclick="switchTab('debug')">Debug State</div>
+        <div class="tab" onclick="switchTab('path')">Path Tester</div>
     </div>
 
     <div class="content">
@@ -683,10 +751,41 @@ std::string WebServer::GetHTML() {
                 </table>
             </div>
         </div>
-
         <div id="debug" class="view">
             <div id="debug-wrapper">
                 <div id="debug-grid" class="debug-grid"></div>
+            </div>
+        </div>
+        <div id="path" class="view">
+            <div style="padding: 20px; color: #ddd;">
+                <div style="display: flex; gap: 20px; background: #252526; padding: 15px; border: 1px solid #333;">
+                    <div>
+                        <h4>Start</h4>
+                        <input type="number" id="startX" placeholder="X" step="0.1" style="width:70px">
+                        <input type="number" id="startY" placeholder="Y" step="0.1" style="width:70px">
+                        <input type="number" id="startZ" placeholder="Z" step="0.1" style="width:70px">
+                        <button class="btn-blue" onclick="getPos('start')">Get My Pos</button>
+                    </div>
+                    <div>
+                        <h4>End</h4>
+                        <input type="number" id="endX" placeholder="X" step="0.1" style="width:70px">
+                        <input type="number" id="endY" placeholder="Y" step="0.1" style="width:70px">
+                        <input type="number" id="endZ" placeholder="Z" step="0.1" style="width:70px">
+                        <button class="btn-blue" onclick="getPos('end')">Get My Pos</button>
+                    </div>
+                    <div>
+                        <h4>Settings</h4>
+                        <input type="number" id="pMapId" placeholder="MapID" style="width:60px">
+                        <label><input type="checkbox" id="pCanFly"> Can Fly</label>
+                        <label><input type="checkbox" id="pStrict" checked> Strict</label>
+                        <br><br>
+                        <button class="btn-start" onclick="runPathTest()">Calculate Path</button>
+                    </div>
+                </div>
+                <div id="pathStatus" style="margin: 10px 0; font-weight: bold;"></div>
+                <div style="background: #000; height: 500px; position: relative; border: 1px solid #444;">
+                    <canvas id="pathCanvas" style="width:100%; height:100%; display:block;"></canvas>
+                </div>
             </div>
         </div>
     </div>
@@ -766,6 +865,97 @@ std::string WebServer::GetHTML() {
         }
         window.onresize = resizeCanvas;
 
+        // --- PATH TESTER LOGIC ---
+        async function getPos(target) {
+            const res = await fetch('/api/get_player_info');
+            const p = await res.json();
+            document.getElementById(target+'X').value = p.x.toFixed(2);
+            document.getElementById(target+'Y').value = p.y.toFixed(2);
+            document.getElementById(target+'Z').value = p.z.toFixed(2);
+            if(target === 'start') document.getElementById('pMapId').value = p.mapId;
+        }
+
+        async function runPathTest() {
+            const status = document.getElementById('pathStatus');
+            status.innerText = "Calculating...";
+            
+            const payload = {
+                start: { 
+                    x: parseFloat(document.getElementById('startX').value), 
+                    y: parseFloat(document.getElementById('startY').value), 
+                    z: parseFloat(document.getElementById('startZ').value) 
+                },
+                end: { 
+                    x: parseFloat(document.getElementById('endX').value), 
+                    y: parseFloat(document.getElementById('endY').value), 
+                    z: parseFloat(document.getElementById('endZ').value) 
+                },
+                mapId: parseInt(document.getElementById('pMapId').value),
+                canFly: document.getElementById('pCanFly').checked,
+                strict: document.getElementById('pStrict').checked
+            };
+
+            const res = await fetch('/api/test_path', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+            
+            const data = await res.json();
+            if(data.success) {
+                status.innerText = `Success: ${data.count} points generated.`;
+                status.style.color = 'lime';
+                drawPathTest(data.path);
+            } else {
+                status.innerText = `Failed: ${data.error || "Unknown error"}`;
+                status.style.color = 'red';
+            }
+        }
+
+        function drawPathTest(path) {
+            const cvs = document.getElementById('pathCanvas');
+            // Fix resolution
+            cvs.width = cvs.clientWidth;
+            cvs.height = cvs.clientHeight;
+            const cx = cvs.getContext('2d');
+            
+            if(!path || path.length === 0) return;
+
+            // Normalize bounds
+            let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
+            path.forEach(p => {
+                if(p.x < minX) minX = p.x; if(p.x > maxX) maxX = p.x;
+                if(p.y < minY) minY = p.y; if(p.y > maxY) maxY = p.y;
+            });
+            
+            const padding = 40;
+            const w = maxX - minX || 1;
+            const h = maxY - minY || 1;
+            const scale = Math.min((cvs.width - padding*2)/w, (cvs.height - padding*2)/h);
+
+            cx.clearRect(0,0,cvs.width,cvs.height);
+            cx.strokeStyle = "#00ff00";
+            cx.lineWidth = 2;
+            cx.beginPath();
+
+            path.forEach((p, i) => {
+                // Invert Y for correct visualization direction
+                const x = padding + (p.x - minX) * scale;
+                const y = cvs.height - (padding + (p.y - minY) * scale);
+                
+                if(i===0) {
+                    cx.moveTo(x, y);
+                    cx.fillStyle = "blue"; cx.fillRect(x-4, y-4, 8, 8); // Start
+                } else {
+                    cx.lineTo(x, y);
+                }
+                if(i===path.length-1) {
+                    cx.fillStyle = "red"; cx.fillRect(x-4, y-4, 8, 8); // End
+                }
+            });
+            cx.stroke();
+        }
+
         // --- DEBUG GRID RENDERER [FIXED: PRIORITY HIGHLIGHTING] ---
         function renderDebugGrid() {
             const container = document.getElementById('debug-grid');
@@ -825,6 +1015,10 @@ std::string WebServer::GetHTML() {
             });
             container.innerHTML = html;
         }
+)HTML";
+
+        // PART 3: SCRIPT 2
+        ss << R"HTML(
 
         async function poll() {
             try {
@@ -927,9 +1121,16 @@ std::string WebServer::GetHTML() {
                 if (!p) return;
                 const rows = [
                     ["Position", `${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`],
-                    ["Rotation", p.rot.toFixed(3)],
+                    ["Rotation", p.rot.toFixed(3) + " rad"],
                     ["Health", `${p.hp} / ${p.maxHp}`],
-                    ["Target GUID", p.target]
+                    ["Level", p.level],
+                    ["Map ID", p.mapId],
+                    ["Free Bag Slots", p.bagFree],
+                    ["Need Repair", p.needRepair ? "YES" : "No"],
+                    ["Status", p.isDead ? "DEAD" : (p.inCombat ? "In Combat" : "Idle")],
+                    ["Flags", `Mounted: ${p.isMounted}, Ground Mounted: ${p.groundMounted}, Flying Mounted: ${p.flyingMounted}, Flying: ${p.isFlying}, Indoor: ${p.isIndoor}, In Water: ${p.inWater}, On Ground: ${p.onGround}`],
+                    ["Target GUID", p.target],
+                    ["Selected GUID", p.selected]
                 ];
                 rows.forEach(r => tbody.innerHTML += `<tr><td><b>${r[0]}</b></td><td onclick="copyToClipboard(this.innerText, this)">${r[1]}</td></tr>`);
                 return;
@@ -939,15 +1140,39 @@ std::string WebServer::GetHTML() {
             if (!gameState.entities) return;
 
             gameState.entities.filter(e => filter === 'All' || e.type === filter).sort((a, b) => a.dist - b.dist).forEach(ent => {
-                let info = (ent.type === 'Enemy') ? `${ent.hp}/${ent.maxHp}` : "-";
-                let color = (ent.type === 'Enemy' && ent.reaction === 0) ? '#ff0000' : '#ccc';
-                tbody.innerHTML += `<tr>
-                    <td style="color:${color}">${ent.type}</td>
-                    <td onclick="copyToClipboard(this.innerText, this)">${ent.name}</td>
-                    <td>${ent.dist.toFixed(1)}</td>
-                    <td>${ent.x.toFixed(1)}, ${ent.y.toFixed(1)}</td>
-                    <td>${info}</td>
-                </tr>`;
+                let healthInfo = "N/A";
+                let combatInfo = "-";
+                let targetInfo = "-";
+                let color = '#ccc';
+                let typeDisplay = ent.type;
+
+                if (ent.type === 'Enemy') {
+                    healthInfo = `${ent.hp} / ${ent.maxHp} (Lvl ${ent.level})`;
+                    combatInfo = ent.inCombat ? "<span style='color:red;font-weight:bold'>YES</span>" : "No";
+                    targetInfo = ent.targetGuid || "None";
+
+                    if (ent.reaction === 2) { color = '#00ff00'; typeDisplay = "Friendly NPC"; }
+                    else if (ent.reaction === 1) { color = '#ffff00'; typeDisplay = "Neutral NPC"; }
+                    else { color = '#ff0000'; typeDisplay = "Enemy NPC"; }
+                } 
+                else if (ent.type === 'Object') {
+                    healthInfo = ent.nodeActive ? "Active" : "Depleted";
+                    combatInfo = "-";
+                    targetInfo = "-";
+                    color = '#d02090'; // Purple
+                }
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td style="color:${color}; font-weight:bold;" onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${typeDisplay}</td>
+                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${ent.name} (ID: ${ent.id})</td>
+                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${ent.dist.toFixed(1)}</td>
+                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${ent.x.toFixed(1)}, ${ent.y.toFixed(1)}, ${ent.z.toFixed(1)}</td>
+                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${healthInfo}</td>
+                    <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${combatInfo}</td>
+                    <td style="font-family:monospace; font-size:11px;" onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${targetInfo}</td>
+                `;
+                tbody.appendChild(tr);
             });
         }
 

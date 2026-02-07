@@ -21,6 +21,7 @@ struct ActionState {
 struct GlobalState : public ActionState {
     bool vendorOpen = false;
     bool chatOpen = false;
+    bool reloaded = true;
     DWORD bagEmptyTime = -1;
     int mapId = 0;
     int areaId = 0; // Local Area ID (lookup from WorldMapArea.csv)

@@ -6,9 +6,11 @@
 #include "Database.h"
 
 ULONG_PTR LUA_ADDON_ENTRY = 0x0;
+ULONG_PTR oldPtr = 0;
 
 class LuaAnchor {
 public:
+
     // Scans the target process for the specific string pattern.
     // Returns the address if found, or 0 if not found.
     static ULONG_PTR Find(MemoryAnalyzer& analyzer, DWORD pid, const std::string& magicString) {
@@ -102,10 +104,19 @@ public:
         try {
             std::string rawMemoryString = "";
             bool firstRead = false;
+
+            if (entryPtr != 0 && g_GameState->globalState.reloaded) {
+                oldPtr = entryPtr;
+                g_GameState->globalState.reloaded = false;
+                entryPtr = 0;
+                return;
+            }
+
             if (entryPtr == 0) {
                 entryPtr = LuaAnchor::Find(analyzer, pid, magicString);
-                if (entryPtr != 0) {
+                if ((entryPtr != 0) && (oldPtr != 0 && entryPtr == oldPtr)) {
                     firstRead = true;
+                    oldPtr = 0;
                     g_LogFile << ">>> Lua Base Address Found: 0x" << std::hex << entryPtr << std::dec << std::endl;
                 }
                 else {

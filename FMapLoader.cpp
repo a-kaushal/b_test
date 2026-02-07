@@ -72,7 +72,7 @@ public:
         totalChecks++;
         if (hit) totalHits++;
 
-        if (enabled && logFile.is_open() && (totalChecks % 50 == 1)) {
+        if ((enabled && logFile.is_open() && (totalChecks % 50 == 1))) {
             logFile << "[LOS#" << totalChecks << "] Map=" << mapId << " | ";
             logFile << std::fixed << std::setprecision(2);
             logFile << "(" << x1 << "," << y1 << "," << z1 << ")->(" << x2 << "," << y2 << "," << z2 << ") | ";
@@ -159,7 +159,7 @@ struct VoxelCell {
     bool isEmpty() const { return layers.empty(); }
 
     // Get the floor height at or below a given Z
-    float getFloorBelow(float z) const {
+    float getFloorBelow(float z, bool nearest = false) const {
         if (layers.empty()) return -99999.0f;
 
         float bestFloor = -99999.0f;
@@ -169,7 +169,8 @@ struct VoxelCell {
             float ceiling = layer.getCeilingZ();
 
             // If we're within this layer's vertical span
-            if ((z + FMAP_HEIGHT_RANGE) >= floor && z <= ceiling) {
+            //if ((z + FMAP_HEIGHT_RANGE) >= floor && z <= ceiling) {
+            if (z >= floor && z <= ceiling) {
                 return floor;  // Standing on this floor
             }
 
@@ -177,6 +178,10 @@ struct VoxelCell {
             if (floor <= z && floor > bestFloor) {
                 bestFloor = floor;
             }
+        }
+
+        if (bestFloor == -99999.0f && nearest && layers[0].getFloorZ() - 10.0f < z) {
+            bestFloor = layers[0].getFloorZ();
         }
 
         return bestFloor;
@@ -192,7 +197,8 @@ struct VoxelCell {
             float ceiling = layer.getCeilingZ();
 
             // If we're within this layer's vertical span
-            if ((z + FMAP_HEIGHT_RANGE) >= floor && z <= ceiling) {
+            //if ((z + FMAP_HEIGHT_RANGE) >= floor && z <= ceiling) {
+            if (z >= floor && z <= ceiling) {
                 return ceiling;  // Standing on this floor
             }
 
@@ -211,14 +217,37 @@ struct VoxelCell {
         return true;
 
         if (layers.empty()) return false;
+
         for (const auto& layer : layers) {
             float floor = layer.getFloorZ();
             float ceiling = layer.getCeilingZ();
 
-            // Strict boundary check (with 1.0f tolerance for snapping)
-            if (z >= (floor - 1.0f) && z <= ceiling) {
-                if (layer.isOpenSky()) return true;
-                if (z < (ceiling - FMAP_AGENT_HEIGHT)) return true;
+            // Check if we are physically inside this layer
+            // (Floor - 1.5 tolerance for hovering near ground)
+            // (Ceiling + 0.5 tolerance for head clearance)
+            if (z >= (floor - 1.5f) && z <= (ceiling + 0.5f)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Check if clear sky at coord
+    bool isClearSky(float z) const {
+        // OVERLOADED
+        return true;
+
+        if (layers.empty()) return false;
+
+        for (const auto& layer : layers) {
+            float floor = layer.getFloorZ();
+            float ceiling = layer.getCeilingZ();
+
+            // Check if we are physically inside this layer
+            // (Floor - 1.5 tolerance for hovering near ground)
+            // (Ceiling + 0.5 tolerance for head clearance)
+            if (z >= (floor - 1.5f) && ceiling > 4000.0f) {
+                return true;
             }
         }
         return false;
@@ -236,7 +265,8 @@ struct VoxelCell {
             float ceiling = layer.getCeilingZ();
 
             // Check if segment intersects this layer's navigable space
-            if ((maxZ + FMAP_HEIGHT_RANGE) >= floor && minZ <= ceiling) {
+            //if ((maxZ + FMAP_HEIGHT_RANGE) >= floor && (maxZ + FMAP_HEIGHT_RANGE) <= ceiling && minZ >= floor && minZ <= ceiling) {
+            if (maxZ >= floor && maxZ <= ceiling && minZ >= floor && minZ <= ceiling) {
                 return true;  // Found a layer that contains part of the segment
             }
         }
@@ -403,7 +433,7 @@ public:
     }
 
     // Get floor height at world position
-    float getFloorHeight(float worldX, float worldY, float worldZ) const {
+    float getFloorHeight(float worldX, float worldY, float worldZ, bool nearest = false) const {
         const VoxelCell* cell = getCell(worldX, worldY);
         if (!cell) return -99999.0f;
 
@@ -420,7 +450,7 @@ public:
             }
         }
 
-        float result = cell->getFloorBelow(worldZ);
+        float result = cell->getFloorBelow(worldZ, nearest);
 
         if (DEBUG_FMAP) {
             char msg[128];
@@ -464,6 +494,13 @@ public:
         const VoxelCell* cell = getCell(worldX, worldY);
         if (!cell) return false;
         return cell->canFlyAt(worldZ);
+    }
+
+    // Check if position has clear sky
+    bool isClearSky(float worldX, float worldY, float worldZ) const {
+        const VoxelCell* cell = getCell(worldX, worldY);
+        if (!cell) return false;
+        return cell->isClearSky(worldZ);
     }
 
     bool checkLineOfSight(float x1, float y1, float z1, float x2, float y2, float z2) const {
@@ -618,23 +655,68 @@ public:
         }
     }
 
-    bool checkLine(int mapId, float x1, float y1, float z1, float x2, float y2, float z2) {
-        // Get tile at midpoint
-        float midX = (x1 + x2) * 0.5f;
-        float midY = (y1 + y2) * 0.5f;
+    bool checkLine(int mapId, float x1, float y1, float z1, float x2, float y2, float z2, bool debug = false) {
+        Vector3 start(x1, y1, z1);
+        Vector3 end(x2, y2, z2);
+        Vector3 delta = end - start;
+        float dist = delta.length();
 
-        FMapTile* tile = getTileAt(mapId, midX, midY);
-        if (!tile) {
-            g_Logger.LogCheck(mapId, x1, y1, z1, x2, y2, z2, false);
-            return false;  // No tile = no collision
+        std::ofstream logFile;
+        if (debug) {
+            logFile.open("C:\\SMM\\SMM_FMap_Debug.log", std::ios::app);
         }
 
-        bool blocked = !tile->checkLineOfSight(x1, y1, z1, x2, y2, z2);
-        g_Logger.LogCheck(mapId, x1, y1, z1, x2, y2, z2, blocked);
-        return blocked;
+        if (dist < 0.001f) {
+            g_Logger.LogCheck(mapId, x1, y1, z1, x2, y2, z2, false);
+            return false; // Zero length = Clear
+        }
+
+        float stepSize = FMAP_CELL_SIZE * 0.25f;
+        int steps = (int)((floor)(dist / stepSize)) + 1;
+
+        // Cache the last used tile to minimize lookups
+        FMapTile* cachedTile = nullptr;
+
+        for (int i = 0; i <= steps; ++i) {
+            float t = (i == steps) ? 1.0f : ((float)i * stepSize / dist);
+            Vector3 pos = start + (delta * t);
+
+            const VoxelCell* cell = nullptr;
+            if (cachedTile) {
+                cell = cachedTile->getCell(pos.x, pos.y);
+            }
+
+            if (!cell) {
+                cachedTile = getTileAt(mapId, pos.x, pos.y);
+                if (cachedTile) {
+                    cell = cachedTile->getCell(pos.x, pos.y);
+                }
+            }
+
+            if (!cell) { continue; }
+
+            if (cell->isEmpty()) {
+                g_Logger.LogCheck(mapId, x1, y1, z1, x2, y2, z2, true);
+                if ((logFile.is_open()) && debug) {
+                    logFile << "Line check for: " << x1 << ", " << y1 << ", " << z1 << " to " << x2 << ", " << y2 << ", " << z2 << " cell is empty" << "\n";
+                }
+                return true; // BLOCKED
+            }
+
+            if (!cell->isVerticalClear(pos.z - 0.5f, pos.z + 0.5f)) {
+                g_Logger.LogCheck(mapId, x1, y1, z1, x2, y2, z2, true);
+                if ((logFile.is_open()) && debug) {
+                    logFile << "Line check for: " << pos.x << ", " << pos.y << ", " << pos.z - 0.5f << " to " << pos.x << ", " << pos.y << ", " << pos.z + 0.5f << " not clear" << "\n";
+                }
+                return true; // BLOCKED (Hit Ceiling or Floor)
+            }
+        }
+
+        g_Logger.LogCheck(mapId, x1, y1, z1, x2, y2, z2, false);
+        return false; // CLEAR
     }
 
-    float getFloorHeight(int mapId, float x, float y, float z) {
+    float getFloorHeight(int mapId, float x, float y, float z, bool nearest = false) {
         FMapTile* tile = getTileAt(mapId, x, y);
         if (!tile) {
             if (DEBUG_FMAP) {
@@ -652,7 +734,7 @@ public:
             g_Logger.Log(msg);
         }
 
-        float result = tile->getFloorHeight(x, y, z);
+        float result = tile->getFloorHeight(x, y, z, nearest);
         g_Logger.LogFloorQuery(x, y, z, result);
         return result;
     }
@@ -680,11 +762,12 @@ public:
         return result;
     }
 
-    bool canFlyAt(int mapId, float x, float y, float z) {
+    bool canFlyAt(int mapId, float x, float y, float z, bool clearSkyCheck = false) {
         FMapTile* tile = getTileAt(mapId, x, y);
 
         // 1. Basic Voxel Check (Is the center point in a flyable layer?)
         if (!tile) return false;
+        if (clearSkyCheck && tile->isClearSky(x, y, z)) return true;
         if (!tile->canFlyAt(x, y, z)) return false;
 
         // 2. Headroom Check (Center to Head + 2.5y)
@@ -706,131 +789,25 @@ public:
 
 static FMapSystem g_FMapSys;
 
-// Detect if a position is in an enclosed space (tunnel/cave/indoor)
-bool detectTunnel(int mapId, float x, float y, float z) {
-    FMapTile* tile = g_FMapSys.getTileAt(mapId, x, y);
-    if (!tile) return false;  // No tile = outdoor, not a tunnel
-
-    const VoxelCell* currentCell = tile->getCell(x, y);
-    if (!currentCell || currentCell->isEmpty()) {
-        return false;  // Solid or void, but not a navigable tunnel
-    }
-
-    // === CHECK 1: LOW CEILING ===
-    const float TUNNEL_CEILING_HEIGHT = 20.0f;
-    bool hasLowCeiling = false;
-    float ceilingDistance = 999.0f;
-
-    // Check vertical clearance at current position
-    for (const auto& layer : currentCell->layers) {
-        float floor = layer.getFloorZ();
-        float ceiling = layer.getCeilingZ();
-
-        // Are we in this layer's vertical span?
-        if ((z + FMAP_HEIGHT_RANGE) >= floor && z <= ceiling) {
-            ceilingDistance = ceiling - z;
-            if (ceilingDistance < TUNNEL_CEILING_HEIGHT && !layer.isOpenSky()) {
-                hasLowCeiling = true;
-            }
-            break;
-        }
-    }
-
-    // === CHECK 2: HORIZONTAL ENCLOSURE ===
-    // Sample 8 directions to detect walls
-    const float CHECK_RADIUS = 8.0f;  // Check 8 units away
-    int blockedDirections = 0;
-
-    struct Direction {
-        float dx, dy;
-    };
-
-    Direction directions[8] = {
-        {CHECK_RADIUS, 0},                 // East
-        {-CHECK_RADIUS, 0},                // West
-        {0, CHECK_RADIUS},                 // North
-        {0, -CHECK_RADIUS},                // South
-        {CHECK_RADIUS, CHECK_RADIUS},      // NE
-        {-CHECK_RADIUS, CHECK_RADIUS},     // NW
-        {CHECK_RADIUS, -CHECK_RADIUS},     // SE
-        {-CHECK_RADIUS, -CHECK_RADIUS}     // SW
-    };
-
-    for (int i = 0; i < 8; ++i) {
-        float testX = x + directions[i].dx;
-        float testY = y + directions[i].dy;
-        float testZ = z + 1.0f;  // Check at head height
-
-        // Check if ray to this direction is blocked
-        if (g_FMapSys.checkLine(mapId, x, y, z + 1.0f, testX, testY, testZ)) {
-            blockedDirections++;
-        }
-    }
-
-    // === CHECK 3: VERTICAL CONFINEMENT ===
-    // Check if there's geometry above (ceiling) within a short distance
-    bool hasGeometryAbove = false;
-    float testHeight = z + 5.0f;
-    for (int i = 0; i < 4; ++i) {
-        if (g_FMapSys.checkLine(mapId, x, y, z, x, y, testHeight)) {
-            hasGeometryAbove = true;
-            break;
-        }
-        testHeight += 5.0f;
-        if (testHeight - z > TUNNEL_CEILING_HEIGHT) break;
-    }
-
-    // === DECISION LOGIC ===
-    // Tunnel criteria:
-    // 1. Low ceiling OR geometry above + blocked on 4+ sides = TUNNEL
-    // 2. Blocked on 6+ sides regardless = ENCLOSED SPACE
-    // 3. Low ceiling + no open sky + blocked on 3+ sides = INDOOR
-
-    bool criteriaTunnel = (hasLowCeiling || hasGeometryAbove) && (blockedDirections >= 4);
-    bool criteriaEnclosed = (blockedDirections >= 6);
-    bool criteriaIndoor = hasLowCeiling && !currentCell->layers.empty() &&
-        !currentCell->layers.back().isOpenSky() && (blockedDirections >= 3);
-
-    bool inTunnel = criteriaTunnel || criteriaEnclosed || criteriaIndoor;
-
-    if (DEBUG_FMAP && inTunnel) {
-        g_Logger.Log("=== TUNNEL DETECTED ===");
-        char msg[512];
-        sprintf(msg, "  Position: (%.2f, %.2f, %.2f)", x, y, z);
-        g_Logger.Log(msg);
-        sprintf(msg, "  Low ceiling: %s (%.2f units above)", hasLowCeiling ? "YES" : "NO", ceilingDistance);
-        g_Logger.Log(msg);
-        sprintf(msg, "  Blocked directions: %d/8", blockedDirections);
-        g_Logger.Log(msg);
-        sprintf(msg, "  Geometry above: %s", hasGeometryAbove ? "YES" : "NO");
-        g_Logger.Log(msg);
-        sprintf(msg, "  Classification: %s",
-            criteriaEnclosed ? "ENCLOSED" : (criteriaTunnel ? "TUNNEL" : "INDOOR"));
-        g_Logger.Log(msg);
-    }
-
-    return inTunnel;
-}
-
 // --- EXPORTED C API ---
 extern "C" {
     __declspec(dllexport) bool CheckFMapLine(int mapId, float x1, float y1, float z1,
-        float x2, float y2, float z2) {
+        float x2, float y2, float z2, bool debug) {
         static bool initialized = false;
         if (!initialized) {
             g_FMapSys.init("C:/SMM/data/fmaps/");
             initialized = true;
         }
-        return g_FMapSys.checkLine(mapId, x1, y1, z1, x2, y2, z2);
+        return g_FMapSys.checkLine(mapId, x1, y1, z1, x2, y2, z2, debug);
     }
 
-    __declspec(dllexport) float GetFMapFloorHeight(int mapId, float x, float y, float z) {
+    __declspec(dllexport) float GetFMapFloorHeight(int mapId, float x, float y, float z, bool nearest = false) {
         static bool initialized = false;
         if (!initialized) {
             g_FMapSys.init("C:/SMM/data/fmaps/");
             initialized = true;
         }
-        return g_FMapSys.getFloorHeight(mapId, x, y, z);
+        return g_FMapSys.getFloorHeight(mapId, x, y, z, nearest);
     }
 
     __declspec(dllexport) float GetFMapCeilingHeight(int mapId, float x, float y, float z) {
@@ -851,13 +828,13 @@ extern "C" {
         return g_FMapSys.canFlyAt(mapId, x, y, z);
     }
 
-    __declspec(dllexport) bool IsInTunnel(int mapId, float x, float y, float z) {
+    __declspec(dllexport) bool IsClearSky(int mapId, float x, float y, float z) {
         static bool initialized = false;
         if (!initialized) {
             g_FMapSys.init("C:/SMM/data/fmaps/");
             initialized = true;
         }
-        return detectTunnel(mapId, x, y, z);
+        return g_FMapSys.canFlyAt(mapId, x, y, z, true);
     }
 
     __declspec(dllexport) void CleanupFMapCache(int mapId, float x, float y) {

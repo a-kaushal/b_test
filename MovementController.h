@@ -338,7 +338,7 @@ public:
         return false;
     }
 
-    void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool flyingPath, PlayerInfo& player, bool mountDisable = false, bool escapeWater = false) {
+    void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool flyingPath, PlayerInfo& player, float goalDistance, bool mountDisable = false, bool escapeWater = false) {
 
         float dx = targetPos.x - currentPos.x;
         float dy = targetPos.y - currentPos.y;
@@ -350,28 +350,28 @@ public:
 
         // --- GLOBAL DISTANCE CHECK FOR GROUND MOUNTS ---
         // Calculate the TRUE travel distance remaining on the path, not just the distance to the next node.
-        float totalTravelDistance = dist3D; // Default to direct distance
+        //float totalTravelDistance = dist3D; // Default to direct distance
 
-        if (g_GameState && !g_GameState->globalState.activePath.empty()) {
-            size_t idx = g_GameState->globalState.activeIndex;
-            const auto& path = g_GameState->globalState.activePath;
+        //if (g_GameState && !g_GameState->globalState.activePath.empty()) {
+        //    size_t idx = g_GameState->globalState.activeIndex;
+        //    const auto& path = g_GameState->globalState.activePath;
 
-            if (idx < path.size()) {
-                // 1. Distance from Player to Current Waypoint
-                totalTravelDistance = currentPos.Dist3D(path[idx].pos);
+        //    if (idx < path.size()) {
+        //        // 1. Distance from Player to Current Waypoint
+        //        totalTravelDistance = currentPos.Dist3D(path[idx].pos);
 
-                // 2. Sum of all remaining segments
-                for (size_t i = idx; i < path.size() - 1; ++i) {
-                    totalTravelDistance += path[i].pos.Dist3D(path[i + 1].pos);
-                }
-            }
-        }
+        //        // 2. Sum of all remaining segments
+        //        for (size_t i = idx; i < path.size() - 1; ++i) {
+        //            totalTravelDistance += path[i].pos.Dist3D(path[i + 1].pos);
+        //        }
+        //    }
+        //}
 
-        // If it's a ground path AND the total trip is < 30 yards, disable mounting.
-        if (!flyingPath && totalTravelDistance < 60.0f) {
+        // If it's a ground path AND the total trip is < 60 yards, disable mounting.
+        if (!flyingPath && goalDistance < 60.0f) {
             mountDisable = true;
         }
-        if (flyingPath && totalTravelDistance < 5.0f) {
+        if (flyingPath && goalDistance < 5.0f) {
             mountDisable = true;
         }
 
@@ -381,7 +381,7 @@ public:
             m_IsMounting = false;
         }
 
-        if (mountDisable && ((flyingPath && !player.flyingMounted) || (!flyingPath && player.flyingMounted)) && (!player.inWater)) {
+        if (mountDisable && ((flyingPath && player.flyingMounted) || (!flyingPath && player.isMounted)) && (!player.inWater) && (!escapeWater)) {
             if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"))) {
                 inputCommand.Reset();
             }
@@ -390,7 +390,7 @@ public:
 
         // Attempt to mount if: Requested (isFlying), Not Mounted, Not In Tunnel
         if ((((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && !player.inWater && !mountDisable && player.areaMountable) || 
-            (((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && player.inWater)) {
+            (((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && player.inWater && escapeWater)) {
             Stop();
             // Check 1: Are we on a cooldown from a previous failure?
             if (now < m_MountDisabledUntil) {
@@ -772,9 +772,10 @@ public:
         static DWORD lastLog = 0;
         if (GetTickCount() - lastLog > 200) {
             // Uncomment to debug specific angles if needed
-            g_LogFile << "[Face] Diff: " << yawDiff << std::endl;
+            //g_LogFile << "[Face] Diff: " << yawDiff << std::endl;
             lastLog = GetTickCount();
         }
+        g_LogFile << GetTickCount() << " " << yawDiff << std::endl;
 
         // 1. ALIGNED: Release keys and return true
         if (std::abs(yawDiff) < ALIGNED_THRESHOLD) {

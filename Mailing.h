@@ -168,11 +168,11 @@ def main():
                     coords_3[0] += -112 / (1920 / width)
                     coords_3[1] += 88 / (1080 / height)      
 
-                # Loop 8 times, 4 seconds apart
-                for i in range(8):
+                # Loop 10 times, 5 seconds apart
+                for i in range(10):
                     print(f"Clicking... ({i+1}/15)")
                     send_packet(pipe, 3, int(coords_3[0]), int(coords_3[1]))
-                    time.sleep(4)
+                    time.sleep(5)
             else:
                 # Not found -> Pause 15 seconds for mail to finish
                 print("'someone' text NOT found. Pausing 15 seconds...")

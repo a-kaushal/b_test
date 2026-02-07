@@ -1,5 +1,4 @@
 ﻿#pragma once
-
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -26,9 +25,10 @@
 #include "WorldState.h"
 
 // FMap function declarations (replaces VMap)
-extern "C" bool CheckFMapLine(int mapId, float x1, float y1, float z1, float x2, float y2, float z2);
-extern "C" float GetFMapFloorHeight(int mapId, float x, float y, float z);
+extern "C" bool CheckFMapLine(int mapId, float x1, float y1, float z1, float x2, float y2, float z2, bool debug);
+extern "C" float GetFMapFloorHeight(int mapId, float x, float y, float z, bool nearest);
 extern "C" bool CanFlyAt(int mapId, float x, float y, float z);
+extern "C" bool IsClearSky(int mapId, float x, float y, float z);
 
 // --- AREA CONSTANTS (Must match Generator/PathCommon.h) ---
 const unsigned short AREA_GROUND = 0x01; // 1 (Ground)
@@ -38,6 +38,7 @@ const unsigned short AREA_WATER = 0x08; // 8 (Surface)
 const unsigned short AREA_UNDERWATER = 0x10; // 16 (Sea Floor)
 const unsigned short AREA_ROAD = 0x20; // 32 (Roads)
 const unsigned short AREA_DEEP_WATER = 0x06; // 6 (Deep Water)
+const unsigned short AREA_INDOOR_UNDERGROUND = 0x0A; // 10 
 
 // --- CONFIGURATION ---
 const float COLLISION_STEP_SIZE = 0.5f;    // Was 0.5f - less sampling
@@ -57,7 +58,7 @@ const float FMAP_VERTICAL_TOLERANCE = 2.0f;  // Tolerance for floor snapping
 const size_t MAX_CACHE_SIZE = 100;
 const size_t CACHE_CLEANUP_THRESHOLD = 120;
 
-const float GROUND_PATH_THRESHOLD = 1.0f;
+const float GROUND_PATH_THRESHOLD = 2.0f;
 
 const bool DEBUG_PATHFINDING = true;  // Enable for flight debugging
 
@@ -218,7 +219,7 @@ inline void CleanGroundPath(std::vector<PathNode>& path, int mapId) {
         if (node.type == PATH_GROUND) {
             // Probe from slightly above (5.0f) to find the floor even if the waypoint is buried
             float probeZ = node.pos.z + 5.0f;
-            float fmapZ = GetFMapFloorHeight(mapId, node.pos.x, node.pos.y, probeZ);
+            float fmapZ = GetFMapFloorHeight(mapId, node.pos.x, node.pos.y, probeZ, true);
 
             // If a valid floor exists
             if (fmapZ > -90000.0f) {
@@ -259,10 +260,15 @@ public:
     }
 
     // Use FMap for precise floor height
-    float GetLocalGroundHeight(const Vector3& pos) {
+    float GetLocalGroundHeight(const Vector3& pos, float clearance = 5.0f) {
         if (currentMapId < 0) return -99999.0f;
         // Try FMap first for precise voxel-based height
-        float fmapHeight = GetFMapFloorHeight(currentMapId, pos.x, pos.y, pos.z);
+        float fmapHeight = GetFMapFloorHeight(currentMapId, pos.x, pos.y, pos.z, true);
+        float fmapHeight2 = GetFMapFloorHeight(currentMapId, pos.x, pos.y, fmapHeight + clearance, true);
+        while (fmapHeight != fmapHeight2) {
+            fmapHeight = GetFMapFloorHeight(currentMapId, pos.x, pos.y, fmapHeight2, true);
+            fmapHeight2 = GetFMapFloorHeight(currentMapId, pos.x, pos.y, fmapHeight + clearance, true);
+        }
         if (fmapHeight > -90000.0f) {
             return fmapHeight;
         }
@@ -279,6 +285,97 @@ public:
             return nearest[1];
         }
         return -99999.0f;
+    }
+
+    // BFS Search to find the nearest OUTDOOR polygon
+    Vector3 FindFlyableExit(const Vector3& startPos, int mapId, float maxRadius = 200.0f) {
+        if (!mesh || !query) return Vector3(0, 0, 0);
+
+        // Recast uses (Y, Z, X) coordinates usually, but let's stick to your Vector3 usage
+        // Note: Check if your utils swap Y/Z. Standard Recast is (x, z, y).
+        float center[3] = { startPos.y, startPos.z, startPos.x };
+        float extents[3] = { 5.0f, 10.0f, 5.0f };
+        dtPolyRef startRef;
+        float startPt[3];
+
+        // 1. Find Start Poly (Indoor)
+        dtQueryFilter filter;
+        filter.setIncludeFlags(0xFFFF); // Include everything
+        filter.setExcludeFlags(0);
+
+        if (dtStatusFailed(query->findNearestPoly(center, extents, &filter, &startRef, startPt))) {
+            return Vector3(0, 0, 0);
+        }
+
+        // 2. BFS Setup
+        std::vector<dtPolyRef> openList; // Queue
+        std::unordered_set<dtPolyRef> closedList; // Visited
+        openList.push_back(startRef);
+        closedList.insert(startRef);
+
+        size_t head = 0;
+        int nodesChecked = 0;
+
+        while (head < openList.size()) {
+            dtPolyRef curRef = openList[head++];
+            nodesChecked++;
+
+            // Safety break to prevent freezing on huge maps
+            if (nodesChecked > 2000) break;
+
+            const dtMeshTile* tile = 0;
+            const dtPoly* poly = 0;
+            mesh->getTileAndPolyByRef(curRef, &tile, &poly);
+            if (!tile || !poly) continue;
+
+            // 3. CHECK FLAGS: Are we Outdoors?
+            // We look for GROUND or ROAD. 
+            // We explicitly reject INDOOR (though strictly, Ground/Road shouldn't have Indoor flag).
+            // flags in dtPoly are usually unsigned short. 
+            // YOUR CUSTOM DATA is in poly->flags (mapped from solidAreas).
+
+            bool isIndoor = (poly->flags & AREA_INDOOR_UNDERGROUND) != 0;
+            bool isOutdoorTerrain = (poly->flags & (AREA_GROUND | AREA_ROAD)) != 0;
+
+            if (!isIndoor && isOutdoorTerrain) {
+                // FOUND IT! This polygon is outdoors.
+
+                // Calculate Poly Center to return as target
+                float polyX = 0, polyY = 0, polyZ = 0;
+                for (int i = 0; i < poly->vertCount; ++i) {
+                    const float* v = &tile->verts[poly->verts[i] * 3];
+                    polyX += v[0];
+                    polyY += v[1];
+                    polyZ += v[2];
+                }
+                float invCount = 1.0f / poly->vertCount;
+                polyX *= invCount;
+                polyY *= invCount;
+                polyZ *= invCount;
+
+                // Check distance from start to ensure we didn't wander too far
+                // (Optional, BFS guarantees shortest hop count, not necessarily distance)
+
+                // Convert back to WoW Coords: 
+                // Recast X -> WoW Y
+                // Recast Y -> WoW Z
+                // Recast Z -> WoW X
+                return Vector3(polyZ, polyX, polyY);
+            }
+
+            // 4. Expand Neighbors
+            // Loop through links (NavMesh connections)
+            for (unsigned int i = poly->firstLink; i != DT_NULL_LINK; i = tile->links[i].next) {
+                dtPolyRef neighborRef = tile->links[i].ref;
+
+                if (neighborRef && closedList.find(neighborRef) == closedList.end()) {
+                    closedList.insert(neighborRef);
+                    openList.push_back(neighborRef);
+                }
+            }
+        }
+
+        return Vector3(0, 0, 0); // No exit found
     }
 
     // --- REFINES PATH TO AVOID WALL HUGGING ---
@@ -354,7 +451,7 @@ public:
                         pos.x = nearestPt[2];
 
                         // 6. Fix Z height
-                        float floorZ = GetFMapFloorHeight(mapId, pos.x, pos.y, pos.z + 2.5f);
+                        float floorZ = GetFMapFloorHeight(mapId, pos.x, pos.y, pos.z + 2.5f, true);
                         if (floorZ > -90000.0f) {
                             pos.z = floorZ + 0.5f;
                         }
@@ -383,11 +480,11 @@ public:
         }
 
         // 1. Check Core (Center to Head)
-        if (CheckFMapLine(mapId, pos.x, pos.y, pos.z, pos.x, pos.y, pos.z + 2.5f)) {
+        if (CheckFMapLine(mapId, pos.x, pos.y, pos.z, pos.x, pos.y, pos.z + 2.5f, false)) {
             return false;
         }
         // 2. Check Feet (Center to Feet)
-        if (CheckFMapLine(mapId, pos.x, pos.y, pos.z, pos.x, pos.y, pos.z - 0.5f)) {
+        if (CheckFMapLine(mapId, pos.x, pos.y, pos.z, pos.x, pos.y, pos.z - 0.5f, false)) {
             return false;
         }
 
@@ -422,9 +519,9 @@ public:
     // Search for nearest valid flyable point if we hit a no-fly zone
     Vector3 FindNearestFlyablePoint(const Vector3& pos, int mapId) {
         // Try center first
-        if (CanFlyAt(mapId, pos.x, pos.y, pos.z) && 
-            !CheckFMapLine(mapId, pos.x, pos.y, pos.z - 0.2f, pos.x, pos.y, pos.z + 0.2f)) {
-             return pos;
+        if (CanFlyAt(mapId, pos.x, pos.y, pos.z) &&
+            !CheckFMapLine(mapId, pos.x, pos.y, pos.z - 0.2f, pos.x, pos.y, pos.z + 0.2f, false)) {
+            return pos;
         }
 
         const float maxRadius = 30.0f;
@@ -446,7 +543,7 @@ public:
                 Vector3 test = pos + off;
                 if (CanFlyAt(mapId, test.x, test.y, test.z)) {
                     // Double check it's not inside a wall (CheckFMapLine for tiny movement)
-                    if (!CheckFMapLine(mapId, test.x, test.y, test.z - 0.2f, test.x, test.y, test.z + 0.2f)) {
+                    if (!CheckFMapLine(mapId, test.x, test.y, test.z - 0.2f, test.x, test.y, test.z + 0.2f, false)) {
                         return test;
                     }
                 }
@@ -459,7 +556,7 @@ public:
 // Checks if a point has the full AGENT_RADIUS clearance in all directions
     bool IsClearSafePoint(const Vector3& pos, int mapId) {
         float probeZ = pos.z + 2.0f;
-        float floorZ = GetFMapFloorHeight(mapId, pos.x, pos.y, probeZ);
+        float floorZ = GetFMapFloorHeight(mapId, pos.x, pos.y, probeZ, true);
 
         if (floorZ > -90000.0f) {
             // If the floor is above us (with a small epsilon), the point is invalid.
@@ -478,7 +575,7 @@ public:
         };
 
         for (const auto& off : offsets) {
-            if (CheckFMapLine(mapId, pos.x, pos.y, pos.z, pos.x + off.x, pos.y + off.y, pos.z + off.z)) {
+            if (CheckFMapLine(mapId, pos.x, pos.y, pos.z, pos.x + off.x, pos.y + off.y, pos.z + off.z, false)) {
                 return false;
             }
         }
@@ -508,7 +605,7 @@ public:
 
             for (const auto& off : offsets) {
                 Vector3 test = pos + off;
-                float groundZ = GetFMapFloorHeight(mapId, test.x, test.y, test.z);
+                float groundZ = GetFMapFloorHeight(mapId, test.x, test.y, test.z, true);
                 if (test.z < groundZ) {
                     test.z = groundZ + AGENT_RADIUS;
                 }
@@ -520,7 +617,7 @@ public:
                 }
             }
 
-            
+
         }
         return Vector3(0, 0, 0);
     }
@@ -528,7 +625,7 @@ public:
     // ----------------------------------------------------------------------
     //  UPDATED SEGMENT CHECK WITH PERPENDICULAR RAYS (Fixes Clipping)
     // ----------------------------------------------------------------------
-    FlightSegmentResult CheckFlightSegmentDetailed(const Vector3& start, const Vector3& end, int mapId, Vector3& outFailPos, bool isFlying, bool strict = true, bool verbose = false) {
+    FlightSegmentResult CheckFlightSegmentDetailed(const Vector3& start, const Vector3& end, int mapId, Vector3& outFailPos, bool isFlying, bool strict = true, bool verbose = false, bool debug = false) {
         Vector3 dir = end - start;
         float totalDist = dir.Length();
         if (totalDist < 0.1f) return SEGMENT_VALID;
@@ -578,7 +675,9 @@ public:
         // For relaxed attempts (strict=false), we can reduce count or radius.
         // Here we keep count but could reduce radius if needed. For now, we trust the 'strict' flag logic.
         //int numRays = strict ? 9 : 1;
-        int numRays = strict ? 9 : 5;
+
+        // WAS 5 CHECKS, CHANGED TO 1
+        int numRays = strict ? 9 : 1;
 
         float skipCollisionDist = startingFromGround ? 5.0f : 0.0f;
 
@@ -589,9 +688,9 @@ public:
         // Mounted characters are tall (~2.5y). We must check the full height.
         // If we only check +2.5, we might skip OVER a thin branch at +1.5.
 
-        float headTop = 2.5f;   // Check max height (Top of Mount/Head)
+        float headTop = 2.0f;   // Check max height (Top of Mount/Head)
         float headMid = 1.25f;  // GAP FILLER: Check between Center and Top
-        float knees   = -0.5f;           // Gap filler
+        float knees = -0.5f;           // Gap filler
         float feetBot = -AGENT_RADIUS;  // Bottom of Feet check (catches ground clipping)
 
         // If relaxed (Attempt 4+), we shrink the box to fit in tunnels
@@ -607,8 +706,10 @@ public:
         }
 
         for (int i = 0; i < numRays; ++i) {
-            Vector3 s = start + offsets[i];
+            //Vector3 s = start + offsets[i];
+            Vector3 s = start;
             Vector3 e = end + offsets[i];
+            if (debug) g_LogFile << "Start: " << s.x << " " << s.y << " " << s.z << " | " << "End: " << e.x << " " << e.y << " " << e.z << " | " << "Offsets: " << offsets[i].x << " " << offsets[i].y << " " << offsets[i].z << std::endl;
 
             // 1. GROUND PROXIMITY CHECK (Existing logic)
             if (skipCollisionDist > 0.0f && totalDist > skipCollisionDist) {
@@ -616,32 +717,32 @@ public:
                 if (CheckFMapLine(mapId, clearancePoint.x + offsets[i].x,
                     clearancePoint.y + offsets[i].y,
                     clearancePoint.z + offsets[i].z,
-                    e.x, e.y, e.z)) return SEGMENT_COLLISION;
+                    e.x, e.y, e.z, debug)) return SEGMENT_COLLISION;
             }
             // 2. OBSTACLE CHECK
             else if (skipCollisionDist == 0.0f || totalDist <= skipCollisionDist) {
                 // 1. CENTER
-                if (CheckFMapLine(mapId, s.x, s.y, s.z, e.x, e.y, e.z)) {
+                if (CheckFMapLine(mapId, s.x, s.y, s.z, e.x, e.y, e.z, debug)) {
                     if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " CENTER hit obstacle." << std::endl;
                     return SEGMENT_COLLISION;
                 }
-                // 2. FEET (Bottom) - Critical for ground clipping
-                if (CheckFMapLine(mapId, s.x, s.y, s.z + feetBot, e.x, e.y, e.z + feetBot)) {
-                    if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " FEET hit obstacle." << std::endl;
-                    return SEGMENT_COLLISION;
-                }
-                // 3. KNEES (Gap Filler)
-                if (CheckFMapLine(mapId, s.x, s.y, s.z + knees, e.x, e.y, e.z + knees)) {
-                    if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " KNEES hit obstacle." << std::endl;
-                    return SEGMENT_COLLISION;
-                }
-                // 4. HEAD MID
-                if (CheckFMapLine(mapId, s.x, s.y, s.z + headMid, e.x, e.y, e.z + headMid)) {
-                    if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " HEAD-MID hit obstacle." << std::endl;
-                    return SEGMENT_COLLISION;
-                }
+                //// 2. FEET (Bottom) - Critical for ground clipping
+                //if (CheckFMapLine(mapId, s.x, s.y, s.z + feetBot, e.x, e.y, e.z + feetBot)) {
+                //    if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " FEET hit obstacle." << std::endl;
+                //    return SEGMENT_COLLISION;
+                //}
+                //// 3. KNEES (Gap Filler)
+                //if (CheckFMapLine(mapId, s.x, s.y, s.z + knees, e.x, e.y, e.z + knees)) {
+                //    if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " KNEES hit obstacle." << std::endl;
+                //    return SEGMENT_COLLISION;
+                //}
+                //// 4. HEAD MID
+                //if (CheckFMapLine(mapId, s.x, s.y, s.z + headMid, e.x, e.y, e.z + headMid)) {
+                //    if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " HEAD-MID hit obstacle." << std::endl;
+                //    return SEGMENT_COLLISION;
+                //}
                 // 5. HEAD TOP
-                if (CheckFMapLine(mapId, s.x, s.y, s.z + headTop, e.x, e.y, e.z + headTop)) {
+                if (CheckFMapLine(mapId, s.x, s.y, s.z + headTop, e.x, e.y, e.z + headTop, debug)) {
                     if (verbose && DEBUG_PATHFINDING) g_LogFile << "      FAIL: Ray " << i << " HEAD-TOP hit obstacle." << std::endl;
                     return SEGMENT_COLLISION;
                 }
@@ -736,7 +837,7 @@ public:
 
                 // Use FMap for collision detection
                 if (CheckFMapLine(mapId, testPos.x, testPos.y, testPos.z - 0.3f,
-                    testPos.x, testPos.y, testPos.z + 0.3f)) {
+                    testPos.x, testPos.y, testPos.z + 0.3f, false)) {
                     return false;
                 }
 
@@ -753,7 +854,7 @@ public:
     bool CheckLandingDescent(const Vector3& hoverPos, const Vector3& landPos, int mapId) {
         return CheckApproachPath(hoverPos, landPos, mapId);
     }
-    
+
     void GetTileCoords(const Vector3& pos, int& tx, int& ty) {
         // Based on params.orig: {-17600, -1000, -17600} and tile size 533.33333
         // And the coordinate swap: Recast X = WoW Y, Recast Z = WoW X
@@ -997,7 +1098,7 @@ public:
                 Vector3 safePoint(resultPt[2], resultPt[0], resultPt[1]);
 
                 // Snap to FMap floor for precision
-                float fmapFloor = GetFMapFloorHeight(currentMapId, safePoint.x, safePoint.y, safePoint.z);
+                float fmapFloor = GetFMapFloorHeight(currentMapId, safePoint.x, safePoint.y, safePoint.z, true);
                 if (fmapFloor > -90000.0f && std::abs(safePoint.z - fmapFloor) < FMAP_VERTICAL_TOLERANCE) {
                     safePoint.z = fmapFloor;
                 }
@@ -1046,6 +1147,37 @@ public:
 };
 
 static NavMesh globalNavMesh;
+
+inline bool IsPointIndoors(const Vector3& pos, int mapId) {
+    if (!globalNavMesh.mesh || !globalNavMesh.query) return false;
+
+    float center[3] = { pos.y, pos.z, pos.x }; // Recast Coords (Y, Z, X)
+    float extents[3] = { 2.0f, 5.0f, 2.0f };   // Search small radius
+    dtPolyRef polyRef;
+    float nearestPt[3];
+
+    dtQueryFilter filter;
+    filter.setIncludeFlags(0xFFFF); // Check ALL polygons
+    filter.setExcludeFlags(0);
+
+    // 1. Find the polygon at the goal
+    dtStatus status = globalNavMesh.query->findNearestPoly(center, extents, &filter, &polyRef, nearestPt);
+
+    if (dtStatusSucceed(status) && polyRef != 0) {
+        // 2. Get the poly data to read flags
+        const dtMeshTile* tile = 0;
+        const dtPoly* poly = 0;
+        globalNavMesh.mesh->getTileAndPolyByRef(polyRef, &tile, &poly);
+
+        if (poly) {
+            // Check if our NAV_INDOOR bit (0x80) is set
+            //g_LogFile << poly->flags << " " << AREA_INDOOR_UNDERGROUND << " " << (poly->flags == AREA_INDOOR_UNDERGROUND) << std::endl;
+            return (poly->flags == AREA_INDOOR_UNDERGROUND);
+        }
+    }
+
+    return false;
+}
 
 inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, bool ignoreWater, bool pointAdjust = true, bool zCheck = true, float zExtent = 5.0f) {
     if (!globalNavMesh.query || !globalNavMesh.mesh) return {};
@@ -1133,7 +1265,7 @@ inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, 
     // Even if we found a poly, check if it's way above or below the target.
     // detourEnd[1] is Z. endPt[1] is snapped Z.
     if (zCheck && (std::abs(endPt[1] - detourEnd[1]) > 5.0f)) {
-        if (DEBUG_PATHFINDING) g_LogFile << "[FindPath] FAIL: End Poly is " << endPt[1]-detourEnd[1] << " above target." << std::endl;
+        if (DEBUG_PATHFINDING) g_LogFile << "[FindPath] FAIL: End Poly is " << endPt[1] - detourEnd[1] << " above target." << std::endl;
         // The snapped point is more than 5 yards vertically from the request.
         // We likely snapped to a bridge/floor above. Treat as unreachable.
         return {};
@@ -1190,7 +1322,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
     AStarAttempt attempts[] = {
         // Base=4.0f means near the target we move in 4yd steps (Very precise).
         // Fixed coarse grid
-        { 4.0f,  true,  10000, "Coarse Fixed",     true },
+        { 4.0f,  false,  10000, "Coarse Fixed",     true },
 
         { 2.0f,  false,  40000, "Standard Dynamic", true },
 
@@ -1201,7 +1333,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         { 3.0f,  false, 20000, "Ultra-Precision",   false }
     };
 
-    float GROUND_HEIGHT_THRESHOLD = 7.0f;
+    float GROUND_HEIGHT_THRESHOLD = 5.0f;
 
     // 1. VALIDATE END POSITION
     Vector3 actualStart = start;
@@ -1247,81 +1379,19 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         }
     }
 
-    // FLIGHT POINT CHECK WITH A*
-    //if (!globalNavMesh.CheckFlightPoint(actualStart, mapId, false)) {
-    //    if (DEBUG_PATHFINDING) g_LogFile << "[Flight] Start point invalid. Scanning local grid for valid A* node..." << std::endl;
-
-    //    Vector3 bestStart = actualStart;
-    //    float bestDist = 1e9f;
-    //    bool found = false;
-
-    //    // Search Radius: 4 nodes (approx 16 yards) in every direction
-    //    int radius = 4;
-    //    float step = attempts[0].baseGridSize; // Must match att.baseGridSize]
-    //    
-    //    g_LogFile << actualStart.x << " " << actualStart.y << " " << actualStart.z << std::endl;
-
-    //    for (int z = -radius; z <= radius; ++z) {
-    //        for (int y = -radius; y <= radius; ++y) {
-    //            for (int x = -radius; x <= radius; ++x) {
-    //                if (x == 0 && y == 0 && z == 0) continue;
-
-    //                Vector3 candidate = actualStart + Vector3(x * step, y * step, z * step);
-
-    //                g_LogFile << "Candidate: " << candidate.x << " " << candidate.y << " " << candidate.z << std::endl;
-    //                // 1. IS IT A VALID A* NODE?
-    //                // This uses the EXACT same check A* uses to accept/reject nodes.
-    //                if (!globalNavMesh.CheckFlightPoint(candidate, mapId, false)) continue;
-
-    //                // 2. IS IT REACHABLE?
-    //                // Use strict collision to ensure we don't clip the cliff edge getting there.
-    //                Vector3 fail;
-    //                if (globalNavMesh.CheckFlightSegmentDetailed(actualStart, candidate, mapId, fail, isFlying, true, true) == SEGMENT_VALID) {
-    //                    g_LogFile << "A" << std::endl;
-    //                    float d = candidate.Dist3D(actualStart);
-    //                    if (d < bestDist) {
-    //                        bestDist = d;
-    //                        bestStart = candidate;
-    //                        found = true;
-    //                    }
-    //                }
-    //            }
-    //        }
-    //    }
-
-    //    if (found) {
-    //        if (DEBUG_PATHFINDING) g_LogFile << "[Flight] Relocated start to valid node at: " << bestStart.x << " " << bestStart.y << " " << bestStart.z << std::endl;
-    //        actualStart = bestStart;
-    //    }
-    //    else {
-    //        if (DEBUG_PATHFINDING) g_LogFile << "[Flight] FAILED to find any valid A* node nearby." << std::endl;
-    //    }
-    //}
-
-
-    float startGround = GetFMapFloorHeight(mapId, actualStart.x, actualStart.y, actualStart.z + 2.0f);
-    if (startGround > -90000.0f && actualStart.z < startGround + 1.0f && startingFromGround && !g_GameState->player.isFlying) {
+    float startGround = GetFMapFloorHeight(mapId, actualStart.x, actualStart.y, actualStart.z + 2.0f, true);
+    if (startGround > -90000.0f && actualStart.z < startGround + 1.0f && startingFromGround && !g_GameState->player.isFlying && fabs(startGround - start.z) < GROUND_HEIGHT_THRESHOLD) {
         actualStart.z = startGround + 2.0f;
-        actualStart.z = actualStart.z;
+        //start.z = actualStart.z;
         if (DEBUG_PATHFINDING) {
             g_LogFile << "Adjusted start height to: " << actualStart.z << " (ground: " << startGround << ")" << std::endl;
         }
     }
 
-    float endGround = GetFMapFloorHeight(mapId, end.x, end.y, end.z + 2.0f);
-    if (endGround > -90000.0f && end.z < endGround + 1.0f) {
-        actualEnd.z = endGround + 2.0f;
-        end.z = actualEnd.z;
-        if (DEBUG_PATHFINDING) {
-            g_LogFile << "Adjusted end height to: " << actualEnd.z << " (ground: " << endGround << ")" << std::endl;
-        }
-    }
-
-    // If the goal is on the ground and we're descending to it, be more lenient
-    if (endGround > -90000.0f && end.z < endGround + GROUND_HEIGHT_THRESHOLD) {
-        // Adjust end to be just slightly above ground instead of MIN_CLEARANCE
-        actualEnd.z = endGround + 1.0f; // Changed from MIN_CLEARANCE + 1.0f
-        end.z = actualEnd.z;
+    float endGround = GetFMapFloorHeight(mapId, end.x, end.y, end.z + 2.0f, true);
+    if (endGround > -90000.0f && fabs(endGround - end.z) < GROUND_HEIGHT_THRESHOLD) {
+        actualEnd.z = endGround + 2.0f; // Changed from MIN_CLEARANCE + 1.0f
+        //end.z = actualEnd.z;
         if (DEBUG_PATHFINDING) {
             g_LogFile << "Goal is on ground, adjusted end height to: " << actualEnd.z
                 << " (ground: " << endGround << ")" << std::endl;
@@ -1339,8 +1409,35 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
 
     // Check if the final destination is valid for flight
     bool isGoalFlyable = globalNavMesh.CheckFlightPoint(actualStart, mapId, true); // Allow ground proximity
+    bool isIndoorFlagged = IsPointIndoors(actualStart, mapId);
 
-    if (!isGoalFlyable) {
+    if (isIndoorFlagged) {
+        bool foundLanding = false;
+        if (DEBUG_PATHFINDING) g_LogFile << "[Path] Start is Indoors. Searching for exit..." << std::endl;
+
+        // Use BFS to find the nearest outdoor spot
+        // (Ensure FindFlyableExit checks: !(flags & NAV_INDOOR))
+        Vector3 startPoint = globalNavMesh.FindFlyableExit(actualStart, mapId);
+
+        if (startPoint.x != 0.0f) {
+            std::vector<PathNode> approach = FindPath(actualStart, startPoint, ignoreWater, false);
+
+            if (!approach.empty() && approach.back().pos.Dist3D(actualStart) < 5.0f) {
+                // SUCCESS!
+                groundStart = startPoint;
+                // Lift flight goal slightly to ensure we don't crash into terrain while landing
+                groundStart.z += 1.0f;
+                launchApproach = approach;
+                foundLanding = true;
+
+                if (DEBUG_PATHFINDING) {
+                    g_LogFile << "[Flight] ✓ Found Launch Spot at (" << startPoint.x << ", " << startPoint.y << ", " << startPoint.z << ")!" << std::endl;
+                    g_LogFile << "         Ground path length: " << approach.size() << " nodes." << std::endl;
+                }
+            }
+        }
+    }
+    else if (!isGoalFlyable) {
         if (DEBUG_PATHFINDING) g_LogFile << "[Flight] Start is NOT valid for flight (Indoor/Blocked). Searching for Start Flight Spot..." << std::endl;
 
         // Spiral Search settings
@@ -1362,23 +1459,25 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
                 Vector3 candidate = actualStart + off;
 
                 // 1. Snap Candidate to Ground (Crucial: Must be walkable)
-                float gZ = globalNavMesh.GetLocalGroundHeight(candidate);
+                float gZ = globalNavMesh.GetLocalGroundHeight(candidate, 5.0f);
                 if (gZ <= -90000.0f) continue; // No ground here
                 candidate.z = gZ + 1.0f;       // Stand on ground
 
                 // 2. Is this spot Flyable? (Can we land here?)
                 // We check if we can fly at 'Head Height' (gZ + 2.0f) or 'Hover Height' (gZ + 5.0f)
-                if (CanFlyAt(mapId, candidate.x, candidate.y, candidate.z + 2.0f)) {
+                //if (CanFlyAt(mapId, candidate.x, candidate.y, candidate.z + 2.0f)) {
+                if (IsClearSky(mapId, candidate.x, candidate.y, candidate.z + 1.0f)) {
 
                     // 3. Is it connected to the Goal? (Ground Path Check)
                     // We calculate path FROM Launch TO Goal
+                    //g_LogFile << candidate.x << ", " << candidate.y << ", " << candidate.z << std::endl;
                     std::vector<PathNode> approach = FindPath(actualStart, candidate, ignoreWater, false);
 
                     if (!approach.empty() && approach.back().pos.Dist3D(actualStart) < 5.0f) {
                         // SUCCESS!
                         groundStart = candidate;
                         // Lift flight goal slightly to ensure we don't crash into terrain while landing
-                        groundStart.z += 2.0f;
+                        groundStart.z += 1.0f;
                         launchApproach = approach;
                         foundLanding = true;
 
@@ -1404,8 +1503,35 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
 
     // Check if the final destination is valid for flight
     isGoalFlyable = globalNavMesh.CheckFlightPoint(actualEnd, mapId, true); // Allow ground proximity
+    isIndoorFlagged = IsPointIndoors(actualEnd, mapId);
 
-    if (!isGoalFlyable) {
+    if (isIndoorFlagged) {
+        bool foundLanding = false;
+        if (DEBUG_PATHFINDING) g_LogFile << "[Path] Destination is Indoors. Searching for exit..." << std::endl;
+
+        // Use BFS to find the nearest outdoor spot
+        // (Ensure FindFlyableExit checks: !(flags & NAV_INDOOR))
+        Vector3 exitPoint = globalNavMesh.FindFlyableExit(actualEnd, mapId);
+
+        if (exitPoint.x != 0.0f) {
+            std::vector<PathNode> approach = FindPath(exitPoint, actualEnd, ignoreWater, false);
+
+            if (!approach.empty() && approach.back().pos.Dist3D(actualEnd) < 5.0f) {
+                // SUCCESS!
+                flightGoal = exitPoint;
+                // Lift flight goal slightly to ensure we don't crash into terrain while landing
+                flightGoal.z += 1.0f;
+                groundApproach = approach;
+                foundLanding = true;
+
+                if (DEBUG_PATHFINDING) {
+                    g_LogFile << "[Flight] ✓ Found Landing Spot at (" << exitPoint.x << ", " << exitPoint.y << ", " << exitPoint.z << ")!" << std::endl;
+                    g_LogFile << "         Ground path length: " << approach.size() << " nodes." << std::endl;
+                }
+            }
+        }
+    }
+    else if (!isGoalFlyable) {
         if (DEBUG_PATHFINDING) g_LogFile << "[Flight] Destination is NOT valid for flight (Indoor/Blocked). Searching for Landing Spot..." << std::endl;
 
         // Spiral Search settings
@@ -1427,13 +1553,14 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
                 Vector3 candidate = actualEnd + off;
 
                 // 1. Snap Candidate to Ground (Crucial: Must be walkable)
-                float gZ = globalNavMesh.GetLocalGroundHeight(candidate);
+                float gZ = globalNavMesh.GetLocalGroundHeight(candidate, 5.0f);
                 if (gZ <= -90000.0f) continue; // No ground here
                 candidate.z = gZ + 1.0f;       // Stand on ground
 
                 // 2. Is this spot Flyable? (Can we land here?)
                 // We check if we can fly at 'Head Height' (gZ + 2.0f) or 'Hover Height' (gZ + 5.0f)
-                if (CanFlyAt(mapId, candidate.x, candidate.y, candidate.z + 2.0f)) {
+                //if (CanFlyAt(mapId, candidate.x, candidate.y, candidate.z + 2.0f)) {
+                if (IsClearSky(mapId, candidate.x, candidate.y, candidate.z + 1.0f)) {
 
                     // 3. Is it connected to the Goal? (Ground Path Check)
                     // We calculate path FROM Landing TO Goal (as you requested)
@@ -1443,7 +1570,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
                         // SUCCESS!
                         flightGoal = candidate;
                         // Lift flight goal slightly to ensure we don't crash into terrain while landing
-                        flightGoal.z += 2.0f;
+                        flightGoal.z += 1.0f;
                         groundApproach = approach;
                         foundLanding = true;
 
@@ -1461,7 +1588,6 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             if (DEBUG_PATHFINDING) g_LogFile << "[Flight] ⚠ Could not find any connected landing spot nearby. A* might fail." << std::endl;
         }
     }
-    // -------------------------------------------------------------------------
 
     // 2. TRY DIRECT PATH FIRST (Optimization)
     if (DEBUG_PATHFINDING) g_LogFile << "Checking direct path..." << std::endl;
@@ -1476,12 +1602,18 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         if (DEBUG_PATHFINDING) g_LogFile << "✓ Direct path clear!" << std::endl;
 
         std::vector<PathNode> path;
+        for (int i = 0; i < launchApproach.size(); i++) {
+            g_LogFile << launchApproach[i].pos.x << " " << launchApproach[i].pos.y << " " << launchApproach[i].pos.z << " " << std::endl;
+        }
+        for (int i = 0; i < groundApproach.size(); i++) {
+            g_LogFile << groundApproach[i].pos.x << " " << groundApproach[i].pos.y << " " << groundApproach[i].pos.z << " " << std::endl;
+        }
 
         // APPEND LAUNCH APPROACH
         if (!launchApproach.empty()) {
             // Add transition node (Launching)
             path.insert(path.end(), launchApproach.begin(), launchApproach.end());
-            path.push_back(PathNode(groundStart, PATH_GROUND));
+            path.push_back(PathNode(groundStart, PATH_AIR));
         }
         else {
             path.push_back(PathNode(groundStart, PATH_AIR));
@@ -1490,7 +1622,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         // APPEND GROUND APPROACH
         if (!groundApproach.empty()) {
             // Add transition node (Landing)
-            path.push_back(PathNode(flightGoal, PATH_GROUND));
+            path.push_back(PathNode(flightGoal, PATH_AIR));
             path.insert(path.end(), groundApproach.begin(), groundApproach.end());
         }
         else {
@@ -1498,72 +1630,6 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         }
         return path;
     }
-    //else if (directCheck == SEGMENT_NO_FLY_ZONE) {
-    //    // --- SMART RECOVERY FOR NO-FLY ZONES ---
-    //    if (DEBUG_PATHFINDING) {
-    //        g_LogFile << "⚠ Direct path hit No-Fly Zone at (" << failPos.x << ", " << failPos.y << ", " << failPos.z << ")" << std::endl;
-    //        g_LogFile << "  Attempting to find nearest valid flyable point..." << std::endl;
-    //    }
-
-    //    Vector3 detourPoint = globalNavMesh.FindNearestFlyablePoint(failPos, mapId);
-
-    //    // If we found a valid detour point (not 0,0,0)
-    //    if (detourPoint.x != 0 || detourPoint.y != 0 || detourPoint.z != 0) {
-    //        if (DEBUG_PATHFINDING) {
-    //            g_LogFile << "  Found detour point: (" << detourPoint.x << ", " << detourPoint.y << ", " << detourPoint.z << ")" << std::endl;
-    //            g_LogFile << "  Validating legs: Start->Detour and Detour->End..." << std::endl;
-    //        }
-
-    //        // Validate the legs
-    //        if (globalNavMesh.CheckFlightSegment(actualStart, detourPoint, mapId, isFlying, true, true) &&
-    //            globalNavMesh.CheckFlightSegment(detourPoint, flightGoal, mapId, isFlying, true, true)) {
-
-    //            if (DEBUG_PATHFINDING) {
-    //                g_LogFile << "✓ Smart Recovery Successful! Created detour path." << std::endl;
-    //            }
-    //            return { PathNode(actualStart, PATH_AIR), PathNode(detourPoint, PATH_AIR), PathNode(flightGoal, PATH_AIR) };
-    //        }
-    //        else {
-    //            // --- NEW LOGIC: DETOUR LEGS BLOCKED (CHECK END POINT) ---
-    //            if (DEBUG_PATHFINDING) {
-    //                g_LogFile << "  ✗ Detour legs were blocked. Checking if End Point is the issue..." << std::endl;
-    //            }
-
-    //            // Check if the destination itself is inside a No-Fly Zone
-    //            if (!CanFlyAt(mapId, flightGoal.x, flightGoal.y, actualEnd.z)) {
-    //                if (DEBUG_PATHFINDING) {
-    //                    g_LogFile << "  ! END POINT is in a No-Fly Zone. Searching for nearest safe destination..." << std::endl;
-    //                }
-
-    //                Vector3 safeEnd = globalNavMesh.FindNearestFlyablePoint(actualEnd, mapId);
-
-    //                // If we found a safe replacement for the destination
-    //                if (safeEnd.x != 0 || safeEnd.y != 0 || safeEnd.z != 0) {
-    //                    if (DEBUG_PATHFINDING) {
-    //                        g_LogFile << "  Found safe destination: (" << safeEnd.x << ", " << safeEnd.y << ", " << safeEnd.z << ")" << std::endl;
-    //                        g_LogFile << "  Retrying with safe destination..." << std::endl;
-    //                    }
-
-    //                    // Retry the path: Start -> Detour -> SafeEnd
-    //                    if (globalNavMesh.CheckFlightSegment(actualStart, detourPoint, mapId, isFlying, true, true) &&
-    //                        globalNavMesh.CheckFlightSegment(detourPoint, safeEnd, mapId, isFlying, true, true)) {
-
-    //                        if (DEBUG_PATHFINDING) {
-    //                            g_LogFile << "✓ Smart Recovery (Modified End) Successful!" << std::endl;
-    //                        }
-    //                        return { PathNode(actualStart, PATH_AIR), PathNode(detourPoint, PATH_AIR), PathNode(safeEnd, PATH_AIR) };
-    //                    }
-    //                }
-    //            }
-    //        }
-    //    }
-    //    else {
-    //        if (DEBUG_PATHFINDING) {
-    //            g_LogFile << "  ✗ Could not find a valid flyable point nearby." << std::endl;
-    //        }
-    //    }
-    //}
-
 
     // Pre-allocate containers
     std::vector<FlightNode3D> nodes;
@@ -1581,7 +1647,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         gridToIndex.clear();
         closedSet.clear();
 
-        IndexPriorityQueue openSet(&nodes); 
+        IndexPriorityQueue openSet(&nodes);
 
         if (DEBUG_PATHFINDING) {
             g_LogFile << ">>> A* Attempt " << (i + 1) << " (" << att.name << ") <<<" << std::endl;
@@ -1676,18 +1742,19 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
                 // If far away, use larger steps to cover ground quickly.
                 // Multipliers must be integers so nodes align with the base grid.
                 bool nearStart = currentPos.Dist3D(groundStart) < 20.0f;
-                bool nearEnd = currentPos.Dist3D(flightGoal) < 20.0f;
-                //if (nearStart || nearEnd) {
-                    //currentStep /= 2.0f;  // Causes issues for some reason
+                bool nearEnd = currentPos.Dist3D(flightGoal) < 8.0f;
+                //if (nearEnd) {
+                //    currentStep /= 8.0f;  // Causes issues for some reason
                 //}
                 //bool nearStart = current.gScore < 20.0f;
                 //bool nearEnd = distToGoal < 20.0f;
 
-                //if (!nearStart || !nearEnd) {
-                    if (distToGoal > 1000.0f) { currentStep *= 8.0f; } // e.g. 8.0 * 2 = 32 yard steps
-                    else if (distToGoal > 200.0f) { currentStep *= 4.0f; } // e.g. 4.0 * 4 = 16 yard steps
-                    else if (distToGoal > 50.0f) { currentStep *= 2.0f; } // e.g. 4.0 * 2 = 8 yard steps
+                //if (!nearEnd) {
+                if (distToGoal > 1000.0f) { currentStep *= 8.0f; } // e.g. 8.0 * 2 = 32 yard steps
+                else if (distToGoal > 200.0f) { currentStep *= 4.0f; } // e.g. 4.0 * 4 = 16 yard steps
+                else if (distToGoal > 50.0f) { currentStep *= 2.0f; } // e.g. 4.0 * 2 = 8 yard steps
                 //}
+
                 // else: < 50 yards, use baseGridSize (4 yards) for precision
             }
 
@@ -1796,7 +1863,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
                     // Try to connect them
                     Vector3 failPos;
                     FlightSegmentResult testResult = globalNavMesh.CheckFlightSegmentDetailed(
-                        nodes[closestIdx].pos, flightGoal, mapId, failPos, isFlying, false, true);
+                        nodes[closestIdx].pos, flightGoal, mapId, failPos, isFlying, false, true, false);
 
                     g_LogFile << "   - Can connect closest to goal: "
                         << (testResult == SEGMENT_VALID ? "YES" : "NO") << "" << std::endl;
@@ -1833,23 +1900,24 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
 
         // Reconstruct Path if we have a valid start index
         if (traceStartIdx >= 0) {
+            std::vector<PathNode> flightSegment; // Temp vector for air nodes
+
+            int curr = traceStartIdx;
+            int safety = 0;
+            while (curr >= 0 && safety++ < 5000) {
+                flightSegment.push_back(PathNode(nodes[curr].pos, PATH_AIR));
+                curr = nodes[curr].parentIdx;
+            }
+
+            std::reverse(flightSegment.begin(), flightSegment.end());
             std::vector<PathNode> path;
 
-            // APPEND LAUNCH APPROACH
             if (!launchApproach.empty()) {
-                // Optional: Add landing node
                 path.insert(path.end(), launchApproach.begin(), launchApproach.end());
                 path.push_back(PathNode(groundStart, PATH_GROUND));
             }
 
-            int curr = traceStartIdx;
-            // Safety check for loop limit to prevent infinite loops if parentIdx is corrupted
-            int safety = 0;
-            while (curr >= 0 && safety++ < 5000) {
-                path.push_back(PathNode(nodes[curr].pos, PATH_AIR));
-                curr = nodes[curr].parentIdx;
-            }
-            std::reverse(path.begin(), path.end());
+            path.insert(path.end(), flightSegment.begin(), flightSegment.end());
 
             // --- STRICT SUCCESS CHECK (Skipped if we explicitly allowed partial) ---
             if (!isPartial && path.back().pos.Dist3D(flightGoal) > 5.0f) {
@@ -1887,9 +1955,14 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             // APPEND GROUND APPROACH
             if (!groundApproach.empty()) {
                 // Optional: Add landing node
-                path.push_back(PathNode(flightGoal, PATH_GROUND));
+                path.push_back(PathNode(flightGoal, PATH_AIR));
                 path.insert(path.end(), groundApproach.begin(), groundApproach.end());
             }
+
+            /*g_LogFile << " ||| | || |" << std::endl;
+            for (int i = 0; i < path.size(); i++) {
+                g_LogFile << path[i].pos.x << " " << path[i].pos.y << " " << path[i].pos.z << " " << path[i].type << std::endl;
+            }*/
 
             if (DEBUG_PATHFINDING) g_LogFile << "✓ A* SUCCESS on Attempt " << (i + 1) << std::endl;
             return path;
@@ -1956,7 +2029,7 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
             }
         }
     }
-    
+
     if (DEBUG_PATHFINDING) g_LogFile << "!!! CRITICAL: All flight attempts failed." << std::endl;
     return {};
 }
@@ -1970,6 +2043,10 @@ inline std::vector<PathNode> SubdivideFlightPath(const std::vector<PathNode>& in
     for (size_t i = 0; i < input.size() - 1; ++i) {
         Vector3 start = input[i].pos;
         Vector3 end = input[i + 1].pos;
+
+        if (input[i].type != input[i + 1].type) {
+            continue;
+        }
 
         // Preserve type from the starting node of the segment
         int segmentType = input[i].type;
@@ -1989,7 +2066,7 @@ inline std::vector<PathNode> SubdivideFlightPath(const std::vector<PathNode>& in
 
             if (!isFinalApproach && segmentType == PATH_AIR) {
                 // Use FMap for precise floor snapping
-                float gZ = GetFMapFloorHeight(mapId, pt.x, pt.y, pt.z);
+                float gZ = GetFMapFloorHeight(mapId, pt.x, pt.y, pt.z, true);
                 if (gZ > -90000.0f && pt.z < gZ + MIN_CLEARANCE) {
                     pt.z = gZ + MIN_CLEARANCE + 0.5f;
                 }
@@ -2016,6 +2093,13 @@ inline std::vector<PathNode> OptimizeFlightPath(const std::vector<PathNode>& pat
 
         // 1. Mandatory Keep: Type Change (Always keep transitions like Ground -> Air)
         if (optimized.back().type != path[i].type) {
+            optimized.push_back(path[i]);
+            continue;
+        }
+
+        // 1b. Mandatory Keep: Ground Nodes
+        // Ground paths require high precision (corners/doors). Do not optimize them away!
+        if (path[i].type == PATH_GROUND) {
             optimized.push_back(path[i]);
             continue;
         }
@@ -2058,7 +2142,7 @@ inline void CleanPathGroundZ(std::vector<PathNode>& path, int mapId) {
             // Check for floor height starting slightly above the node to catch cases 
             // where the node sunk below the actual mesh.
             // We search from node.z + 5.0 down to find the real floor.
-            float realZ = GetFMapFloorHeight(mapId, node.pos.x, node.pos.y, node.pos.z + 5.0f);
+            float realZ = GetFMapFloorHeight(mapId, node.pos.x, node.pos.y, node.pos.z + 5.0f, true);
 
             // If a valid floor is found
             if (realZ > -90000.0f) {
@@ -2112,11 +2196,11 @@ inline std::vector<PathNode> NudgeGroundPath(std::vector<PathNode> path, float a
         // --- VALIDATION ---
         // 1. Check if we pushed into a wall (Line of Sight from old pos to new pos)
         // Check slightly above ground to avoid curb collision
-        if (!CheckFMapLine(mapId, curr.x, curr.y, curr.z + 1.0f, testPos.x, testPos.y, curr.z + 1.0f)) {
+        if (!CheckFMapLine(mapId, curr.x, curr.y, curr.z + 1.0f, testPos.x, testPos.y, curr.z + 1.0f, false)) {
 
             // 2. Check if there is valid floor at the new position
             // (Don't nudge off a bridge or stair edge)
-            float floorZ = GetFMapFloorHeight(mapId, testPos.x, testPos.y, curr.z + 2.5f);
+            float floorZ = GetFMapFloorHeight(mapId, testPos.x, testPos.y, curr.z + 2.5f, true);
 
             if (floorZ > -90000.0f) {
                 // Ensure the floor isn't too far up/down (e.g., dropped off a cliff)
@@ -2144,7 +2228,7 @@ inline std::vector<float> GetPossibleZLayers(int mapId, float x, float y) {
 
     while (checkZ > -1000.0f && safety < 50) {
         // Find the floor immediately below checkZ
-        float floorZ = GetFMapFloorHeight(mapId, x, y, checkZ);
+        float floorZ = GetFMapFloorHeight(mapId, x, y, checkZ, true);
 
         // Check for invalid return (usually -99999.0f or similar large negative)
         if (floorZ < -5000.0f) break;
@@ -2173,7 +2257,7 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
         g_LogFile << "[ERROR] Please update 'mmapFolder' in Pathfinding2.h to your correct path." << std::endl;
         return {}; // Return empty path instead of crashing
     }
-    
+
     // --- MODE SELECTION BASED ON MOUNTABLE STATE ---
     bool canMount = false;
     // Assuming g_GameState is accessible via MovementController extern or inclusion
@@ -2184,7 +2268,7 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
     std::vector<PathNode> stitchedPath;
     std::vector<Vector3> modifiedInput;
     if (inputPath.empty() || currentIndex < 0 || currentIndex >= inputPath.size()) return {};
-    
+
     // If area is mountable -> Strictly try Flying.
     // If area is NOT mountable -> Strictly try Ground.
     bool attemptFlight = (canMount && canFly && inputPath.back().Dist3D(startPos) > 20.0f) || isFlying || g_GameState->player.flyingMounted;
@@ -2222,7 +2306,7 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
             mapLoadPoints.push_back(end);
         }
     }
-    
+
     // Sparse loading of only needed tiles
     if (!globalNavMesh.LoadMap(mmapFolder, mapId, &mapLoadPoints, true)) {
         g_LogFile << "Load Map failed" << std::endl;
@@ -2307,11 +2391,11 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
 
     if (!attemptFlight) {
         for (int i = 0; i < stitchedPath.size(); i++) {
-            g_LogFile << "Pre: " << stitchedPath[i].pos.x << " " << stitchedPath[i].pos.y << " " << stitchedPath[i].pos.z << " " << std::endl;
+            //g_LogFile << "Pre: " << stitchedPath[i].pos.x << " " << stitchedPath[i].pos.y << " " << stitchedPath[i].pos.z << " " << std::endl;
         }
         globalNavMesh.RefinePathClearance(stitchedPath, 0.7f, mapId);
         for (int i = 0; i < stitchedPath.size(); i++) {
-            g_LogFile << "Post: " << stitchedPath[i].pos.x << " " << stitchedPath[i].pos.y << " " << stitchedPath[i].pos.z << " " << std::endl;
+            //g_LogFile << "Post: " << stitchedPath[i].pos.x << " " << stitchedPath[i].pos.y << " " << stitchedPath[i].pos.z << " " << std::endl;
         }
     }
 
@@ -2327,7 +2411,7 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
         // Optional: Clean only GROUND nodes in flight path
         for (auto& node : stitchedPath) {
             if (node.type == PATH_GROUND) {
-                float realZ = GetFMapFloorHeight(mapId, node.pos.x, node.pos.y, node.pos.z + 5.0f);
+                float realZ = GetFMapFloorHeight(mapId, node.pos.x, node.pos.y, node.pos.z + 5.0f, true);
                 if (realZ > -90000.0f && node.pos.z < realZ + 0.5f) {
                     node.pos.z = realZ + 0.5f;
                 }
@@ -2338,6 +2422,10 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
         // where it isn't needed (straight lines), but keeps it for curves/terrain.
         // Pass 25.0f to enforce minimum spacing
         stitchedPath = OptimizeFlightPath(stitchedPath, 25.0f);
+
+        /*for (int i = 0; i < stitchedPath.size(); i++) {
+            g_LogFile << stitchedPath[i].pos.x << " " << stitchedPath[i].pos.y << " " << stitchedPath[i].pos.z << " " << stitchedPath[i].type << std::endl;
+        }*/
 
         return stitchedPath;
     }
