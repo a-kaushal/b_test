@@ -62,11 +62,12 @@ class TaskFollowPath : public IProfileTask {
     std::vector<Vector3> path;
     bool looping;
     bool flying;
+    bool flyingPath;
     bool started = false;
     int mapId;
 public:
-    TaskFollowPath(int mapId, std::string pathStr, bool fly, bool loop)
-        : looping(loop), flying(fly), mapId(mapId) {
+    TaskFollowPath(int mapId, std::string pathStr, bool fly, bool flyingPath, bool loop)
+        : looping(loop), flying(fly), mapId(mapId), flyingPath(flyingPath) {
         std::vector<Vector3> rawPath = ParsePathStr(pathStr);
         // Clean it up (Minimum 20 yards between points)
         // This removes "stutter steps" or points that are too dense
@@ -85,7 +86,7 @@ public:
             state->pathFollowState.presetPath = path;
             state->pathFollowState.presetIndex = FindClosestWaypoint(state->pathFollowState.presetPath, empty, g_GameState->player.position);
             state->pathFollowState.looping = looping;
-            state->pathFollowState.flyingPath = flying;
+            state->pathFollowState.flyingPath = flyingPath;
             state->pathFollowState.enabled = true;
             state->pathFollowState.hasPath = true;
             state->pathFollowState.pathIndexChange = true;
@@ -140,8 +141,8 @@ public:
 // =============================================================
 class BehaviorProfile : public BotProfile {
 public:
-    void QueuePath(int mapId, std::string path, bool flying = true, bool looping = false) {
-        AddTask(std::make_shared<TaskFollowPath>(mapId, path, flying, looping));
+    void QueuePath(int mapId, std::string path, bool flying = true, bool flyingPath = true, bool looping = false) {
+        AddTask(std::make_shared<TaskFollowPath>(mapId, path, flying, flyingPath, looping));
     }
 
     void QueueResupply(int mapId, Vector3 loc, int npcId) {

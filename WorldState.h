@@ -28,6 +28,7 @@ struct GlobalState : public ActionState {
     std::string mapName;
     uint32_t mapHash; // Map name hash
     float top, bottom, left, right = 0; // Local Map coordinates
+    bool inMotion = false;
 };
 
 struct Looting : public ActionState {
@@ -83,6 +84,7 @@ struct WaypointReturn : public ActionState {
     int savedIndex;
     bool hasTarget = false;
     bool hasPath = false;
+    bool flyingTarget = false;
 
     int pathfindingAttempts = 0;
     bool waitingForUnstuck = false;
@@ -152,6 +154,13 @@ struct RespawnState : public ActionState {
     bool isDead = false;
 };
 
+struct RecorderState : public ActionState {
+    bool enabled = false;
+    bool showOnOverlay = true;
+    float stepDistance = 5.0f;
+    std::vector<Vector3> recordedPath;
+};
+
 // --- WORLD STATE (The Knowledge) ---
 struct WorldState {
     GlobalState globalState;
@@ -165,6 +174,7 @@ struct WorldState {
     StuckState stuckState;
     InteractState interactState;
     RespawnState respawnState;
+    RecorderState recorder;
 
     std::vector<GameEntity> entities;
     PlayerInfo player;

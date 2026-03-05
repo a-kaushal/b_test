@@ -98,6 +98,9 @@ private:
     bool randomClick = false;
     bool recalculatedPath = false;
 
+    bool failedClick = false;
+    int interactAttempt = 0;
+
     int sx, sy;
 
     // Scanning Variables
@@ -122,6 +125,8 @@ public:
         currentPath.clear();
         randomClick = false;
         recalculatedPath = false;
+        interactAttempt = 0;
+        failedClick = false;
     }
 
     void SetState(InteractState newState) {
@@ -148,7 +153,7 @@ public:
     // returns TRUE if interaction sequence is complete
     bool EngageTarget(Vector3 targetPos, ULONG_PTR targetGuidLow, ULONG_PTR targetGuidHigh, PlayerInfo& player, std::vector<PathNode>& currentPath, int& pathIndex, int mapId, float approachDist, float interactDist, float finalDist,
         bool checkTarget, bool targetGuid, bool canFly, int postClickWaitMs, MouseButton click, bool movingTarget, bool& failedPath, int targetId, bool& failedInteract, bool mountDisable = false, int waitTime = 1500, bool groundInteract = true,
-        Vector3 updatedPos = {-1, -1, -1}) {
+        Vector3 updatedPos = { -1, -1, -1 }, bool checkGoal = true, bool airTarget = false) {
         bool fly_entry_state = canFly;
         if (updatedPos.x == -1) updatedPos = targetPos;
         // If we are stabilizing, aligning camera, or scanning for the mouse, we are "close enough".
@@ -166,7 +171,7 @@ public:
         // 4. Enough time has passed (200ms)
         if (!isInteracting && (currentState != STATE_CREATE_PATH) && (movingTarget == true) && (updatedPos.Dist3D(targetPos) > interactDist) && (pathCalcTimer != 0) && (GetTickCount() - pathCalcTimer > 200)) {
             // Recalculate
-            currentPath = CalculatePath({ targetPos }, player.position, 0, canFly, mapId, player.isFlying, g_GameState->globalState.ignoreUnderWater);
+            currentPath = CalculatePath({ targetPos }, player.position, 0, canFly, mapId, player.isFlying, g_GameState->globalState.ignoreUnderWater, false, 25.0f, true, 5.0f, checkGoal, airTarget);
             pathIndex = 0;
             recalculatedPath = true;
             pathCalcTimer = GetTickCount();
@@ -190,7 +195,7 @@ public:
         case STATE_CREATE_PATH:
             // Assuming CalculatePath is available globally or via included header
             g_LogFile << "Target Pos x: " << targetPos.x << " | Target Pos y: " << targetPos.y << " | Target Pos z: " << targetPos.z << std::endl;
-            currentPath = CalculatePath({ targetPos }, player.position, 0, canFly, mapId, player.isFlying, g_GameState->globalState.ignoreUnderWater);
+            currentPath = CalculatePath({ targetPos }, player.position, 0, canFly, mapId, player.isFlying, g_GameState->globalState.ignoreUnderWater, false, 25.0f, true, 5.0f, checkGoal, airTarget);
             //if (currentPath.empty()) EndScript(pilot, (canFly && g_GameState->player.areaMountable) ? 2 : 1);
 
             if (currentPath.empty()) {
@@ -248,30 +253,57 @@ public:
                 mouse.Click(click);
             }
             if (offsetIndex >= searchOffsets.size()) {
-                // Failed to find target after checking all offsets
-                g_LogFile << "[INTERACT] Failed to find target GUID of " << targetGuidLow << " " << targetGuidHigh << std::endl;
+                //if (GetTickCount() - stateTimer >= postClickWaitMs) {
+                    // Failed to find target after checking all offsets
+                    g_LogFile << "[INTERACT] Failed to find target GUID of " << targetGuidLow << " " << targetGuidHigh << std::endl;
 
-                keyboard.TypeKey(VK_HOME);
-                keyboard.TypeKey(VK_HOME);
-                keyboard.TypeKey(VK_HOME);
-                keyboard.TypeKey(VK_HOME);
-                keyboard.TypeKey(VK_END);
-                keyboard.TypeKey(VK_END);
-                keyboard.TypeKey(VK_END);
-                keyboard.TypeKey(VK_END);
-                Reset(); // Reset to try again? Or fail?
-                failedInteract = true;
+                    if (!failedClick) {
+                        if (interactAttempt == 0) {
+                            keyboard.TypeKey(VK_HOME);
+                            keyboard.TypeKey(VK_HOME);
+                            keyboard.TypeKey(VK_HOME);
+                            keyboard.TypeKey(VK_HOME);
+                            Sleep(500);
+                            failedClick = true;
+                        }
+                        interactAttempt += 1;
+                    }
+                    if (interactAttempt <= 1) {
+                        if (pilot.faceTarget(g_GameState->player.position, Vector3{ targetPos.x, targetPos.y, targetPos.z - 1.0f }, g_GameState->player.rotation, 0.2f, g_GameState->player.vertRotation, true)) {
+                            return false;
+                        }
+                    }
 
-                // Move forward for 1 second
-                keyboard.SendKey('W', 0, true);
-                Sleep(100);
-                keyboard.SendKey(VK_SPACE, 0, true);
-                Sleep(200);
-                keyboard.SendKey(VK_SPACE, 0, false);
-                Sleep(700);
-                keyboard.SendKey('W', 0, false);
+                    int interactAttemptTemp = interactAttempt;
+                    Reset(); // Reset to try again? Or fail?
+                    failedInteract = true;
+                    interactAttempt = interactAttemptTemp;
 
-                return false;
+                    keyboard.TypeKey(VK_HOME);
+                    keyboard.TypeKey(VK_HOME);
+                    keyboard.TypeKey(VK_HOME);
+                    keyboard.TypeKey(VK_HOME);
+                    keyboard.TypeKey(VK_END);
+                    keyboard.TypeKey(VK_END);
+                    keyboard.TypeKey(VK_END);
+                    keyboard.TypeKey(VK_END);
+
+                    // Move forward for 1 second
+                    keyboard.SendKey('W', 0, true);
+                    Sleep(100);
+                    keyboard.SendKey(VK_SPACE, 0, true);
+                    Sleep(200);
+                    keyboard.SendKey(VK_SPACE, 0, false);
+                    Sleep(700);
+                    keyboard.SendKey('W', 0, false);
+
+                    g_LogFile << "Player Moved" << std::endl;
+
+                    return false;
+                //}
+                //else {
+                //    return false;
+                //}
             }
 
             // Move Mouse Logic
@@ -361,9 +393,10 @@ public:
         if (path.empty()) {
             return true; // Treat as "Arrived" to prevent crash
         }
-        if ((index >= path.size()) || (path.back().pos.Dist3D(player.position) < finalDist) || (targetPos.Dist3D(player.position) < finalDist)) {
+        //if ((index >= path.size()) || (path.back().pos.Dist3D(player.position) < finalDist) || (targetPos.Dist3D(player.position) < finalDist)) {
+        if ((index >= path.size()) || ((path.back().pos.Dist2D(player.position) < 0.5f) && (fabs(path.back().pos.z - player.position.z) < 10.0f)) || ((targetPos.Dist2D(player.position) < 0.5f) && (fabs(targetPos.z - player.position.z) < 10.0f))) {
             pilot.Stop();
-            g_LogFile << "Reached Goal" << std::endl;
+            g_LogFile << "Reached Goal " << index << " " << path.back().pos.Dist3D(player.position) << " " << targetPos.Dist3D(player.position) << " " << finalDist << std::endl;
             // Dismount Logic
             if (player.flyingMounted || player.groundMounted || player.inWater) {
                 if (player.inWater) {
@@ -371,7 +404,7 @@ public:
                         if (GetTickCount() - timer > 1500) {
                             keyboard.SendKey('X', 0, false);
                             if (GetTickCount() - timer > 1700) {
-                                if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"))) {
+                                if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"), g_GameState->globalState.chatOpen)) {
                                     inputCommand.Reset();
                                     return true;
                                 }
@@ -383,12 +416,15 @@ public:
                     if (timer == 0) { timer = GetTickCount(); keyboard.SendKey('X', 0, true); }
                     return false;
                 }
-                else if (path.back().pos.Dist3D(player.position) < finalDist || targetPos.Dist3D(player.position) < finalDist) {
-                    if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"))) {
-                        inputCommand.Reset();
-                        return true;
-                    }
-                    return false;
+                //else if (path.back().pos.Dist3D(player.position) < (finalDist + 1.0f) || targetPos.Dist3D(player.position) < (finalDist + 1.0f)) {
+                else if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"), g_GameState->globalState.chatOpen)) {
+                    inputCommand.Reset();
+                    return true;
+                }
+                //    return false;
+                //}
+                else {
+                    index--;
                 }
             }
             else {
@@ -412,19 +448,24 @@ public:
             dist = player.position.Dist3D(wp);
         }
 
+        bool transitionPoint = false;
+
         //if (wpType == PATH_GROUND && dist > )
         if (index == (path.size() - 1)) {
-            if ((wpType == PATH_AIR && dist < finalDist) || (wpType == PATH_GROUND && dist < GROUND_PATH_THRESHOLD)) {
+            if ((wpType == PATH_AIR && dist < finalDist) || (wpType == PATH_GROUND && dist < finalDist)) {
                 index++;
                 return false;
             }
         }
-        else if ((wpType == PATH_AIR && player.position.Dist3D(path.back().pos) < finalDist)
-            || (wpType == PATH_GROUND && player.position.Dist2D(path.back().pos) < GROUND_PATH_THRESHOLD)) {
+        else if ((index < path.size() - 2) && (wpType != path[index + 1].type) && (dist < 1.0f)) {
+            index++;
+            return false;
+        }
+        else if (player.position.Dist3D(targetPos) < finalDist) {
             index = path.size();
             return false;
         }
-        else if ((wpType == PATH_AIR && dist < interactDist) || (wpType == PATH_GROUND && dist < GROUND_PATH_THRESHOLD)) {
+        else if ((wpType == PATH_AIR && dist < interactDist) || (wpType == PATH_GROUND && dist < interactDist)) {
             index++;
             return false;
         }
@@ -432,16 +473,16 @@ public:
         float goalDist = 0.0f;
         if (!player.groundMounted && wpType == PATH_GROUND) {
             goalDist += player.position.Dist3D(path[index].pos);
-            for (int k = index; k < path.size() - 1; k++) {
+            for (int k = index; k + 1 < path.size(); k++) {
                 if (path[k].type == PATH_GROUND) {
                     goalDist += path[k].pos.Dist3D(path[k + 1].pos);
                 }
                 else break;
             }
         }
-        else if (!player.flyingMounted) {
+        else if (!player.flyingMounted && wpType == PATH_AIR) {
             goalDist += player.position.Dist3D(path[index].pos);
-            for (int k = index; k < path.size() - 1; k++) {
+            for (int k = index; k + 1 < path.size(); k++) {
                 if (path[k].type == PATH_AIR) {
                     goalDist += path[k].pos.Dist3D(path[k + 1].pos);
                 }
@@ -651,7 +692,9 @@ public:
             false,
             1500,
             true,
-            g_GameState->interactState.inGameLocation
+            g_GameState->interactState.inGameLocation,
+            true,
+            false
         );
 
         if (failedPath) {
@@ -669,21 +712,22 @@ public:
             if (ws.interactState.repair && !ws.interactState.repairDone) {
                 // Send Lua command to repair all items
                 // "RepairAllItems()" is the standard WoW API, passed via ConsoleInput
-                input.SendDataRobust(std::wstring(L"/run local o=C_GossipInfo.GetOptions() if o then for _,v in ipairs(o) do if v.icon==132060 then C_GossipInfo.SelectOption(v.gossipOptionID) return end end end"));
+                input.SendDataRobust(std::wstring(L"/run local o=C_GossipInfo.GetOptions() if o then for _,v in ipairs(o) do if v.icon==132060 then C_GossipInfo.SelectOption(v.gossipOptionID) return end end end"), g_GameState->globalState.chatOpen);
                 Sleep(20);
-                input.SendDataRobust(std::wstring(L"/run RepairAllItems()"));
+                input.SendDataRobust(std::wstring(L"/run RepairAllItems()"), g_GameState->globalState.chatOpen);
                 ws.interactState.repairDone = true;
                 interactPause = GetTickCount();
             }
             if (ws.interactState.vendorSell && !ws.interactState.vendorDone) {
                 // Selects the vendor shop gossip action
-                input.SendDataRobust(std::wstring(L"/run local o=C_GossipInfo.GetOptions() if o then for _,v in ipairs(o) do if v.icon==132060 then C_GossipInfo.SelectOption(v.gossipOptionID) return end end end"));
+                input.SendDataRobust(std::wstring(L"/run local o=C_GossipInfo.GetOptions() if o then for _,v in ipairs(o) do if v.icon==132060 then C_GossipInfo.SelectOption(v.gossipOptionID) return end end end"), g_GameState->globalState.chatOpen);
                 ws.interactState.vendorDone = true;
                 interactPause = GetTickCount();
             }
             if (ws.interactState.mailing) {
                 if (!reloadedGame) {
-                    input.SendDataRobust(std::wstring(L"/reload"));
+                    Sleep(5000);
+                    input.SendDataRobust(std::wstring(L"/reload"), g_GameState->globalState.chatOpen);
                     g_GameState->globalState.reloaded = true;
                     reloadedGame = 1;
                     interact.Reset();
@@ -692,7 +736,7 @@ public:
                 }
                 if (PerformMailing(mouse)) {
                     Sleep(100);
-                    input.SendDataRobust(std::wstring(L"/run ToggleBackpack() CloseMail()"));
+                    input.SendDataRobust(std::wstring(L"/run ToggleBackpack() CloseMail()"), g_GameState->globalState.chatOpen);
                     g_GameState->interactState.targetGuidHigh = 0;
                     g_GameState->interactState.targetGuidLow = 0;
                     g_GameState->interactState.mailing = false;
@@ -705,7 +749,7 @@ public:
             // Wait a moment for the transaction (optional, helps prevent instant state flip)
             if ((GetTickCount() - interactPause > 2500) && ((ws.interactState.vendorSell && ws.interactState.sellComplete) || !ws.interactState.vendorSell)) {
                 if (ws.globalState.vendorOpen) {
-                    input.SendDataRobust(std::wstring(L"/run CloseMerchant()"));
+                    input.SendDataRobust(std::wstring(L"/run CloseMerchant()"), g_GameState->globalState.chatOpen);
                 }
                 else {
                     g_GameState->globalState.bagEmptyTime = GetTickCount();
@@ -719,7 +763,7 @@ public:
                     g_GameState->interactState.mailing = false;
                     g_GameState->interactState.interactActive = false;
                     // Close the window (Optional: prevents clutter)
-                    // input.SendDataRobust(std::wstring(L"/run CloseGossip() CloseMerchant()"));
+                    // input.SendDataRobust(std::wstring(L"/run CloseGossip() CloseMerchant()"), g_GameState->globalState.chatOpen);
                     return true;
                 }
 
@@ -768,10 +812,10 @@ public:
 
             // Check for 2-minute reset (120,000 ms)
             if (ws.stuckState.lastUnstuckTime > 0 && (now - ws.stuckState.lastUnstuckTime > 120000)) {
-                std::cout << "[UNSTUCK] 2+ minutes since last stuck. Resetting stages." << std::endl;
+                g_LogFile << "[UNSTUCK] 2+ minutes since last stuck. Resetting stages." << std::endl;
                 ws.stuckState.attemptCount = 0;
             }
-            std::cout << "[UNSTUCK] Starting Stage " << ws.stuckState.attemptCount << std::endl;
+            g_LogFile << "[UNSTUCK] Starting Stage " << ws.stuckState.attemptCount << std::endl;
         }
 
         DWORD elapsed = now - actionStartTime;
@@ -1065,7 +1109,9 @@ public:
                 false,
                 20.0f,
                 false,
-                20.0f
+                20.0f,
+                false,
+                false
             );
 
             if (!path.empty()) {
@@ -1125,6 +1171,7 @@ class ActionCombat : public GoapAction {
 private:
     InteractionController& interact;
     CombatController& combatController;
+    SimpleKeyboardClient& keyboard;
     bool targetSelected = false;
 
     // Config
@@ -1139,9 +1186,13 @@ private:
 
     bool inRoutine = false;
 
+    bool combatStuck = false;
+    int32_t prevHealth = -1;
+    DWORD healthCheck = 0;
+
 public:
-    ActionCombat(InteractionController& ic, CombatController& cc)
-        : interact(ic), combatController(cc) {
+    ActionCombat(InteractionController& ic, CombatController& cc, SimpleKeyboardClient& kbd)
+        : interact(ic), combatController(cc), keyboard(kbd) {
     }
 
     bool CanExecute(const WorldState& ws) override {
@@ -1171,6 +1222,9 @@ public:
         inRoutine = false;
         g_GameState->combatState.reset = false;
         clickCooldown = 0;
+        combatStuck = false;
+        prevHealth = -1;
+        healthCheck = 0;
     }
 
     bool Execute(WorldState& ws, MovementController& pilot) override {
@@ -1199,6 +1253,13 @@ public:
                 // Check Health
                 if (auto npc = std::dynamic_pointer_cast<EnemyInfo>(ent.info)) {
                     ws.combatState.enemyPosition = npc->position;
+                    if ((prevHealth == -1 || (GetTickCount() - healthCheck > 8000)) && inRoutine) {
+                        if (prevHealth == npc->health) {
+                            combatStuck = true;
+                        }
+                        prevHealth = npc->health;
+                        healthCheck = GetTickCount();
+                    }
                     if (npc->health == 0) {
                         g_LogFile << "[Combat] Target Dead (Found in list)." << std::endl;
                         ResetState();
@@ -1215,6 +1276,18 @@ public:
                 foundLiveTarget = true;
                 break;
             }
+        }
+
+        if (combatStuck) {
+            // Move forward for 1 second
+            keyboard.SendKey('W', 0, true);
+            Sleep(100);
+            keyboard.SendKey(VK_SPACE, 0, true);
+            Sleep(200);
+            keyboard.SendKey(VK_SPACE, 0, false);
+            Sleep(700);
+            keyboard.SendKey('W', 0, false);
+            combatStuck = false;
         }
         
         targetSelected = (ws.player.inCombatGuidLow == ws.combatState.targetGuidLow) && (ws.player.inCombatGuidHigh == ws.combatState.targetGuidHigh);
@@ -1262,7 +1335,7 @@ public:
                     //g_LogFile << "[Combat] Requesting Interaction (Click) at 5.0y range." << std::endl;
                     //g_LogFile << interact.GetState() << std::endl;
                     bool engaged = interact.EngageTarget(ws.combatState.enemyPosition, ws.combatState.targetGuidLow, ws.combatState.targetGuidHigh, ws.player, ws.combatState.path,
-                        ws.combatState.index, ws.player.mapId, MELEE_RANGE, 5.0f, 3.0f, true, true, false, 100, MOUSE_RIGHT, true, failedPath, -1, failedInteract , true, 100);
+                        ws.combatState.index, ws.player.mapId, MELEE_RANGE, 5.0f, 3.0f, true, true, false, 100, MOUSE_RIGHT, true, failedPath, -1, failedInteract , true, 100, true, {-1, -1, -1}, false, false);
                     //g_LogFile << interact.GetState() << std::endl;
                     
                     if (engaged) {
@@ -1283,7 +1356,7 @@ public:
             // Recalculate path if needed
             if (ws.combatState.path.empty() || ws.combatState.index >= ws.combatState.path.size() || (GetTickCount() - pathTimer > REPATH_DELAY)) {
                 //if (doLog) g_LogFile << "[Combat] Recalculating Chase Path. Dist: " << distToTarget << std::endl;
-                ws.combatState.path = CalculatePath({ ws.combatState.enemyPosition }, ws.player.position, 0, false, ws.player.mapId, false, g_GameState->globalState.ignoreUnderWater);
+                ws.combatState.path = CalculatePath({ ws.combatState.enemyPosition }, ws.player.position, 0, false, ws.player.mapId, false, g_GameState->globalState.ignoreUnderWater, false, 25.0f, true, 5.0f, false, false);
                 ws.combatState.index = 0;
                 pathTimer = GetTickCount();
             }
@@ -1354,9 +1427,9 @@ public:
             ws.lootState.path,
             ws.lootState.index,
             ws.lootState.mapId,
-            3.5f,
-            2.8f,
-            2.8f,
+            3.0f,
+            2.5f,
+            2.5f,
             false,
             false,
             ws.lootState.flyingPath,
@@ -1368,7 +1441,10 @@ public:
             failedInteract,
             false,
             1500,
-            true
+            true,
+            { -1, -1, -1 },
+            false,
+            false
         );
         ws.globalState.activePath = ws.lootState.path;
         ws.globalState.activeIndex = ws.lootState.index;
@@ -1477,7 +1553,9 @@ public:
             false,
             1500,
             true,
-            {}
+            {},
+            true,
+            false
         );
         ws.globalState.activePath = ws.gatherState.path;
         ws.globalState.activeIndex = ws.gatherState.index;
@@ -1485,7 +1563,7 @@ public:
         if (failedInteract) {
             failInteractCount++;
             failedInteract = false;
-            if (failInteractCount > 3) {
+            if (failInteractCount > 1) {
                 g_LogFile << "Failed to interact 3 times, adding to blacklist" << std::endl;
                 ws.gatherState.blacklistNodesGuidLow.push_back(ws.gatherState.guidLow);
                 ws.gatherState.blacklistNodesGuidHigh.push_back(ws.gatherState.guidHigh);
@@ -1743,7 +1821,7 @@ public:
                 if (currentOnGround) {
                     g_LogFile << "  ✓ Direct path is clear! Using simple 3-point path." << std::endl;
                     ws.waypointReturnState.path = {
-                        PathNode(ws.player.position, ws.player.onGround),
+                        PathNode(ws.player.position, PATH_AIR),
                         PathNode(adjustedPlayer, PATH_AIR),
                         PathNode(returnTarget, targetOnGround ? PATH_GROUND : PATH_AIR)
                     };
@@ -1751,7 +1829,7 @@ public:
                 else {
                     g_LogFile << "  ✓ Direct path is clear! Using simple 2-point path." << std::endl;
                     ws.waypointReturnState.path = {
-                        PathNode(ws.player.position, ws.player.onGround),
+                        PathNode(ws.player.position, PATH_AIR),
                         PathNode(returnTarget, targetOnGround ? PATH_GROUND : PATH_AIR)
                     };
                 }
@@ -1767,6 +1845,10 @@ public:
                 else {
                     ws.waypointReturnState.flyingPath = true;
                     g_LogFile << "  Using flight path" << std::endl;
+                }
+
+                for (int i = 0; i < ws.waypointReturnState.path.size(); i++) {
+                    g_LogFile << ws.waypointReturnState.path[i].pos.x << " " << ws.waypointReturnState.path[i].pos.y << " " << ws.waypointReturnState.path[i].pos.z << " " << ws.waypointReturnState.path[i].type << std::endl;
                 }
 
                 currentPhase = PHASE_NAVIGATE;
@@ -1809,7 +1891,12 @@ public:
                     ws.player.mapId,
                     ws.player.isFlying,
                     g_GameState->globalState.ignoreUnderWater,
-                    false
+                    false,
+                    25.0f,
+                    true,
+                    5.0f,
+                    false,
+                    ws.waypointReturnState.flyingTarget
                 );
 
                 if (constructedPath.size() > 0) {
@@ -1827,6 +1914,11 @@ public:
                         break;
                     }
 
+                    if (ws.stuckState.attemptCount >= 8) {
+                        g_LogFile << "[RETURN] Stuck attempts exhausted. Quitting." << std::endl;
+                        EndScript(pilot, -1);
+                    }
+
                     // NEW: Trigger ActionUnstuck by setting stuck flag
                     g_LogFile << "[RETURN] Triggering ActionUnstuck before retry..." << std::endl;
                     ws.stuckState.isStuck = true;
@@ -1836,6 +1928,7 @@ public:
                     checkedDirect = false;
                     ascentTargetSet = false;
                     currentPhase = PHASE_CHECK_DIRECT;
+
 
                     return false; // ActionUnstuck will take over
                 }
@@ -1854,7 +1947,6 @@ public:
             PathNode& targetNode = ws.waypointReturnState.path[ws.waypointReturnState.index];
             Vector3 target = targetNode.pos;
             int targetType = targetNode.type;
-
             float dist;
             if (targetType == PATH_GROUND) {
                 dist = ws.player.position.Dist2D(target);
@@ -1862,15 +1954,19 @@ public:
             else {
                 dist = ws.player.position.Dist3D(target);
             }
+            g_LogFile << "Debug 1 - Distance to target: " << dist << std::endl;
+
             if (((targetType == PATH_AIR) && (dist < ACCEPTANCE_RADIUS)) || ((targetType == PATH_GROUND) && (dist < GROUND_ACCEPTANCE_RADIUS))) {
+                g_LogFile << "Debug 3" << std::endl;
                 ws.waypointReturnState.index++;
                 return false;
             }
 
             float goalDist = 0.0f;
             if (!g_GameState->player.groundMounted && targetType == PATH_GROUND) {
+                g_LogFile << "Debug 3.5" << std::endl;
                 goalDist += g_GameState->player.position.Dist3D(ws.waypointReturnState.path[ws.waypointReturnState.index].pos);
-                for (int k = ws.waypointReturnState.index; k < ws.waypointReturnState.path.size() - 1; k++) {
+                for (int k = ws.waypointReturnState.index; k + 1 < ws.waypointReturnState.path.size(); k++) {
                     if (ws.waypointReturnState.path[k].type == PATH_GROUND) {
                         goalDist += ws.waypointReturnState.path[k].pos.Dist3D(ws.waypointReturnState.path[k + 1].pos);
                     }
@@ -1878,8 +1974,9 @@ public:
                 }
             }
             else if (!g_GameState->player.flyingMounted && targetType == PATH_AIR) {
+                g_LogFile << "Debug 4" << std::endl;
                 goalDist += g_GameState->player.position.Dist3D(ws.waypointReturnState.path[ws.waypointReturnState.index].pos);
-                for (int k = ws.waypointReturnState.index; k < ws.waypointReturnState.path.size() - 1; k++) {
+                for (int k = ws.waypointReturnState.index; k + 1 < ws.waypointReturnState.path.size(); k++) {
                     if (ws.waypointReturnState.path[k].type == PATH_AIR) {
                         goalDist += ws.waypointReturnState.path[k].pos.Dist3D(ws.waypointReturnState.path[k + 1].pos);
                     }
@@ -1887,8 +1984,10 @@ public:
                 }
             }
             else {
+                g_LogFile << "Debug 5" << std::endl;
                 goalDist = 10000.0f;
             }
+            g_LogFile << "Debug 6" << std::endl;
 
             /*for (int i = 0; i < ws.waypointReturnState.path.size(); i++) {
                 g_LogFile << ws.waypointReturnState.path[i].pos.x << " " << ws.waypointReturnState.path[i].pos.y << " " << ws.waypointReturnState.path[i].pos.z << " " << ws.waypointReturnState.path[i].type << std::endl;
@@ -1927,7 +2026,7 @@ public:
 // --- CONCRETE ACTION: FOLLOW PATH ---
 class ActionFollowPath : public GoapAction {
 private:
-    const float ACCEPTANCE_RADIUS = 5.0f;
+    const float ACCEPTANCE_RADIUS = 3.0f;
     const float GROUND_ACCEPTANCE_RADIUS = 1.0f;
 
 public:
@@ -1954,15 +2053,22 @@ public:
                 g_GameState->pathFollowState.presetIndex, 
                 ws.pathFollowState.flyingPath, 
                 ws.pathFollowState.mapId,
-                g_GameState->player.isFlying, 
+                ws.pathFollowState.flyingPath,
+                // g_GameState->player.isFlying, - Forced to flyingPath instead of this
                 g_GameState->globalState.ignoreUnderWater,
-                g_GameState->pathFollowState.looping
+                g_GameState->pathFollowState.looping,
+                25.0f,
+                true,
+                5.0f,
+                false,
+                ws.pathFollowState.flyingPath
             );
             ws.pathFollowState.index = 0;
 
             if (ws.pathFollowState.path.size() > 0) {
                 ws.waypointReturnState.savedPath = ws.pathFollowState.path;
                 ws.waypointReturnState.savedIndex = ws.pathFollowState.index;
+                ws.waypointReturnState.flyingTarget = ws.pathFollowState.flyingPath;
                 if ((ws.waypointReturnState.savedPath.size() > 0) &&
                     (ws.player.position.Dist3D(ws.waypointReturnState.savedPath[ws.waypointReturnState.savedIndex].pos) > 20.0f)) {
                     ws.waypointReturnState.hasTarget = true;
@@ -2003,7 +2109,7 @@ public:
         if (((targetType == PATH_AIR) && (dist < ACCEPTANCE_RADIUS)) || ((targetType == PATH_GROUND) && (dist < GROUND_ACCEPTANCE_RADIUS))) {
             ws.pathFollowState.index++; // Advance state
             ws.pathFollowState.pathIndexChange = true;
-            if (g_GameState->pathFollowState.presetIndex < g_GameState->pathFollowState.presetPath.size() - 1) {
+            if (g_GameState->pathFollowState.presetIndex + 1 < g_GameState->pathFollowState.presetPath.size()) {
 
                 // Check if the node we just reached corresponds to the NEXT preset waypoint
                 Vector3 nextPreset = g_GameState->pathFollowState.presetPath[g_GameState->pathFollowState.presetIndex + 1];
@@ -2019,16 +2125,16 @@ public:
         float goalDist = 0.0f;
         if (!g_GameState->player.groundMounted && targetType == PATH_GROUND) {
             goalDist += g_GameState->player.position.Dist3D(ws.pathFollowState.path[ws.pathFollowState.index].pos);
-            for (int k = ws.pathFollowState.index; k < ws.pathFollowState.path.size() - 1; k++) {
+            for (int k = ws.pathFollowState.index; k + 1 < ws.pathFollowState.path.size(); k++) {
                 if (ws.pathFollowState.path[k].type == PATH_GROUND) {
                     goalDist += ws.pathFollowState.path[k].pos.Dist3D(ws.pathFollowState.path[k + 1].pos);
                 }
                 else break;
             }
         }
-        else if (!g_GameState->player.flyingMounted) {
+        else if (!g_GameState->player.flyingMounted && targetType == PATH_AIR) {
             goalDist += g_GameState->player.position.Dist3D(ws.pathFollowState.path[ws.pathFollowState.index].pos);
-            for (int k = ws.pathFollowState.index; k < ws.pathFollowState.path.size() - 1; k++) {
+            for (int k = ws.pathFollowState.index; k + 1 < ws.pathFollowState.path.size(); k++) {
                 if (ws.pathFollowState.path[k].type == PATH_AIR) {
                     goalDist += ws.pathFollowState.path[k].pos.Dist3D(ws.pathFollowState.path[k + 1].pos);
                 }
@@ -2071,7 +2177,7 @@ public:
         returnAction->SetKeyboard(&keyboard, &consoleInput);
         availableActions.push_back(returnAction);
 
-        availableActions.push_back(new ActionCombat(interact, combatController));
+        availableActions.push_back(new ActionCombat(interact, combatController, keyboard));
         availableActions.push_back(new ActionGather(interact));
         availableActions.push_back(new ActionFollowPath());
         availableActions.push_back(new ActionUnstuck(keyboard, mc));
@@ -2120,6 +2226,10 @@ public:
                         //g_LogFile << "Prev Index: " << state.pathFollowState.index << " | New Index: " << state.waypointReturnState.savedIndex << " | Size: " << state.pathFollowState.path.size() << std::endl;
                         //state.pathFollowState.index = state.waypointReturnState.savedIndex;
                         state.waypointReturnState.savedIndex = state.pathFollowState.index;
+                        state.waypointReturnState.flyingTarget = state.pathFollowState.flyingPath;
+                        if (state.pathFollowState.index >= state.pathFollowState.path.size()) {
+                            state.waypointReturnState.index = 0;
+                        }
                         //g_LogFile << state.player.position.Dist3D(state.waypointReturnState.savedPath[state.waypointReturnState.savedIndex].pos) << std::endl;
                     }
                 }
@@ -2129,6 +2239,7 @@ public:
                         state.waypointReturnState.savedPath = state.interactState.path;
                         //state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.interactState.path, state.player.position);
                         //state.interactState.index = state.waypointReturnState.savedIndex;
+                        state.waypointReturnState.flyingTarget = false;
                         state.waypointReturnState.savedIndex = state.interactState.index;
                     }
                 }
@@ -2137,6 +2248,9 @@ public:
                     state.waypointReturnState.savedPath = state.gatherState.path;
                     state.waypointReturnState.savedIndex = FindClosestWaypoint(empty, state.gatherState.path, state.player.position);
                 }*/
+                if (state.waypointReturnState.savedPath.size() > 0 && state.waypointReturnState.savedIndex >= state.waypointReturnState.savedPath.size()) {
+                    state.waypointReturnState.savedIndex = state.waypointReturnState.savedPath.size() - 1;
+                }
                 if ((state.waypointReturnState.savedPath.size() > 0) && ((bestAction->GetName() == "Follow Path") || (bestAction->GetName() == "Repair Equipment")) &&
                     (state.player.position.Dist3D(state.waypointReturnState.savedPath[state.waypointReturnState.savedIndex].pos) > 10.0f)) {
                     state.waypointReturnState.hasTarget = true;
@@ -2224,28 +2338,31 @@ private:
             return false;
         }
 
-        // 2. Only check if we are actually trying to go somewhere (active path)
-        //if (state.globalState.activePath.empty() || !pilot.IsMoving()) {
-        // 2. Only check if we are actually trying to go somewhere
-        if (!pilot.IsMoving()) {
+        // 2. Debounce the moving check to absorb micro-pauses
+        static DWORD lastTimeMoving = GetTickCount();
+        DWORD now = GetTickCount();
 
-            // Detect if we are Mouse Steering (Turning in place).
-            if (pilot.GetSteering()) {
-                return false;
-            }
+        if (pilot.IsMoving() || pilot.GetSteering()) {
+            lastTimeMoving = now;
+        }
 
-            // Truly Idle: Reset stuck state
+        // Only consider the bot truly "Idle" if it hasn't commanded movement for over 600ms.
+        // This ignores your 50ms unstuck jump release, but cleanly resets during mounts/looting.
+        if (now - lastTimeMoving > 600) {
             state.stuckState.stuckStartTime = 0;
             state.stuckState.lastCheckTime = 0;
             return false;
         }
 
-        DWORD now = GetTickCount();
         // Only initialize the timer if it's 0 (first movement detected)
         if (state.stuckState.lastCheckTime == 0) {
             state.stuckState.lastCheckTime = now;
             state.stuckState.lastPosition = state.player.position;
             return false;
+        }
+
+        if (state.stuckState.attemptCount >= 9) {
+            EndScript(pilot, 3);
         }
 
         if (now - state.stuckState.lastCheckTime > 100) { // Check every 100 ms
@@ -2306,7 +2423,7 @@ private:
                 }
             }
 
-            if (now - state.stuckState.stuckStartTime > 120000) state.stuckState.attemptCount = 0;
+            if ((now - state.stuckState.stuckStartTime > 120000) && (state.stuckState.stuckStartTime != 0)) state.stuckState.attemptCount = 0;
 
             if ((!g_GameState->player.inWater && distMoved > 10.0f) || (g_GameState->player.inWater && distMoved > 0.25f)) {
             }

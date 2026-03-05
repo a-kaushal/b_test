@@ -21,6 +21,8 @@ public:
     static std::string GetRequestedProfile();
     static void ConfirmProfileLoaded(const std::string& profileName);
 
+    static void UpdatePathRecorder();
+
 private:
     // Internal Logic
     static void ServerThread(int port);

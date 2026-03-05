@@ -80,6 +80,7 @@ struct PlayerInfo : EntityInfo {
     float corpseY; // Player corpse position y
     bool isDeadBody; // Player is dead but not a ghost yet
     bool canRespawn; // Player ghost in reange of body and able to respawn
+    double rawLua[25] = { 0 }; // Raw Lua Data for debugging
 };
 
 struct OtherPlayerInfo : EntityInfo {

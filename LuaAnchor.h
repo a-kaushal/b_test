@@ -178,6 +178,16 @@ public:
             analyzer.ReadDouble(pid, arrayPtr + 0x228, prof2Level);
             analyzer.ReadDouble(pid, arrayPtr + 0x240, prof2Max);
 
+            for (int i = 0; i < 18; ++i) {
+                g_GameState->player.rawLua[i] = values[i];
+            }
+            g_GameState->player.rawLua[18] = prof1Id;
+            g_GameState->player.rawLua[19] = prof1Level;
+            g_GameState->player.rawLua[20] = prof1Max;
+            g_GameState->player.rawLua[21] = prof2Id;
+            g_GameState->player.rawLua[22] = prof2Level;
+            g_GameState->player.rawLua[23] = prof2Max;
+
             //g_LogFile << prof1Id << " " << prof1Level << " " << prof1Max << " " << prof2Id << " " << prof2Level << " " << prof2Max << std::endl;
 
             ((values[1] > 0.5) ? g_GameState->player.needRepair = true : g_GameState->player.needRepair = false);
@@ -194,6 +204,7 @@ public:
             ((values[16] > 0.5) ? g_GameState->player.onGround = true : g_GameState->player.onGround = false);
             ((values[17] > 0.5) ? g_GameState->interactState.sellComplete = true : g_GameState->interactState.sellComplete = false);
             //((values[14 > 0.5) ? g_LogFile << "Mail Window Open" << std::endl : g_LogFile << "Mail Window Closed" << std::endl);
+
 
             g_GameState->player.isDead = g_GameState->player.isGhost || g_GameState->player.isDeadBody;
             if (g_GameState->player.isDead) {

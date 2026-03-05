@@ -43,7 +43,7 @@ private:
     // Helper: Cast spell and update timer
     void Cast(const std::wstring& spell, int hpChange = 0) {
         std::wstring command = std::wstring(L"/cast ") += spell;
-        console.SendDataRobust(command);
+        console.SendDataRobust(command, g_GameState->globalState.chatOpen);
 
         lastCastTime[std::string(spell.begin(), spell.end())] = std::chrono::steady_clock::now();
 

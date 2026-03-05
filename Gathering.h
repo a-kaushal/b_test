@@ -50,9 +50,9 @@ void UpdateGatherTarget(WorldState& ws) {
         int nearbyEnemyCount = 0;
         //int nearbyStrongEnemyCount = 0;
 
-        /*ws.gatherState.nodeActive = true;
+       /* ws.gatherState.nodeActive = true;
         ws.gatherState.hasNode = true;
-        ws.gatherState.position = Vector3{ 27.0877f, 3154.21f, 5.02512f };
+        ws.gatherState.position = Vector3{ -2344.85f, 6280.07f, 44.8715f };
         ws.gatherState.mapId = ws.player.mapId;
         return;*/
 

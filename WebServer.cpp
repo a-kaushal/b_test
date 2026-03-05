@@ -24,8 +24,7 @@ using json = nlohmann::json;
 extern std::ofstream g_LogFile;
 extern std::mutex g_EntityMutex;
 
-// [FIX] Import Real Global Flags from dllmain.cpp
-// This ensures the web server sees the EXACT same state as the game loop
+// Import Real Global Flags from dllmain.cpp
 extern std::atomic<bool> g_IsRunning;
 extern std::atomic<bool> g_IsPaused;
 
@@ -101,6 +100,33 @@ void SerializeActionBase(std::stringstream& ss, const ActionState& s) {
     ss << "\"ignoreUnderWater\":" << (s.ignoreUnderWater ? "true" : "false");
 }
 
+// --- RECORDER LOGIC ---
+void WebServer::UpdatePathRecorder() {
+    if (!g_GameState) return;
+
+    // Lock global state to ensure thread safety
+    std::lock_guard<std::mutex> lock(g_EntityMutex);
+
+    auto& rec = g_GameState->recorder;
+
+    // Only record if enabled
+    if (!rec.enabled) return;
+
+    Vector3 playerPos = g_GameState->player.position;
+
+    // Add first point if empty
+    if (rec.recordedPath.empty()) {
+        rec.recordedPath.push_back(playerPos);
+    }
+    else {
+        // Check distance threshold
+        Vector3 lastPoint = rec.recordedPath.back();
+        if (playerPos.Dist3D(lastPoint) >= rec.stepDistance) {
+            rec.recordedPath.push_back(playerPos);
+        }
+    }
+}
+
 std::string WebServer::GenerateJSONState() {
     if (!g_GameState) return "{}";
 
@@ -158,7 +184,21 @@ std::string WebServer::GenerateJSONState() {
     }
     ss << "],";
 
-    // --- 4. DEBUG DUMP ---
+    // --- RECORDER PATH DATA ---
+    ss << "\"recorder\": {";
+    ss << "\"enabled\": " << (g_GameState->recorder.enabled ? "true" : "false") << ",";
+    ss << "\"showOverlay\": " << (g_GameState->recorder.showOnOverlay ? "true" : "false") << ",";
+    ss << "\"stepDist\": " << g_GameState->recorder.stepDistance << ",";
+    ss << "\"count\": " << g_GameState->recorder.recordedPath.size() << ",";
+    ss << "\"path\": [";
+    for (size_t i = 0; i < g_GameState->recorder.recordedPath.size(); ++i) {
+        const auto& pt = g_GameState->recorder.recordedPath[i];
+        ss << "{\"x\":" << pt.x << ",\"y\":" << pt.y << ",\"z\":" << pt.z << "}";
+        if (i < g_GameState->recorder.recordedPath.size() - 1) ss << ",";
+    }
+    ss << "]},";
+
+    // --- DEBUG DUMP ---
     ss << "\"debug\": {";
 
     // GlobalState
@@ -260,8 +300,15 @@ std::string WebServer::GenerateJSONState() {
     ss << ", \"isPathingToCorpse\":" << (r.isPathingToCorpse ? "true" : "false");
     ss << ", \"currentTargetPos\":" << Vec3JSON(r.currentTargetPos);
     ss << ", \"layerCount\":" << r.possibleZLayers.size();
-    ss << "}"; // Last one
+    ss << "},"; // Last one
 
+    // LuaState
+    ss << "\"LuaState\": {";
+    for (int i = 0; i < 24; ++i) {
+        ss << "\"Val[" << i << "]\":" << g_GameState->player.rawLua[i];
+        if (i < 23) ss << ",";        
+    }
+    ss << "}"; // Last one
     ss << "},"; // End Debug
 
     // --- 5. ENTITIES ---
@@ -499,6 +546,48 @@ void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
         responseBody = GenerateJSONState();
         contentType = "application/json";
     }
+
+    // --- PATH RECORDER ENDPOINTS ---
+    else if (requestData.find("POST /api/recorder/start") != std::string::npos) {
+        if (g_GameState) {
+            std::lock_guard<std::mutex> lock(g_EntityMutex);
+            g_GameState->recorder.enabled = true;
+        }
+        responseBody = "{\"status\":\"ok\"}";
+        contentType = "application/json";
+    }
+    else if (requestData.find("POST /api/recorder/stop") != std::string::npos) {
+        if (g_GameState) {
+            std::lock_guard<std::mutex> lock(g_EntityMutex);
+            g_GameState->recorder.enabled = false;
+        }
+        responseBody = "{\"status\":\"ok\"}";
+        contentType = "application/json";
+    }
+    else if (requestData.find("POST /api/recorder/clear") != std::string::npos) {
+        if (g_GameState) {
+            std::lock_guard<std::mutex> lock(g_EntityMutex);
+            g_GameState->recorder.recordedPath.clear();
+        }
+        responseBody = "{\"status\":\"ok\"}";
+        contentType = "application/json";
+    }
+    else if (requestData.find("POST /api/recorder/set_options") != std::string::npos) {
+        size_t bodyPos = requestData.find("\r\n\r\n");
+        if (bodyPos != std::string::npos && g_GameState) {
+            std::string body = requestData.substr(bodyPos + 4);
+            try {
+                auto j = json::parse(body);
+                std::lock_guard<std::mutex> lock(g_EntityMutex);
+                if (j.contains("stepDist")) g_GameState->recorder.stepDistance = j["stepDist"];
+                if (j.contains("showOverlay")) g_GameState->recorder.showOnOverlay = j["showOverlay"];
+                responseBody = "{\"status\":\"ok\"}";
+            }
+            catch (...) { responseBody = "{\"status\":\"error\"}"; }
+            contentType = "application/json";
+        }
+    }
+
     else if (requestData.find("POST /api/set_autoload") != std::string::npos) {
         size_t bodyPos = requestData.find("\r\n\r\n");
         if (bodyPos != std::string::npos) {
@@ -683,6 +772,9 @@ std::string WebServer::GetHTML() {
         .val-obj { color: #e1bee7; font-size: 11px; text-align: left; font-weight: normal; }
 
         .status-bar { background: var(--accent); color: white; padding: 4px 15px; font-size: 12px; display: flex; gap: 20px; }
+
+        .recorder-controls { background: var(--panel); padding: 15px; display: flex; gap: 15px; align-items: center; border-bottom: 1px solid var(--border); }
+        .rec-output { width: 100%; height: calc(100% - 60px); background: #111; border: none; color: lime; font-family: 'Consolas', monospace; padding: 15px; resize: none; }
     </style>
 </head>
 )HTML";
@@ -713,8 +805,9 @@ std::string WebServer::GetHTML() {
         <div class="tab active" onclick="switchTab('console')">Console Log</div>
         <div class="tab" onclick="switchTab('map')">Live Map</div>
         <div class="tab" onclick="switchTab('entities')">Entity Table</div>
-        <div class="tab" onclick="switchTab('debug')">Debug State</div>
+        <div class="tab" onclick="switchTab('recorder')">Path Recorder</div>
         <div class="tab" onclick="switchTab('path')">Path Tester</div>
+        <div class="tab" onclick="switchTab('debug')">Debug State</div>
     </div>
 
     <div class="content">
@@ -728,6 +821,7 @@ std::string WebServer::GetHTML() {
                 <div class="legend">
                     <div><span class="dot" style="background:cyan"></span> Player</div>
                     <div><span class="dot" style="background:lime"></span> Path</div>
+                    <div><span class="dot" style="background:orange"></span> Recorded</div>
                     <div><span class="dot" style="background:#ff0000"></span> Enemy NPC</div>
                     <div><span class="dot" style="background:#00ff00"></span> Friendly NPC</div>
                 </div>
@@ -751,6 +845,24 @@ std::string WebServer::GetHTML() {
                 </table>
             </div>
         </div>
+
+        <div id="recorder" class="view">
+            <div class="recorder-controls">
+                <button id="btnRecStart" class="btn-start" onclick="toggleRecord(true)">Start Recording</button>
+                <button id="btnRecStop" class="btn-stop" onclick="toggleRecord(false)" disabled>Stop</button>
+                <div style="width:1px; background:#555; height:20px; margin:0 5px;"></div>
+                <button class="btn-gray" onclick="clearRecord()">Clear</button>
+                <button class="btn-blue" onclick="copyRecord()">Copy to Clipboard</button>
+                <div style="margin-left:auto; display:flex; gap:10px; align-items:center;">
+                   <label>Step Dist:</label>
+                   <input type="number" id="recStep" value="5" style="width:50px" onchange="updateRecOpts()">
+                   <label><input type="checkbox" id="recOverlay" checked onchange="updateRecOpts()"> Show on Overlay</label>
+                   <span id="recCount" style="color:yellow; margin-left:10px; font-weight:bold;">0 pts</span>
+                </div>
+            </div>
+            <textarea id="recOutput" class="rec-output" readonly placeholder="Recorded path will appear here..."></textarea>
+        </div>
+
         <div id="debug" class="view">
             <div id="debug-wrapper">
                 <div id="debug-grid" class="debug-grid"></div>
@@ -864,6 +976,45 @@ std::string WebServer::GetHTML() {
             }
         }
         window.onresize = resizeCanvas;
+
+        // --- RECORDER LOGIC ---
+        async function toggleRecord(enable) {
+            const endpoint = enable ? 'recorder/start' : 'recorder/stop';
+            await fetch('/api/' + endpoint, { method: 'POST' });
+            updateRecUI(enable);
+        }
+        
+        async function clearRecord() {
+            if(confirm("Clear recorded path?")) {
+                await fetch('/api/recorder/clear', { method: 'POST' });
+            }
+        }
+        
+        async function updateRecOpts() {
+            const dist = parseFloat(document.getElementById('recStep').value);
+            const ov = document.getElementById('recOverlay').checked;
+            await fetch('/api/recorder/set_options', { 
+                method: 'POST',
+                body: JSON.stringify({ stepDist: dist, showOverlay: ov })
+            });
+        }
+        
+        function updateRecUI(isRecording) {
+            document.getElementById('btnRecStart').disabled = isRecording;
+            document.getElementById('btnRecStop').disabled = !isRecording;
+        }
+
+        function copyRecord() {
+            const txt = document.getElementById('recOutput');
+            txt.select();
+            document.execCommand('copy');
+            alert("Path copied to clipboard!");
+        }
+
+        function formatPath(path) {
+            if(!path || path.length === 0) return "";
+            return path.map(p => `(${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)})`).join(', ');
+        }
 
         // --- PATH TESTER LOGIC ---
         async function getPos(target) {
@@ -1054,6 +1205,19 @@ std::string WebServer::GetHTML() {
                 document.getElementById('stat-profile').innerText = "Profile: " + profile;
                 document.getElementById('stat-uptime').innerText = "Uptime: " + gameState.uptime;
 
+                // Update Recorder UI
+                if(gameState.recorder) {
+                    updateRecUI(gameState.recorder.enabled);
+                    document.getElementById('recCount').innerText = gameState.recorder.count + " pts";
+                    const recOut = document.getElementById('recOutput');
+                    if(document.activeElement !== recOut) {
+                        recOut.value = formatPath(gameState.recorder.path);
+                    }
+                    if(document.activeElement !== document.getElementById('recStep'))
+                         document.getElementById('recStep').value = gameState.recorder.stepDist;
+                    document.getElementById('recOverlay').checked = gameState.recorder.showOverlay;
+                }
+
                 const chk = document.getElementById('chkAutoLoad');
                 if(gameState.autoLoad !== undefined && document.activeElement !== chk) {
                     chk.checked = gameState.autoLoad;
@@ -1087,6 +1251,19 @@ std::string WebServer::GetHTML() {
                 });
                 ctx.stroke();
             }
+
+            // DRAW RECORDED PATH
+            if(gameState.recorder && gameState.recorder.path && gameState.recorder.path.length > 0) {
+                 ctx.beginPath();
+                 ctx.strokeStyle = "orange";
+                 ctx.lineWidth = 2;
+                 gameState.recorder.path.forEach((p, i) => {
+                    const s = toScreen(p.x, p.y);
+                    if(i===0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+                });
+                ctx.stroke();
+            }
+
             if(gameState.entities) {
                 gameState.entities.forEach(ent => {
                     const s = toScreen(ent.x, ent.y);

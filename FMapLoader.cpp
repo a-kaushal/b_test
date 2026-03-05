@@ -234,14 +234,14 @@ struct VoxelCell {
 
     // Check if clear sky at coord
     bool isClearSky(float z) const {
-        // OVERLOADED
-        return true;
-
         if (layers.empty()) return false;
+        /*std::ofstream logFile;
+        logFile.open("C:\\SMM\\SMM_Debug.log", std::ios::app);*/
 
         for (const auto& layer : layers) {
             float floor = layer.getFloorZ();
             float ceiling = layer.getCeilingZ();
+            //logFile << floor << std::endl;
 
             // Check if we are physically inside this layer
             // (Floor - 1.5 tolerance for hovering near ground)
@@ -785,6 +785,137 @@ public:
 
         return true; // Point is safe, has headroom, and has footroom.
     }
+
+    bool checkSurroundingTiles(int mapId, float x, float y, float z, int tileGridSize, float heightLimit) {
+        FMapTile* tile = getTileAt(mapId, x, y);
+        bool debug = false;
+        if (x == -2344.85f) {
+            debug = false;
+        }
+        std::ofstream g_LogFile;
+        if (debug) {
+            g_LogFile.open("C:\\SMM\\Debug.log", std::ios::out | std::ios::trunc);
+        }
+
+        std::vector<std::vector<float>> cellFloor((tileGridSize * 2) + 1, std::vector<float>((tileGridSize * 2) + 1, 0));
+        float diagonalHeightLimit = sqrt(2 * heightLimit * heightLimit);
+
+        const VoxelCell* cell = tile->getCell(x, y);
+        if (!cell) return false;
+        float nodeFloor = getFloorHeight(mapId, x, y, z, true);
+
+        if (debug) {
+            g_LogFile << "Node Position: " << x << ", " << y << ", " << z << " | Floor: " << nodeFloor << "\n";
+        }
+
+        for (int i = 0; i <= tileGridSize; i++) {
+            for (int a = -i; a <= i; a++) { // Rows
+                for (int b = -i; b <= i; b++) { // Columns
+                    if ((abs(a) < i) && (abs(b) < i)) {
+                        continue;
+                    }
+                    cellFloor[tileGridSize + a][tileGridSize + b] = getFloorHeight(mapId, x + (a * FMAP_CELL_SIZE), y + (b * FMAP_CELL_SIZE), z, true);
+                    if (debug) {
+                        g_LogFile << "Floor Position: " << x + (a * FMAP_CELL_SIZE) << ", " << y + (b * FMAP_CELL_SIZE) << ", " << z << " | Floor: " << cellFloor[tileGridSize + a][tileGridSize + b] << " " << heightLimit << "\n";
+                    }
+                    if (a == -i) {
+                        if ((b >= -i) && (b <= i - 2)) {
+                            if ((cellFloor[tileGridSize + a][tileGridSize + b] - cellFloor[tileGridSize + a + 1][tileGridSize + b + 1]) < -diagonalHeightLimit) {
+                                return false;
+                            }
+                        }
+                        if ((b >= -i + 1) && (b <= i - 1)) {
+                            if ((cellFloor[tileGridSize + a][tileGridSize + b] - cellFloor[tileGridSize + a + 1][tileGridSize + b]) < -heightLimit) {
+                                return false;
+                            }
+                        }
+                        if ((b >= -i + 2) && (b <= i)) {
+                            if ((cellFloor[tileGridSize + a][tileGridSize + b] - cellFloor[tileGridSize + a + 1][tileGridSize + b - 1]) < -diagonalHeightLimit) {
+                                return false;
+                            }
+                        }
+                    }
+                    else if (a == i) {
+                        if ((b >= -i) && (b <= i - 2)) {
+                            if ((cellFloor[tileGridSize + a][tileGridSize + b] - cellFloor[tileGridSize + a - 1][tileGridSize + b + 1]) < -diagonalHeightLimit) {
+                                return false;
+                            }
+                        }
+                        if ((b >= -i + 1) && (b <= i - 1)) {
+                            if ((cellFloor[tileGridSize + a][tileGridSize + b] - cellFloor[tileGridSize + a - 1][tileGridSize + b]) < -heightLimit) {
+                                return false;
+                            }
+                        }
+                        if ((b >= -i + 2) && (b <= i)) {
+                            if ((cellFloor[tileGridSize + a][tileGridSize + b] - cellFloor[tileGridSize + a - 1][tileGridSize + b - 1]) < -diagonalHeightLimit) {
+                                return false;
+                            }
+                        }
+                    }
+
+
+                    if (b == -i) {
+                        if ((a >= -i) && (a <= i - 2)) {
+                            if ((cellFloor[tileGridSize + a][tileGridSize + b] - cellFloor[tileGridSize + a + 1][tileGridSize + b + 1]) < -diagonalHeightLimit) {
+                                return false;
+                            }
+                        }
+                        if ((a >= -i + 1) && (a <= i - 1)) {
+                            if ((cellFloor[tileGridSize + a][tileGridSize + b] - cellFloor[tileGridSize + a][tileGridSize + b + 1]) < -heightLimit) {
+                                return false;
+                            }
+                        }
+                        if ((a >= -i + 2) && (a <= i)) {
+                            if ((cellFloor[tileGridSize + a][tileGridSize + b] - cellFloor[tileGridSize + a - 1][tileGridSize + b + 1]) < -diagonalHeightLimit) {
+                                return false;
+                            }
+                        }
+                    }
+                    else if (b == i) {
+                        if ((a >= -i) && (a <= i - 2)) {
+                            if ((cellFloor[tileGridSize + a][tileGridSize + b] - cellFloor[tileGridSize + a + 1][tileGridSize + b - 1]) < -diagonalHeightLimit) {
+                                return false;
+                            }
+                        }
+                        if ((a >= -i + 1) && (a <= i - 1)) {
+                            if ((cellFloor[tileGridSize + a][tileGridSize + b] - cellFloor[tileGridSize + a][tileGridSize + b - 1]) < -heightLimit) {
+                                return false;
+                            }
+                        }
+                        if ((a >= -i + 2) && (a <= i)) {
+                            if ((cellFloor[tileGridSize + a][tileGridSize + b] - cellFloor[tileGridSize + a - 1][tileGridSize + b - 1]) < -diagonalHeightLimit) {
+                                return false;
+                            }
+                        }
+                    }
+                    //if ((a > -i) && (a < i)) {
+                    //    if (fabs(cellFloor[a + i][b + i] - cellFloor[a + i - 1][b + i]) > heightLimit) {
+                    //        //g_LogFile << "false" << std::endl;
+                    //        //g_LogFile.flush();
+                    //        return false;
+                    //    }
+                    //}
+                    //if (b > -tileGridSize) {
+                    //    if (fabs(cellFloor[a + tileGridSize][b + tileGridSize] - cellFloor[a + tileGridSize][b + tileGridSize - 1]) > heightLimit) {
+                    //        //g_LogFile << "false" << std::endl;
+                    //        //g_LogFile.flush();
+                    //        return false;
+                    //    }
+                    //}
+                    //if ((a > -tileGridSize) && (b > -tileGridSize)) {
+                    //    if (fabs(cellFloor[a + tileGridSize][b + tileGridSize] - cellFloor[a + tileGridSize - 1][b + tileGridSize - 1]) > heightLimit) {
+                    //        //g_LogFile << "false" << std::endl;
+                    //        //g_LogFile.flush();
+                    //        return false;
+                    //    }
+                    //}
+                }
+            }
+        }
+        //g_LogFile << "true" << std::endl;
+        //g_LogFile.flush();
+        return true;
+    }
 };
 
 static FMapSystem g_FMapSys;
@@ -835,6 +966,15 @@ extern "C" {
             initialized = true;
         }
         return g_FMapSys.canFlyAt(mapId, x, y, z, true);
+    }
+
+    __declspec(dllexport) bool CheckSurroundingTiles(int mapId, float x, float y, float z, int tileGridSize, float heightLimit) {
+        static bool initialized = false;
+        if (!initialized) {
+            g_FMapSys.init("C:/SMM/data/fmaps/");
+            initialized = true;
+        }
+        return g_FMapSys.checkSurroundingTiles(mapId, x, y, z, tileGridSize, heightLimit);
     }
 
     __declspec(dllexport) void CleanupFMapCache(int mapId, float x, float y) {

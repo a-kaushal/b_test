@@ -858,6 +858,31 @@ void MainThread(HMODULE hModule) {
                 Sleep(1000);
                 continue;
             }
+
+            std::string cmd = ReadStatus();
+            if (cmd == "NOT_IN_GAME") {
+                DWORD lastCheckTime = 0;
+                while (g_IsRunning) {
+
+                    // Check status file every 1000ms
+                    if (GetTickCount() - lastCheckTime > 1000) {
+                        std::string cmd = ReadStatus();
+
+                        if (cmd == "GAME_REBOOTED") {
+                            std::cout << "Received GAME_REBOOTED." << std::endl;
+                            break;
+                        }
+                        else if (cmd == "GAME_OK") {
+                            std::cout << "Received GAME_OK." << std::endl;
+                            break;
+                        }
+                        lastCheckTime = GetTickCount();
+                    }
+
+                    // Sleep shortly to keep loop responsive
+                    Sleep(10);
+                }
+            }
             
             if (!g_IsRunning) break; 
 
@@ -912,7 +937,7 @@ void MainThread(HMODULE hModule) {
                         g_LogFile << "Camera update failed." << std::endl;
                         Sleep(1000);
                     }
-                    console.SendDataRobust(std::wstring(L"/console autointeract 0"));
+                    console.SendDataRobust(std::wstring(L"/console autointeract 0"), g_GameState->globalState.chatOpen);
 
                     bool isPaused = false;
                     bool lastF3State = false;
@@ -929,9 +954,14 @@ void MainThread(HMODULE hModule) {
                     SetCursorPos(center.x, center.y);
 
                     g_LogFile << g_GameState->player.position.x << " " << g_GameState->player.position.y << " " << g_GameState->player.position.z << " " << std::endl;
-
                     // --- INNER LOOP: GAME LOOP ---
                     // Exits if F4 is pressed (g_IsRunning = false) OR Reboot needed
+                    bool test1 = false;
+                    bool test2 = false;
+                    bool test3 = false;
+                    bool test4 = false;
+                    DWORD time = GetTickCount();
+                    DWORD chatOpen = 0;
                     while (g_IsRunning && !needsReboot) {
                         try {
                             // --- PAUSE LOGIC ---
@@ -1016,9 +1046,15 @@ void MainThread(HMODULE hModule) {
                             }
 
                             // LOCK before writing
-                            std::lock_guard<std::mutex> lock(g_EntityMutex);
-                            ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, entityArraySize, g_GameState->player, persistentEntityList, agent);
-                            g_GameState->entities = persistentEntityList;
+                            {
+                                std::lock_guard<std::mutex> lock(g_EntityMutex);
+                                ExtractEntities(analyzer, procId, hashArray, hashArrayMaximum, entityArray, entityArraySize, g_GameState->player, persistentEntityList, agent);
+                                g_GameState->entities = persistentEntityList;
+                            }
+
+                            // PATH RECORDER UPDATE
+                            // Safe to call because lock is released above
+                            WebServer::UpdatePathRecorder();
                             // Read Lua data
                             LuaAnchor::ReadLuaData(analyzer, procId, searchPattern, luaEntry, worldmap_db);
                             
@@ -1026,6 +1062,26 @@ void MainThread(HMODULE hModule) {
                                 g_LogFile << "Lua Entry not found. Game likely reloaded" << std::endl;
                                 Sleep(1000);
                                 continue;
+                            }
+
+                            // Close chat if open
+                            if (g_GameState->globalState.chatOpen) {
+                                if (chatOpen == 0) {
+                                    chatOpen = GetTickCount();
+                                }
+                                if (GetTickCount() - chatOpen > 1000) {
+                                    kbd.SendKey(VK_ESCAPE, 0, true);
+                                    Sleep(60); // Hold for 30ms to register
+                                    kbd.SendKey(VK_ESCAPE, 0, false);
+                                    Sleep(150); // Wait for chat to close
+                                    chatOpen = 0;
+                                    continue;
+                                }
+                                Sleep(20);
+                                continue;
+                            }
+                            else {
+                                chatOpen = 0;
                             }
 
                             // Update UI / Overlay
@@ -1036,20 +1092,34 @@ void MainThread(HMODULE hModule) {
                             cam.UpdateScreenSize(width, height);
 
                             // Draw Path (Optional visualization)
-                            overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
-                            for (size_t i = g_GameState->globalState.activeIndex; i < min(g_GameState->globalState.activeIndex + 6, g_GameState->globalState.activePath.size()); ++i) {
-                                int screenPosx, screenPosy;
-                                if (i >= g_GameState->globalState.activePath.size()) break;
-                                if (cam.WorldToScreen(g_GameState->globalState.activePath[i].pos, screenPosx, screenPosy)) {
-                                    overlay.DrawFrame(screenPosx, screenPosy, RGB(0, 255, 0), true);
+                            {
+                                std::lock_guard<std::mutex> lock(g_EntityMutex);
+                                overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
+
+                                // Draw Active Path (Green)
+                                for (size_t i = g_GameState->globalState.activeIndex; i < min(g_GameState->globalState.activeIndex + 6, g_GameState->globalState.activePath.size()); ++i) {
+                                    int sx, sy;
+                                    if (i < g_GameState->globalState.activePath.size() && cam.WorldToScreen(g_GameState->globalState.activePath[i].pos, sx, sy)) {
+                                        overlay.DrawFrame(sx, sy, RGB(0, 255, 0), true);
+                                    }
+                                }
+                                // Draw Recorded Path (Orange)
+                                if (g_GameState->recorder.enabled && g_GameState->recorder.showOnOverlay) {
+                                    for (const auto& pt : g_GameState->recorder.recordedPath) {
+                                        int sx, sy;
+                                        if (cam.WorldToScreen(pt, sx, sy)) {
+                                            overlay.DrawFrame(sx, sy, RGB(255, 165, 0), true);
+                                        }
+                                    }
                                 }
                             }
+
                             try {
                                 UpdateGuiData(g_GameState->entities);
                             }
                             catch (...) {
                                 g_LogFile << "[WARNING] GUI Update failed. Skipping frame." << std::endl;
-                            }
+                            }                   
 
                             // 3. Execution Logic
                             if (!g_IsPaused) {
@@ -1073,6 +1143,10 @@ void MainThread(HMODULE hModule) {
                                         if ((g_GameState->player.bagFreeSlots <= 2)) {
                                             // If 30 minutes since last resupply mail items
                                             if (((g_GameState->globalState.bagEmptyTime != -1) && (GetTickCount() - g_GameState->globalState.bagEmptyTime < 1800000) && g_ProfileSettings.mailingEnabled) || g_GameState->interactState.mailing) {
+                                                {
+                                                    std::lock_guard<std::mutex> lock(g_EntityMutex);
+                                                    overlay.DrawFrame(-100, -100, RGB(0, 0, 0));
+                                                }
                                                 MailItems();
                                             }
                                             else {
@@ -1083,7 +1157,12 @@ void MainThread(HMODULE hModule) {
                                         if (g_GameState->player.needRepair) {
                                             Repair();
                                         }
-                                        agent.Tick();
+                                        {
+                                            // We lock the mutex to prevent the Web Server thread from reading vectors
+                                            // while the Agent is modifying/resizing them (e.g. during pathfinding).
+                                            std::lock_guard<std::mutex> lock(g_EntityMutex);
+                                            agent.Tick();
+                                        }
                                     }
                                     else {
                                         Sleep(100); // Sleep longer when idle to save CPU

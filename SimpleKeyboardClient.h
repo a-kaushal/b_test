@@ -341,6 +341,7 @@ public:
         if (GetAsyncKeyState(vk) & 0x8000) {
             return true;
         }
+        return false;
     }
 
     bool HoldKeys(const std::vector<WORD>& keys, ULONG durationMs) {
@@ -430,7 +431,15 @@ public:
         return false;
     }
 
-    bool SendDataRobust(const std::wstring& command) {
+    bool SendDataRobust(const std::wstring& command, bool chatOpen) {
+        // 0. Check if chat open already
+        //if (chatOpen) {
+        //    kbd.SendKey(VK_ESCAPE, 0, true);
+        //    Sleep(30); // Hold for 30ms to register
+        //    kbd.SendKey(VK_ESCAPE, 0, false);
+        //    Sleep(150); // Wait for chat to close
+        //}
+
         // 1. PREP: Copy command to Clipboard
         if (OpenClipboard(NULL)) {
             EmptyClipboard();

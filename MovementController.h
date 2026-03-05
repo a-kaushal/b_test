@@ -12,6 +12,96 @@
 
 extern WorldState* g_GameState;
 
+class StuckDetector {
+private:
+    Vector3 lastPos;
+    DWORD lastCheckTime;
+    int stuckStrikes;
+
+    // TUNING CONSTANTS
+    const float CHECK_INTERVAL = 250.0f; // Check every 250ms
+    const float RUN_SPEED = 7.0f;        // Yards per second
+    const float FLY_SPEED = 14.0f;       // Approximate flying speed (adjust if needed)
+    const float STUCK_THRESHOLD = 0.2f;  // If moving < 20% of expected speed, count as stuck
+    const int MAX_STRIKES = 4;           // 4 strikes = 1 second of being stuck -> Trigger Reset
+
+public:
+    StuckDetector() {
+        Reset();
+    }
+
+    void Reset() {
+        lastPos = Vector3(0, 0, 0);
+        lastCheckTime = GetTickCount();
+        stuckStrikes = 0;
+    }
+
+    // Returns TRUE if confirmed stuck
+    bool Check(const Vector3& currentPos, bool isMoving, bool isFlying) {
+        DWORD now = GetTickCount();
+        float dt = (now - lastCheckTime) / 1000.0f; // Convert to seconds
+
+        // 1. If not moving, reset (we aren't expected to move)
+        if (!isMoving) {
+            Reset();
+            lastPos = currentPos;
+            lastCheckTime = now;
+            return false;
+        }
+
+        // 2. Wait for interval
+        if ((now - lastCheckTime) < (DWORD)CHECK_INTERVAL) {
+            return false;
+        }
+
+        // 3. First run check (Prevent instant stuck on start)
+        if (lastPos.x == 0 && lastPos.y == 0) {
+            lastPos = currentPos;
+            lastCheckTime = now;
+            return false;
+        }
+
+        // --- PREDICTIVE LOGIC ---
+
+        // A. Calculate Expected Distance
+        float speed = isFlying ? FLY_SPEED : RUN_SPEED;
+        float expectedDist = speed * dt;
+
+        // B. Calculate Actual Distance
+        // We use Dist2D because Z-axis (jumping/falling) can throw off stuck detection
+        float actualDist = isFlying ? currentPos.Dist3D(lastPos) : currentPos.Dist2D(lastPos);
+
+        // C. Calculate Efficiency Ratio
+        // (actual / expected). If expected is near zero, assume 1.0 (perfect).
+        float efficiency = (expectedDist > 0.1f) ? (actualDist / expectedDist) : 1.0f;
+
+        // 4. Strike System
+        if (efficiency < STUCK_THRESHOLD) {
+            stuckStrikes++;
+            // Optional: Log for debugging
+            // printf("[Stuck] Efficiency: %.2f (Exp: %.1f, Act: %.1f) Strike: %d\n", 
+            //        efficiency, expectedDist, actualDist, stuckStrikes);
+        }
+        else {
+            // If we moved successfully, reduce strikes (heal the counter)
+            if (stuckStrikes > 0) stuckStrikes--;
+        }
+
+        // Update state for next check
+        lastPos = currentPos;
+        lastCheckTime = now;
+
+        // 5. Trigger
+        if (stuckStrikes >= MAX_STRIKES) {
+            // We are confirmed stuck
+            stuckStrikes = 0; // Reset so we don't spam triggers immediately
+            return true;
+        }
+
+        return false;
+    }
+};
+
 class MovementController {
 private:
     SimpleKeyboardClient& kbd;
@@ -37,8 +127,8 @@ private:
     const float PI = 3.14159265f;
     const float TWO_PI = 6.28318530f;
     
-    const float PIXELS_PER_RADIAN_YAW = 225.036f * 0.8;
-    const float PIXELS_PER_RADIAN_PITCH = 178.772f * 0.8;
+    const float PIXELS_PER_RADIAN_YAW = 225.036f;
+    const float PIXELS_PER_RADIAN_PITCH = 178.772f;
 
     const float TURN_THRESHOLD = 0.1f;
 
@@ -55,6 +145,9 @@ private:
 
     ConsoleInput inputCommand;
     bool isSteering = false;
+
+    // Obstacle Detection Variables ---
+    StuckDetector m_StuckDetector;
     
     // Obstacle Detection Variables ---
     Vector3 lastPosCheck;
@@ -107,7 +200,7 @@ public:
     } 
 
     void ExecuteLua(std::wstring command) {
-        inputCommand.SendDataRobust(command);
+        inputCommand.SendDataRobust(command, g_GameState->globalState.chatOpen);
     }
 
     // FORCE reset the mount cooldown (Call this only when safe to mount)
@@ -368,10 +461,10 @@ public:
         //}
 
         // If it's a ground path AND the total trip is < 60 yards, disable mounting.
-        if (!flyingPath && goalDistance < 60.0f) {
+        if (!flyingPath && !player.flyingMounted && goalDistance < 60.0f) {
             mountDisable = true;
         }
-        if (flyingPath && goalDistance < 5.0f) {
+        if (flyingPath && !player.groundMounted && goalDistance < 5.0f) {
             mountDisable = true;
         }
 
@@ -381,8 +474,9 @@ public:
             m_IsMounting = false;
         }
 
-        if (mountDisable && ((flyingPath && player.flyingMounted) || (!flyingPath && player.isMounted)) && (!player.inWater) && (!escapeWater)) {
-            if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"))) {
+        if (mountDisable && ((flyingPath && player.flyingMounted) || (!flyingPath && player.groundMounted)) && (!player.inWater) && (!escapeWater)) {
+            Stop();
+            if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"), g_GameState->globalState.chatOpen)) {
                 inputCommand.Reset();
             }
             return;
@@ -428,14 +522,14 @@ public:
             else if (flyingPath) {
                 // Send command
                 //inputCommand.SendDataRobust(std::wstring(L"/run if not(IsFlyableArea()and IsMounted())then CallCompanion(\"Mount\", 1) end "));
-                inputCommand.SendDataRobust(std::wstring(L"/mountfly"));
+                inputCommand.SendDataRobust(std::wstring(L"/mountfly"), g_GameState->globalState.chatOpen);
                 m_MountAttemptStart = now;
                 m_IsMounting = true;
                 return; // Stop moving to allow cast
             }
             else if (!flyingPath) {
                 // Send command
-                inputCommand.SendDataRobust(std::wstring(L"/mountground"));
+                inputCommand.SendDataRobust(std::wstring(L"/mountground"), g_GameState->globalState.chatOpen);
                 m_MountAttemptStart = now;
                 m_IsMounting = true;
                 return; // Stop moving to allow cast
@@ -493,7 +587,7 @@ public:
 
         // -- - DAMPING FACTOR FOR CLOSE RANGE-- -
         // If within 5 yards, reduce steering aggression by 50% to prevent overshooting
-        float damping = (pitchDiff < 0.75f) ? 0.75f : 1.0f;
+        float damping = (pitchDiff < 0.25f) ? 0.75f : 1.0f;
 
         if (!isCoasting) {
             // YAW
@@ -632,6 +726,29 @@ public:
             }
         }
 
+        // --- 5. STUCK DETECTION (PREDICTIVE) ---
+        // We run this ONLY if we are trying to move forward
+        bool stuck = m_StuckDetector.Check(currentPos, shouldMoveForward, flyingPath);
+        //if (stuck) {
+        //    g_LogFile << "[Movement] STUCK DETECTED (Efficiency < 20%)! Executing evasive maneuvers..." << std::endl;
+
+        //    // 1. Stop Steering/Throttle
+        //    Stop();
+
+        //    if (!flyingPath && !player.flyingMounted && !isCoasting) {
+        //        // We are trying to move but stuck -> Jump
+        //        kbd.SendKey(VK_SPACE, 0, true);
+        //        kbd.SendKey('W', 0, true);
+        //        Sleep(50);
+        //        kbd.SendKey('W', 0, false);
+        //        kbd.SendKey(VK_SPACE, 0, false);
+        //    }
+
+        //    // 3. Reset Detector so we don't spam
+        //    m_StuckDetector.Reset();
+        //    return; // Skip the rest of this frame
+        //}
+
         // Apply Throttle
         if ((shouldMoveForward) && (!useElevator)) {
             kbd.SendKey('W', 0, true);
@@ -644,7 +761,7 @@ public:
         if (!flyingPath && !player.flyingMounted && !isCoasting) {
             DWORD now = GetTickCount();
             if (now - lastPosTime > 500) {
-                if (currentPos.Dist2D(lastPosCheck) < 0.5f && shouldMoveForward) {
+                if (currentPos.Dist2D(lastPosCheck) < 0.5f && currentPos.Dist2D(targetPos) > 1.0f && shouldMoveForward) {
                     // We are trying to move but stuck -> Jump
                     kbd.SendKey(VK_SPACE, 0, true);
                     kbd.SendKey('W', 0, true);
@@ -758,15 +875,15 @@ public:
         }*/
     }
 
-    bool faceTarget(Vector3 currentPos, Vector3 targetPos, float currentRot) {
+    bool faceTarget(Vector3 currentPos, Vector3 targetPos, float currentRot, float alignedThreshold = 0.30f, float currentPitch = 0, bool moveVert = false) {
         float dx = targetPos.x - currentPos.x;
         float dy = targetPos.y - currentPos.y;
+        float dz = targetPos.z - currentPos.z;
+        float dxy = sqrt(dx*dx + dy*dy);
         float targetYaw = std::atan2(dy, dx);
         float yawDiff = NormalizeAngle(targetYaw - currentRot);
-
-        // Slightly relaxed threshold for combat tracking (approx 8 degrees)
-        // Too tight = wobble, Too loose = miss spells
-        const float ALIGNED_THRESHOLD = 0.30f;
+        float targetPitch = std::atan2(dz, dxy);
+        float pitchDiff = targetPitch - currentPitch;
 
         // --- DEBUG LOGGING (Throttle: 200ms) ---
         static DWORD lastLog = 0;
@@ -778,23 +895,84 @@ public:
         g_LogFile << GetTickCount() << " " << yawDiff << std::endl;
 
         // 1. ALIGNED: Release keys and return true
-        if (std::abs(yawDiff) < ALIGNED_THRESHOLD) {
+        if (std::abs(yawDiff) < alignedThreshold) {
             if (kbd.IsHolding('A')) kbd.SendKey('A', 0, false);
             if (kbd.IsHolding('D')) kbd.SendKey('D', 0, false);
-            return true;
+            if (!moveVert) return true;
+        }
+        else {
+            // 2. TARGET IS LEFT (Positive Diff): Hold A, Release D
+            if (yawDiff > 0) {
+                if (kbd.IsHolding('D')) kbd.SendKey('D', 0, false); // Ensure conflicting key is up
+                if (!kbd.IsHolding('A')) kbd.SendKey('A', 0, true); // Hold turn key down
+            }
+            // 3. TARGET IS RIGHT (Negative Diff): Hold D, Release A
+            else {
+                if (kbd.IsHolding('A')) kbd.SendKey('A', 0, false);
+                if (!kbd.IsHolding('D')) kbd.SendKey('D', 0, true);
+            }
         }
 
-        // 2. TARGET IS LEFT (Positive Diff): Hold A, Release D
-        if (yawDiff > 0) {
-            if (kbd.IsHolding('D')) kbd.SendKey('D', 0, false); // Ensure conflicting key is up
-            if (!kbd.IsHolding('A')) kbd.SendKey('A', 0, true); // Hold turn key down
-        }
-        // 3. TARGET IS RIGHT (Negative Diff): Hold D, Release A
-        else {
-            if (kbd.IsHolding('A')) kbd.SendKey('A', 0, false);
-            if (!kbd.IsHolding('D')) kbd.SendKey('D', 0, true);
+        if (moveVert) {
+            // Pitch
+            // 1. ALIGNED: Release keys and return true
+            int pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
+            pixelsPitch = std::clamp(pixelsPitch, -30, 30);
+            g_LogFile << pitchDiff << " " << targetPitch << " " << currentPitch << " " << pixelsPitch << std::endl;
+            if (fabs(pitchDiff) < 0.05) {
+                return true;
+            }
+
+            mouse.PressButton(MOUSE_RIGHT);
+            // Apply Mouse Move
+            if (pixelsPitch != 0) {
+                // Recenter Cursor if it drifts too far
+                RECT rect; GetClientRect(hGameWindow, &rect);
+                POINT cursor; GetCursorPos(&cursor);
+                POINT topLeft = { rect.left, rect.top }; ClientToScreen(hGameWindow, &topLeft);
+
+                if (cursor.x < topLeft.x + 50 || cursor.x > topLeft.x + (rect.right - rect.left) - 50 ||
+                    cursor.y < topLeft.y + 50 || cursor.y > topLeft.y + (rect.bottom - rect.top) - 50) {
+
+                    POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+                    ClientToScreen(hGameWindow, &center);
+                    mouse.MoveAbsolute(center.x, center.y);
+                }
+                mouse.Move(0, pixelsPitch);
+            }
+            mouse.ReleaseButton(MOUSE_RIGHT);
         }
 
         return false; // Not facing yet
+    }
+
+    bool moveMouse(float zTarget, PlayerInfo& player) {
+        float pitchDiff = zTarget - player.vertRotation;
+        if (pitchDiff < 0.05) {
+            return true;
+        }
+
+        mouse.PressButton(MOUSE_RIGHT);
+        int pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
+        pixelsPitch = std::clamp(pixelsPitch, -30, 30);
+
+        // Apply Mouse Move
+        if (pixelsPitch != 0) {
+            // Recenter Cursor if it drifts too far
+            RECT rect; GetClientRect(hGameWindow, &rect);
+            POINT cursor; GetCursorPos(&cursor);
+            POINT topLeft = { rect.left, rect.top }; ClientToScreen(hGameWindow, &topLeft);
+
+            if (cursor.x < topLeft.x + 50 || cursor.x > topLeft.x + (rect.right - rect.left) - 50 ||
+                cursor.y < topLeft.y + 50 || cursor.y > topLeft.y + (rect.bottom - rect.top) - 50) {
+
+                POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+                ClientToScreen(hGameWindow, &center);
+                mouse.MoveAbsolute(center.x, center.y);
+            }
+            mouse.Move(0, pixelsPitch);
+        }
+        mouse.ReleaseButton(MOUSE_RIGHT);
+        return false;
     }
 };
