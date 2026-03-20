@@ -2106,6 +2106,20 @@ public:
             dist = ws.player.position.Dist3D(target);
         }
 
+        // Overshoot detection for ground waypoints:
+        // SteerTowards stops correcting yaw at 2.5 yards but the acceptance radius is only 1.0 yard.
+        // If the bot coasts through the waypoint at a slight angle it will circle forever.
+        // Fix: if the waypoint has crossed behind the player, treat it as reached.
+        if (targetType == PATH_GROUND && dist < 3.0f) {
+            Vector3 heading = { std::cos(ws.player.rotation), std::sin(ws.player.rotation), 0.0f };
+            Vector3 toWaypoint = (target - ws.player.position).Normalize();
+            if (heading.Dot(toWaypoint) < 0.0f) {
+                ws.pathFollowState.index++;
+                ws.pathFollowState.pathIndexChange = true;
+                return false;
+            }
+        }
+
         if (((targetType == PATH_AIR) && (dist < ACCEPTANCE_RADIUS)) || ((targetType == PATH_GROUND) && (dist < GROUND_ACCEPTANCE_RADIUS))) {
             ws.pathFollowState.index++; // Advance state
             ws.pathFollowState.pathIndexChange = true;
@@ -2163,8 +2177,6 @@ private:
     InteractionController interact;
     ConsoleInput consoleInput;  // Add this member
     WorldState& state;
-
-    int unstuckCount = 0;
 
 public:
     GoapAgent(WorldState& worldState, MovementController& mc, SimpleMouseClient& mouse, SimpleKeyboardClient& keyboard, Camera& cam, MemoryAnalyzer& mem, DWORD pid, ULONG_PTR base, HWND hGameWindow)
@@ -2332,13 +2344,13 @@ public:
 
 private:
     bool CheckIfStuck() {
-        
-        // 1. Check if we are already stuck (ActionUnstuck handles the clearing)
+
+        // 1. Already handling stuck — ActionUnstuck clears this
         if (state.stuckState.isStuck) {
             return false;
         }
 
-        // 2. Debounce the moving check to absorb micro-pauses
+        // 2. Debounce: ignore brief pauses (jumps, ability casts, etc.)
         static DWORD lastTimeMoving = GetTickCount();
         DWORD now = GetTickCount();
 
@@ -2346,15 +2358,13 @@ private:
             lastTimeMoving = now;
         }
 
-        // Only consider the bot truly "Idle" if it hasn't commanded movement for over 600ms.
-        // This ignores your 50ms unstuck jump release, but cleanly resets during mounts/looting.
         if (now - lastTimeMoving > 600) {
             state.stuckState.stuckStartTime = 0;
             state.stuckState.lastCheckTime = 0;
             return false;
         }
 
-        // Only initialize the timer if it's 0 (first movement detected)
+        // 3. Seed on first movement tick
         if (state.stuckState.lastCheckTime == 0) {
             state.stuckState.lastCheckTime = now;
             state.stuckState.lastPosition = state.player.position;
@@ -2365,43 +2375,61 @@ private:
             EndScript(pilot, 3);
         }
 
-        if (now - state.stuckState.lastCheckTime > 100) { // Check every 100 ms
-            float distMoved = state.player.position.Dist3D(state.stuckState.lastPosition);
+        // 4. Predictive check every 250ms
+        const DWORD CHECK_INTERVAL_MS = 250;
+        if (now - state.stuckState.lastCheckTime >= CHECK_INTERVAL_MS) {
+            float dt = (now - state.stuckState.lastCheckTime) / 1000.0f;
 
-            // 3. Distance Check (Threshold: 2.0 units)
-            if ((!g_GameState->player.inWater && g_GameState->player.isFlying && distMoved < 1.5f) 
-                || (!g_GameState->player.inWater && g_GameState->player.onGround && distMoved < 1.0f)
-                || (g_GameState->player.inWater && distMoved < 0.25f)) {
-                // We haven't moved enough
+            // Expected speed per terrain type (yards/sec)
+            float expectedSpeed;
+            float actualDist;
+            if (!g_GameState->player.inWater && (g_GameState->player.isFlying || g_GameState->player.flyingMounted)) {
+                expectedSpeed = 14.0f;
+                actualDist = state.player.position.Dist3D(state.stuckState.lastPosition);
+            }
+            else if (g_GameState->player.inWater) {
+                expectedSpeed = 4.0f;
+                actualDist = state.player.position.Dist3D(state.stuckState.lastPosition);
+            }
+            else {
+                expectedSpeed = 7.0f;
+                // Ignore Z so jumps and ramps don't mask ground stuck
+                actualDist = state.player.position.Dist2D(state.stuckState.lastPosition);
+            }
+
+            float expectedDist = expectedSpeed * dt;
+            // Efficiency: ratio of actual to expected movement
+            float efficiency = (expectedDist > 0.01f) ? (actualDist / expectedDist) : 1.0f;
+
+            // Advance the anchor every interval so we always measure the last window
+            state.stuckState.lastPosition = state.player.position;
+            state.stuckState.lastCheckTime = now;
+
+            const float STUCK_EFFICIENCY_THRESHOLD = 0.25f; // < 25% of expected speed = stuck
+            if (efficiency < STUCK_EFFICIENCY_THRESHOLD) {
                 if (state.stuckState.stuckStartTime == 0) {
                     state.stuckState.stuckStartTime = now;
                 }
 
-                // If stuck for > 500 ms, SET the flag
+                // Require 1 second of consistent low efficiency before triggering
                 if (now - state.stuckState.stuckStartTime > 1000) {
-                    g_LogFile << "[GOAP] Stuck Detected! Engaging Unstuck Maneuver (Attempt "
-                        << (state.stuckState.attemptCount + 1) << ")" << std::endl;
+                    g_LogFile << "[GOAP] Stuck Detected! Efficiency: " << (int)(efficiency * 100)
+                        << "% (expected " << expectedDist << " yds, moved " << actualDist
+                        << " yds). Attempt " << (state.stuckState.attemptCount + 1) << std::endl;
 
-                    // NEW: Check if we've been stuck too long (failure condition)
                     if (state.stuckState.attemptCount >= 8) {
-                        g_LogFile << "[GOAP] ⚠ Unstuck attempts exhausted! Quitting Script." << std::endl;
+                        g_LogFile << "[GOAP] Unstuck attempts exhausted! Quitting Script." << std::endl;
                         EndScript(pilot, -1);
-                        g_LogFile << "[GOAP] ⚠ Unstuck attempts exhausted! Clearing path and restarting." << std::endl;
 
-                        // Clear all paths and reset to idle
                         state.pathFollowState.hasPath = false;
-                        //state.pathFollowState.path.clear();
-                        //state.pathFollowState.index = 0;
                         state.waypointReturnState.hasPath = false;
                         state.waypointReturnState.hasTarget = false;
                         state.globalState.activePath.clear();
 
-                        // Reset stuck state completely
                         state.stuckState.isStuck = false;
                         state.stuckState.attemptCount = 0;
                         state.stuckState.stuckStartTime = 0;
                         state.stuckState.lastUnstuckTime = 0;
-                        unstuckCount = 0;
 
                         pilot.Stop();
                         return false;
@@ -2410,27 +2438,22 @@ private:
                     state.stuckState.isStuck = true;
                     state.stuckState.stuckStartTime = 0;
                     state.stuckState.lastStuckTime = now;
-                    unstuckCount = 0;
                     return true;
                 }
             }
             else {
-                unstuckCount++;
-                if (unstuckCount >= 10) {
-                    // ONLY reset here, when we have PROVEN we moved significantly
-                    state.stuckState.lastPosition = state.player.position;
-                    state.stuckState.stuckStartTime = 0;
-                    unstuckCount = 0;
+                // Moving well — clear stuck timer
+                state.stuckState.stuckStartTime = 0;
+
+                // Reset attempt count after 2 minutes of uninterrupted movement
+                if (state.stuckState.lastUnstuckTime > 0 &&
+                    now - state.stuckState.lastUnstuckTime > 120000) {
+                    state.stuckState.attemptCount = 0;
+                    state.stuckState.lastUnstuckTime = 0;
                 }
             }
-
-            if ((now - state.stuckState.stuckStartTime > 120000) && (state.stuckState.stuckStartTime != 0)) state.stuckState.attemptCount = 0;
-
-            if ((!g_GameState->player.inWater && distMoved > 10.0f) || (g_GameState->player.inWater && distMoved > 0.25f)) {
-            }
-
-            state.stuckState.lastCheckTime = now;
         }
+
         return false;
     }
 };

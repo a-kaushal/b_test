@@ -17,6 +17,7 @@ private:
     Vector3 lastPos;
     DWORD lastCheckTime;
     int stuckStrikes;
+    bool initialized;
 
     // TUNING CONSTANTS
     const float CHECK_INTERVAL = 250.0f; // Check every 250ms
@@ -34,6 +35,7 @@ public:
         lastPos = Vector3(0, 0, 0);
         lastCheckTime = GetTickCount();
         stuckStrikes = 0;
+        initialized = false;
     }
 
     // Returns TRUE if confirmed stuck
@@ -54,10 +56,11 @@ public:
             return false;
         }
 
-        // 3. First run check (Prevent instant stuck on start)
-        if (lastPos.x == 0 && lastPos.y == 0) {
+        // 3. First run: seed position without checking (avoids false positive on start)
+        if (!initialized) {
             lastPos = currentPos;
             lastCheckTime = now;
+            initialized = true;
             return false;
         }
 
