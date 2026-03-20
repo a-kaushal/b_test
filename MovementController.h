@@ -1,0 +1,978 @@
+#pragma once
+#include <cmath>
+#include <string>
+#include <locale>
+#include <codecvt>
+
+#include "Vector.h"
+#include "SimpleKeyboardClient.h"
+#include "SimpleMouseClient.h"
+#include "Profile.h"
+#include "WorldState.h"
+
+extern WorldState* g_GameState;
+
+class StuckDetector {
+private:
+    Vector3 lastPos;
+    DWORD lastCheckTime;
+    int stuckStrikes;
+
+    // TUNING CONSTANTS
+    const float CHECK_INTERVAL = 250.0f; // Check every 250ms
+    const float RUN_SPEED = 7.0f;        // Yards per second
+    const float FLY_SPEED = 14.0f;       // Approximate flying speed (adjust if needed)
+    const float STUCK_THRESHOLD = 0.2f;  // If moving < 20% of expected speed, count as stuck
+    const int MAX_STRIKES = 4;           // 4 strikes = 1 second of being stuck -> Trigger Reset
+
+public:
+    StuckDetector() {
+        Reset();
+    }
+
+    void Reset() {
+        lastPos = Vector3(0, 0, 0);
+        lastCheckTime = GetTickCount();
+        stuckStrikes = 0;
+    }
+
+    // Returns TRUE if confirmed stuck
+    bool Check(const Vector3& currentPos, bool isMoving, bool isFlying) {
+        DWORD now = GetTickCount();
+        float dt = (now - lastCheckTime) / 1000.0f; // Convert to seconds
+
+        // 1. If not moving, reset (we aren't expected to move)
+        if (!isMoving) {
+            Reset();
+            lastPos = currentPos;
+            lastCheckTime = now;
+            return false;
+        }
+
+        // 2. Wait for interval
+        if ((now - lastCheckTime) < (DWORD)CHECK_INTERVAL) {
+            return false;
+        }
+
+        // 3. First run check (Prevent instant stuck on start)
+        if (lastPos.x == 0 && lastPos.y == 0) {
+            lastPos = currentPos;
+            lastCheckTime = now;
+            return false;
+        }
+
+        // --- PREDICTIVE LOGIC ---
+
+        // A. Calculate Expected Distance
+        float speed = isFlying ? FLY_SPEED : RUN_SPEED;
+        float expectedDist = speed * dt;
+
+        // B. Calculate Actual Distance
+        // We use Dist2D because Z-axis (jumping/falling) can throw off stuck detection
+        float actualDist = isFlying ? currentPos.Dist3D(lastPos) : currentPos.Dist2D(lastPos);
+
+        // C. Calculate Efficiency Ratio
+        // (actual / expected). If expected is near zero, assume 1.0 (perfect).
+        float efficiency = (expectedDist > 0.1f) ? (actualDist / expectedDist) : 1.0f;
+
+        // 4. Strike System
+        if (efficiency < STUCK_THRESHOLD) {
+            stuckStrikes++;
+            // Optional: Log for debugging
+            // printf("[Stuck] Efficiency: %.2f (Exp: %.1f, Act: %.1f) Strike: %d\n", 
+            //        efficiency, expectedDist, actualDist, stuckStrikes);
+        }
+        else {
+            // If we moved successfully, reduce strikes (heal the counter)
+            if (stuckStrikes > 0) stuckStrikes--;
+        }
+
+        // Update state for next check
+        lastPos = currentPos;
+        lastCheckTime = now;
+
+        // 5. Trigger
+        if (stuckStrikes >= MAX_STRIKES) {
+            // We are confirmed stuck
+            stuckStrikes = 0; // Reset so we don't spam triggers immediately
+            return true;
+        }
+
+        return false;
+    }
+};
+
+class MovementController {
+private:
+    SimpleKeyboardClient& kbd;
+    SimpleMouseClient& mouse;
+    HWND hGameWindow;
+
+    int check = 0;
+    DWORD lastSteerTime = 0;
+
+    // --- FLIGHT CONTROL CONSTANTS ---
+    const float ALIGNMENT_DEADZONE = 0.03f;      // ~6 degrees: Considered "Facing Target"
+    const float BANKING_ANGLE = 0.78f;           // ~45 degrees: Max angle to hold 'W' while turning (Prevents wide drifting)
+    const float STEEP_CLIMB_THRESHOLD = 1.4f;    //  degrees: Use Jump/Sit keys for vertical limits
+
+    // Distances
+    const float PRECISION_DIST = 5.0f;           // Yards: Below this, we prioritize aiming over moving
+    const float COAST_DISTANCE = 2.0f;           // Yards: Stop steering, just coast through the point
+
+    // Loosened for flight to allow "Bank Turns" (turning while moving)
+    const float GROUND_STOP_THRESHOLD = 1.0f;     // Stop moving if target is > 57 degrees off center (Ground)
+    const float FLIGHT_STOP_THRESHOLD = 2.0f;     // Stop moving if target is > 115 degrees off center (Flight)
+
+    const float PI = 3.14159265f;
+    const float TWO_PI = 6.28318530f;
+    
+    const float PIXELS_PER_RADIAN_YAW = 225.036f;
+    const float PIXELS_PER_RADIAN_PITCH = 178.772f;
+
+    const float TURN_THRESHOLD = 0.1f;
+
+    // User specified: 1.0 radian per second
+    // ADJUST THIS if the bot consistently undershoots (increase value) or overshoots (decrease value)
+    const float TURN_SPEED_RAD_SEC = PI;
+
+    // Vertical control constants
+    const float VERTICAL_DEADZONE = 1.5f; // Reduced slightly for tighter control
+
+    // Vertical control keys
+    const WORD KEY_ASCEND = VK_SPACE;
+    const WORD KEY_DESCEND = 'X';
+
+    ConsoleInput inputCommand;
+    bool isSteering = false;
+
+    // Obstacle Detection Variables ---
+    StuckDetector m_StuckDetector;
+    
+    // Obstacle Detection Variables ---
+    Vector3 lastPosCheck;
+    DWORD lastPosTime = 0;
+
+    // --- CALIBRATION VARIABLES ---
+    bool m_IsCalibrated = false;       // Final flag
+    bool m_IsCalibrating = false;      // In-progress flag
+    int m_CalibrationStep = 0;         // 0-4 = Yaw, 5-9 = Pitch
+    int m_CalibrationPhase = 0;        // 0=Prep, 1=Measure
+    bool m_RetryInvert = false; // <--- NEW: Toggle to flip direction on failure
+
+    // Accumulators
+    float m_AccumulatedYawK = 0.0f;
+    float m_AccumulatedPitchK = 0.0f;
+
+    DWORD m_CalibrationLastTime = 0;
+    float m_StartRot = 0.0f;           // Yaw start
+    float m_StartPitch = 0.0f;         // Pitch start
+
+    // RESULTS
+    float m_PixelsPerRadianYaw = 0.0f;
+    float m_PixelsPerRadianPitch = 0.0f;
+
+    // --- UI STUCK DETECTION VARIABLES ---
+    float m_LastRotationCheck = 0.0f;
+    int m_UiStuckCounter = 0;
+
+public:
+    // --- MOUNTING LOGIC VARIABLES ---
+    DWORD m_MountAttemptStart = 0;
+    bool m_IsMounting = false;
+    DWORD m_MountDisabledUntil = 0; // Timestamp when mounting is re-enabled
+
+private:
+    float NormalizeAngle(float angle) {
+        while (angle <= -PI) angle += TWO_PI;
+        while (angle > PI) angle -= TWO_PI;
+        return angle;
+    }
+
+public:
+    MovementController(SimpleKeyboardClient& keyboard, SimpleMouseClient& mouseClient, HWND hWin) : kbd(keyboard), mouse(mouseClient), inputCommand(keyboard), hGameWindow(hWin) {}
+
+    void ChangeSteering(bool steer) {
+        isSteering = steer;
+    }
+    bool GetSteering() {
+        return isSteering;
+    } 
+
+    void ExecuteLua(std::wstring command) {
+        inputCommand.SendDataRobust(command, g_GameState->globalState.chatOpen);
+    }
+
+    // FORCE reset the mount cooldown (Call this only when safe to mount)
+    void ForceResetMountCooldown() {
+        m_MountDisabledUntil = 0;
+        // Optionally clear any "failed attempt" counters if you have them
+        g_LogFile << "[Movement] Mount cooldown forcibly reset for hybrid path." << std::endl;
+    }
+
+    // Emergency Stop
+    void Stop() {
+        // Must cancel async threads first
+        kbd.StopHold('W');
+        kbd.StopHold('S');
+        kbd.StopHold('A');
+        kbd.StopHold('D');
+        kbd.StopHold(KEY_ASCEND);
+        kbd.StopHold(KEY_DESCEND);
+
+        kbd.SendKey('W', 0, false);
+        kbd.SendKey('S', 0, false);
+        kbd.SendKey('A', 0, false);
+        kbd.SendKey('D', 0, false);
+        kbd.SendKey(KEY_ASCEND, 0, false);
+        kbd.SendKey(KEY_DESCEND, 0, false);
+
+        mouse.ReleaseButton(MOUSE_LEFT);
+        mouse.ReleaseButton(MOUSE_RIGHT);
+        
+        // Release Mouse if we were steering
+        if (isSteering) {
+            mouse.ReleaseButton(MOUSE_RIGHT);
+            isSteering = false;
+        }
+    }
+
+    // Check if any movement keys are currently being pressed
+    bool IsMoving() {
+        if (kbd.IsHolding('W') == 1 || kbd.IsHolding('S') == 1 || kbd.IsHolding('Q') == 1 || kbd.IsHolding('E') == 1 ||
+            kbd.IsHolding(KEY_ASCEND) == 1 || kbd.IsHolding(KEY_DESCEND) == 1) {
+            return true;
+        }
+        return false;
+            //mouse.IsButtonDown(MOUSE_RIGHT) || mouse.IsButtonDown(MOUSE_LEFT);
+    }
+
+    // --- NEW: CALIBRATION FUNCTION ---
+    // Returns TRUE if calibration is complete/valid.
+    // Returns FALSE if it is currently working (caller should return and wait).
+   // --- UPDATED CALIBRATION FUNCTION ---
+    bool Calibrate(float currentYaw, float currentPitch) {
+        
+        if (m_IsCalibrated) return true;
+
+        DWORD now = GetTickCount();
+
+        // 1. INITIALIZE CALIBRATION
+        if (!m_IsCalibrating) {
+            std::cout << "[CALIBRATION] Starting 2-Axis Calibration..." << std::endl;
+            mouse.ReleaseButton(MOUSE_RIGHT); // Safety Release
+            Sleep(50);
+
+            m_IsCalibrating = true;
+            m_CalibrationStep = 0;
+            m_AccumulatedYawK = 0.0f;
+            m_AccumulatedPitchK = 0.0f;
+            m_CalibrationPhase = 0;
+            m_RetryInvert = false;
+            m_CalibrationLastTime = now;
+            return false;
+        }
+
+        // 2. PHASE 0: PREPARE AND MOVE
+        if (m_CalibrationPhase == 0) {
+            // Wait for 1 second interval between steps (except first step)
+            if (m_CalibrationStep > 0 && (now - m_CalibrationLastTime < 1000)) {
+                return false;
+            }
+            // --- A. YAW CALIBRATION (Steps 0 to 4) ---
+            if (m_CalibrationStep < 5) {
+                // Bounds Check & Recenter (Horizontal Safe Zone)
+                POINT cursor;
+                GetCursorPos(&cursor);
+                RECT rect; GetClientRect(hGameWindow, &rect);
+                POINT topLeft = { rect.left, rect.top };
+                POINT bottomRight = { rect.right, rect.bottom };
+                ClientToScreen(hGameWindow, &topLeft);
+                ClientToScreen(hGameWindow, &bottomRight);
+
+                // Define Safe Zone (e.g., 200 pixels from right edge)
+                long safeMaxX = bottomRight.x - 150;
+                long safeMinX = topLeft.x + 150;
+
+                // If moving +50 would hit the edge, OR if we are just too close to any edge
+                if (cursor.x > safeMaxX || cursor.x < safeMinX) {
+                    g_LogFile << "[CALIBRATION] Cursor near edge. Recentering..." << std::endl;
+
+                    // Release button if held (safety)
+                    mouse.ReleaseButton(MOUSE_RIGHT);
+                    Sleep(20);
+
+                    // Move to absolute center
+                    POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+                    ClientToScreen(hGameWindow, &center);
+                    mouse.MoveAbsolute(center.x, center.y);
+
+                    // Wait for mouse to settle
+                    Sleep(50);
+                }
+
+                m_StartRot = currentYaw;
+
+                mouse.PressButton(MOUSE_RIGHT);
+                Sleep(50);
+                mouse.Move(10, 0); // Move RIGHT
+
+                m_CalibrationLastTime = GetTickCount();
+                m_CalibrationPhase = 1;
+                return false;
+            }
+
+            // --- B. PITCH CALIBRATION (Steps 5 to 9) ---
+            else if (m_CalibrationStep < 10) {
+                m_StartPitch = currentPitch;
+
+                // INTELLIGENT DIRECTION:
+                // If looking Up (positive pitch), look Down. 
+                // If looking Down (negative pitch), look Up.
+                // This prevents hitting the hard clamp limits.
+                int moveY = 100;
+                if (currentPitch > 0.1f) moveY = 10;   // Look Down (Positive Y moves down usually)
+                else if (currentPitch < -0.1f) moveY = -10; // Look Up
+                else {
+                    // If neutral, Alternate: Even steps down, Odd steps up
+                    moveY = (m_CalibrationStep % 2 == 0) ? 10 : 10;
+                }
+                // 2. APPLY RETRY FIX
+                // If the previous attempt failed, FLIP the direction
+                if (m_RetryInvert) {
+                    moveY = -moveY;
+                    g_LogFile << "[CALIB PITCH] Retrying with INVERTED direction: " << moveY << std::endl;
+                }
+
+                mouse.PressButton(MOUSE_RIGHT);
+                Sleep(50);
+                mouse.Move(0, moveY);
+
+                // Store the move we actually made so we can calculate K correctly
+                // (We store it in the time variable or a temp variable? 
+                //  Let's just remember logic: K = Pixels / Delta)
+                //  We need to know 'moveY' in Phase 1. 
+                //  Hack: Store it in m_StartRot temporarily since we aren't using Yaw
+                m_StartRot = (float)moveY;
+
+                m_CalibrationLastTime = GetTickCount();
+                m_CalibrationPhase = 1;
+                return false;
+            }
+        }
+
+        // 3. PHASE 1: MEASURE RESULT
+        if (m_CalibrationPhase == 1) {
+            // Wait 200ms for game to update rotation in memory
+            if (now - m_CalibrationLastTime < 200) {
+                return false;
+            }
+
+            // --- MEASURE YAW (Steps 0-4) ---
+            if (m_CalibrationStep < 5) {
+                float delta = NormalizeAngle(currentYaw - m_StartRot);
+
+                mouse.ReleaseButton(MOUSE_RIGHT);
+
+                if (std::abs(delta) > 0.01f) {
+                    float k = 10.0f / delta;
+                    m_AccumulatedYawK += k;
+                    g_LogFile << "[CALIB YAW] Step " << m_CalibrationStep << " | K: " << k << std::endl;
+                    m_CalibrationStep++;
+                }
+                else {
+                    g_LogFile << "[CALIB YAW] Failed (No delta). Retrying..." << std::endl;
+                }
+            }
+            // --- MEASURE PITCH (Steps 5-9) ---
+            else {
+                // Read current Pitch (Assuming 'player.vertRotation' is passed as 'currentPitch')
+                float delta = currentPitch - m_StartPitch; // No Normalize needed for pitch (clamped)
+                float pixelsMoved = m_StartRot; // Retrieved from our hack storage
+
+                mouse.ReleaseButton(MOUSE_RIGHT);
+
+                g_LogFile << "[CALIB DEBUG] StartPitch: " << m_StartPitch << " EndPitch: " << currentPitch << " Delta: " << delta << std::endl;
+
+                if (std::abs(delta) > 0.01f) {
+                    float k = pixelsMoved / delta;
+                    m_AccumulatedPitchK += k;
+                    g_LogFile << "[CALIB PITCH] Step " << m_CalibrationStep << " | Pixels: " << pixelsMoved << " | Delta: " << delta << " | K: " << k << std::endl;
+                    m_CalibrationStep++;
+                }
+                else {
+                    g_LogFile << "[CALIB PITCH] Failed (Hit Limit?). Retrying..." << std::endl;
+                    m_RetryInvert = !m_RetryInvert; // FLIP DIRECTION
+                }
+            }
+
+
+            // --- CHECK COMPLETION ---
+            if (m_CalibrationStep >= 10) {
+                m_PixelsPerRadianYaw = m_AccumulatedYawK / 5.0f;
+                m_PixelsPerRadianPitch = m_AccumulatedPitchK / 5.0f;
+
+                m_IsCalibrated = true;
+                m_IsCalibrating = false;
+
+                g_LogFile << "------------------------------------------------" << std::endl;
+                g_LogFile << "CALIBRATION COMPLETE" << std::endl;
+                g_LogFile << "YAW K:   " << m_PixelsPerRadianYaw << std::endl;
+                g_LogFile << "PITCH K: " << m_PixelsPerRadianPitch << std::endl;
+                g_LogFile << "------------------------------------------------" << std::endl;
+                return true;
+            }
+
+            m_CalibrationLastTime = GetTickCount();
+            m_CalibrationPhase = 0;
+            return false;
+        }
+
+        return false;
+    }
+
+    void SteerTowards(Vector3 currentPos, float currentRot, Vector3 targetPos, bool flyingPath, PlayerInfo& player, float goalDistance, bool mountDisable = false, bool escapeWater = false) {
+
+        float dx = targetPos.x - currentPos.x;
+        float dy = targetPos.y - currentPos.y;
+        float dz = targetPos.z - currentPos.z;
+        float dist2D = std::sqrt(dx * dx + dy * dy);
+        float dist3D = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+        DWORD now = GetTickCount();
+
+        // --- GLOBAL DISTANCE CHECK FOR GROUND MOUNTS ---
+        // Calculate the TRUE travel distance remaining on the path, not just the distance to the next node.
+        //float totalTravelDistance = dist3D; // Default to direct distance
+
+        //if (g_GameState && !g_GameState->globalState.activePath.empty()) {
+        //    size_t idx = g_GameState->globalState.activeIndex;
+        //    const auto& path = g_GameState->globalState.activePath;
+
+        //    if (idx < path.size()) {
+        //        // 1. Distance from Player to Current Waypoint
+        //        totalTravelDistance = currentPos.Dist3D(path[idx].pos);
+
+        //        // 2. Sum of all remaining segments
+        //        for (size_t i = idx; i < path.size() - 1; ++i) {
+        //            totalTravelDistance += path[i].pos.Dist3D(path[i + 1].pos);
+        //        }
+        //    }
+        //}
+
+        // If it's a ground path AND the total trip is < 60 yards, disable mounting.
+        if (!flyingPath && !player.flyingMounted && goalDistance < 60.0f) {
+            mountDisable = true;
+        }
+        if (flyingPath && !player.groundMounted && goalDistance < 5.0f) {
+            mountDisable = true;
+        }
+
+        // --- 0. MOUNTING LOGIC REPLACEMENT ---
+        // Verify state: If we are mounted, reset our internal flags
+        if ((flyingPath && player.flyingMounted) || (!flyingPath && player.groundMounted) || mountDisable) {
+            m_IsMounting = false;
+        }
+
+        if (mountDisable && ((flyingPath && player.flyingMounted) || (!flyingPath && player.groundMounted)) && (!player.inWater) && (!escapeWater)) {
+            Stop();
+            if (inputCommand.SendDataRobust(std::wstring(L"/run if IsMounted() then Dismount()end"), g_GameState->globalState.chatOpen)) {
+                inputCommand.Reset();
+            }
+            return;
+        }
+
+        // Attempt to mount if: Requested (isFlying), Not Mounted, Not In Tunnel
+        if ((((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && !player.inWater && !mountDisable && player.areaMountable) || 
+            (((flyingPath && !player.flyingMounted) || (!flyingPath && !player.groundMounted)) && player.inWater && escapeWater)) {
+            Stop();
+            // Check 1: Are we on a cooldown from a previous failure?
+            if (now < m_MountDisabledUntil) {
+                // If disabled, we do nothing here and fall through to standard movement (walking).
+                // Effectively ignoring the "isFlying" request for the purpose of mounting.
+            }
+            // Check 2: Are we currently waiting for a mount attempt to finish?
+            else if (m_IsMounting) {
+                if ((flyingPath && player.flyingMounted) || (!flyingPath && player.groundMounted)) {
+                    m_IsMounting = false;
+                }
+                // Wait for 3.8 seconds (3800ms) before verifying
+                if (now - m_MountAttemptStart > 3800) {
+                    if (player.areaMountable) {
+                        m_IsMounting = false;
+                    }
+                    // Check if it succeeded or if failed due to being under attack
+                    else if ((player.flyingMounted) || (g_GameState->combatState.underAttack)) {
+                        m_IsMounting = false; // Success, proceed to fly
+                    }
+                    else {
+                        // FAILED: Set cooldown for 2 minutes (120,000 ms)
+                        /*g_LogFile << "[Movement] Mount failed (Tunnel/Indoor?). Disabling mounting for 2 minutes." << std::endl;
+                        m_MountDisabledUntil = now + 120000;
+                        m_IsMounting = false;*/
+                        // Fall through to walk logic
+                    }
+                }
+                else {
+                    // Still waiting (Casting time / Latency). Stop moving.
+                    return;
+                }
+            }
+            // Check 3: Start a new attempt
+            else if (flyingPath) {
+                // Send command
+                //inputCommand.SendDataRobust(std::wstring(L"/run if not(IsFlyableArea()and IsMounted())then CallCompanion(\"Mount\", 1) end "));
+                inputCommand.SendDataRobust(std::wstring(L"/mountfly"), g_GameState->globalState.chatOpen);
+                m_MountAttemptStart = now;
+                m_IsMounting = true;
+                return; // Stop moving to allow cast
+            }
+            else if (!flyingPath) {
+                // Send command
+                inputCommand.SendDataRobust(std::wstring(L"/mountground"), g_GameState->globalState.chatOpen);
+                m_MountAttemptStart = now;
+                m_IsMounting = true;
+                return; // Stop moving to allow cast
+            }
+        }
+
+        // --- 0b. Reset Input if mounted ---
+        if (player.flyingMounted == true) {
+            inputCommand.Reset();
+        }
+
+        if (escapeWater) {
+            kbd.SendKey(KEY_ASCEND, 0, true);
+            return;
+        }
+
+        // --- 1. CALCULATE ANGLES ---
+        float targetYaw = std::atan2(dy, dx);
+        float yawDiff = NormalizeAngle(targetYaw - currentRot);
+
+        // Pitch calculation (Target Pitch)
+        float targetPitch = std::atan2(dz, dist2D);
+        float pitchDiff = targetPitch - player.vertRotation;
+
+        // --- 2. START STEERING INPUT ---
+        if (!isSteering) {
+            // --- NEW: CENTER MOUSE BEFORE CLICKING ---
+            // This ensures we have maximum range of motion before hitting an edge.
+
+            // Center Mouse before clicking to maximize turn radius and avoid edges
+            mouse.ReleaseButton(MOUSE_RIGHT); // Safety release
+            mouse.MoveToCenter();             // Use your existing function
+            Sleep(20);                        // Wait for update
+
+            mouse.PressButton(MOUSE_RIGHT);
+            isSteering = true;
+
+            // Reset detection
+            m_UiStuckCounter = 0;
+            m_LastRotationCheck = currentRot;
+
+            Sleep(10);            
+        }
+
+        // --- 3. MOUSE CONTROL (YAW & PITCH) ---
+        int pixelsYaw = 0;
+        int pixelsPitch = 0;
+
+        // Coasting Logic: If very close, stop twitching the mouse to avoid 180 spins
+        bool isCoasting = (dist3D < COAST_DISTANCE);
+
+        // Determine if we need "Elevator Mode" (Space/X) for extreme verticality
+        //bool useElevator = (std::abs(targetPitch) > STEEP_CLIMB_THRESHOLD);
+        bool useElevator = ((std::abs(targetPitch) > 1.0f) || (dist2D < 1.0f && std::abs(dz) > 0.0f)) && flyingPath;
+
+        // -- - DAMPING FACTOR FOR CLOSE RANGE-- -
+        // If within 5 yards, reduce steering aggression by 50% to prevent overshooting
+        float damping = (pitchDiff < 0.25f) ? 0.75f : 1.0f;
+
+        if (!isCoasting) {
+            // YAW
+            if ((std::abs(yawDiff) > ALIGNMENT_DEADZONE) && (flyingPath ? g_GameState->player.position.Dist3D(targetPos) > 2.5f : g_GameState->player.position.Dist2D(targetPos) > 2.5f)) {
+                pixelsYaw = (int)(yawDiff * -PIXELS_PER_RADIAN_YAW);
+            }
+
+            // PITCH (Only if flying)
+            if (flyingPath) {
+
+                // TAKEOFF LOGIC: If we want to fly, are mounted, but currently grounded -> Press Space
+                bool needTakeoff = (player.flyingMounted && !player.isFlying && !player.inWater);
+
+                if (player.flyingMounted) {
+                    if (needTakeoff) {
+                        kbd.SendKey(KEY_ASCEND, 0, true);   // Force Jump/Ascend
+                        kbd.SendKey(KEY_DESCEND, 0, false);
+
+                        // Still allow mouse pitch alignment so we look where we are going
+                        if (std::abs(pitchDiff) > ALIGNMENT_DEADZONE) {
+                            pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH * damping);
+                        }
+                    }
+                    else if (!useElevator) {
+                        // Standard Flight
+                        if (std::abs(pitchDiff) > ALIGNMENT_DEADZONE) {
+                            pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH * damping);
+                        }
+
+                        // Release Elevator Keys if we aren't using them
+                        kbd.SendKey(KEY_ASCEND, 0, false);
+                        kbd.SendKey(KEY_DESCEND, 0, false);
+                    }
+                    else {
+                        // Steep Vertical (Hovering up/down)
+                        if (targetPitch > 0) {
+                            kbd.SendKey(KEY_ASCEND, 0, true);
+                            kbd.SendKey(KEY_DESCEND, 0, false);
+                        }
+                        else {
+                            kbd.SendKey(KEY_DESCEND, 0, true);
+                            kbd.SendKey(KEY_ASCEND, 0, false);
+                        }
+                        // Don't fight the keys with mouse pitch
+                        pixelsPitch = 0;
+                        pixelsYaw = 0;
+                    }
+                }
+            }
+        }
+        // --- UI BLOCK DETECTION LOGIC ---
+        // If we are trying to turn significantly (pixelsYaw > 5), but rotation isn't changing...
+        if (std::abs(pixelsYaw) > 5) {
+            float rotDelta = std::abs(NormalizeAngle(currentRot - m_LastRotationCheck));
+
+            // If rotation changed less than ~0.5 degrees (0.01 rad) despite input
+            if (rotDelta < 0.01f) {
+                m_UiStuckCounter++;
+            }
+            else {
+                // We moved successfully, reset counter
+                m_UiStuckCounter = 0;
+                m_LastRotationCheck = currentRot;
+            }
+
+            // If stuck for ~15 ticks (approx 150-300ms depending on tick rate)
+            if (m_UiStuckCounter > 15) {
+                g_LogFile << "[Movement] UI Trap Detected! Resetting mouse..." << std::endl;
+
+                // 1. Release Mouse
+                mouse.ReleaseButton(MOUSE_RIGHT);
+                isSteering = false;
+
+                // 2. Close Menu (Escape)
+                kbd.SendKey(VK_ESCAPE, 0, true);
+                Sleep(50);
+                kbd.SendKey(VK_ESCAPE, 0, false);
+                Sleep(50);
+
+                // 3. Find New Spot
+                mouse.RandomizePosition();
+
+                // 4. Force Reset Logic
+                m_UiStuckCounter = 0;
+                m_LastRotationCheck = currentRot;
+                return; // Skip the rest of this frame
+            }
+        }
+
+
+        // Clamp Mouse Speed to prevent camera snapping
+        pixelsYaw = std::clamp(pixelsYaw, -60, 60);
+        pixelsPitch = std::clamp(pixelsPitch, -30, 30);
+
+        // Apply Mouse Move
+        if (pixelsYaw != 0 || pixelsPitch != 0) {
+            // Recenter Cursor if it drifts too far
+            RECT rect; GetClientRect(hGameWindow, &rect);
+            POINT cursor; GetCursorPos(&cursor);
+            POINT topLeft = { rect.left, rect.top }; ClientToScreen(hGameWindow, &topLeft);
+
+            if (cursor.x < topLeft.x + 50 || cursor.x > topLeft.x + (rect.right - rect.left) - 50 ||
+                cursor.y < topLeft.y + 50 || cursor.y > topLeft.y + (rect.bottom - rect.top) - 50) {
+
+                POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+                ClientToScreen(hGameWindow, &center);
+                mouse.MoveAbsolute(center.x, center.y);
+            }
+            mouse.Move(pixelsYaw, pixelsPitch);
+        }
+
+        // --- 4. THROTTLE CONTROL (SMOOTH BANKING) ---
+        bool shouldMoveForward = false;
+
+        if (!flyingPath) {
+            shouldMoveForward = true;
+        }
+        else {
+            if (isCoasting) {
+                // Just push through the waypoint
+                shouldMoveForward = true;
+            }
+            else {
+                // DYNAMIC THROTTLE LOGIC:
+                // 1. If we are far away (> 5y), allow wider turns (Banking).
+                // 2. If we are close (< 5y), require strict alignment (Precision).
+
+                float allowedError = (dist3D > PRECISION_DIST) ? BANKING_ANGLE : ALIGNMENT_DEADZONE * 2.0f;
+
+                // "Arcing Safety": 
+                // If the turn is sharp (> 45 deg), STOP moving to pivot.
+                // This prevents "Drifting" into walls.
+                if (std::abs(yawDiff) < allowedError) {
+                    shouldMoveForward = true;
+                }
+            }
+        }
+
+        // --- 5. STUCK DETECTION (PREDICTIVE) ---
+        // We run this ONLY if we are trying to move forward
+        bool stuck = m_StuckDetector.Check(currentPos, shouldMoveForward, flyingPath);
+        //if (stuck) {
+        //    g_LogFile << "[Movement] STUCK DETECTED (Efficiency < 20%)! Executing evasive maneuvers..." << std::endl;
+
+        //    // 1. Stop Steering/Throttle
+        //    Stop();
+
+        //    if (!flyingPath && !player.flyingMounted && !isCoasting) {
+        //        // We are trying to move but stuck -> Jump
+        //        kbd.SendKey(VK_SPACE, 0, true);
+        //        kbd.SendKey('W', 0, true);
+        //        Sleep(50);
+        //        kbd.SendKey('W', 0, false);
+        //        kbd.SendKey(VK_SPACE, 0, false);
+        //    }
+
+        //    // 3. Reset Detector so we don't spam
+        //    m_StuckDetector.Reset();
+        //    return; // Skip the rest of this frame
+        //}
+
+        // Apply Throttle
+        if ((shouldMoveForward) && (!useElevator)) {
+            kbd.SendKey('W', 0, true);
+        }
+        else {
+            kbd.SendKey('W', 0, false);
+        }
+
+        // --- 5. GROUND UNSTUCK (Spacebar Tap) ---
+        if (!flyingPath && !player.flyingMounted && !isCoasting) {
+            DWORD now = GetTickCount();
+            if (now - lastPosTime > 500) {
+                if (currentPos.Dist2D(lastPosCheck) < 0.5f && currentPos.Dist2D(targetPos) > 1.0f && shouldMoveForward) {
+                    // We are trying to move but stuck -> Jump
+                    kbd.SendKey(VK_SPACE, 0, true);
+                    kbd.SendKey('W', 0, true);
+                    Sleep(50);
+                    kbd.SendKey('W', 0, false);
+                    kbd.SendKey(VK_SPACE, 0, false);
+                }
+                lastPosCheck = currentPos;
+                lastPosTime = now;
+            }
+        }
+
+        //    // --- 1. Horizontal Steering (Yaw) --- (A and D old)
+        //    float targetAngle = std::atan2(dy, dx);
+        //    float angleDiff = NormalizeAngle(targetAngle - currentRot);
+
+        //    bool isTurningLeft = kbd.IsHolding('A');
+        //    bool isTurningRight = kbd.IsHolding('D');
+
+        //    // Check if we need to turn
+        //    if (angleDiff > TURN_THRESHOLD) {
+        //        // WE WANT TO GO LEFT
+        //        if (isTurningRight) kbd.StopHold('D'); // Cancel opposite turn
+
+        //        // Only start a new turn if we aren't already holding the key
+        //        if (!isTurningLeft) {
+        //            // Calculate precise duration
+        //            // Time = Distance / Speed
+        //            float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
+        //            int durationMs = static_cast<int>(durationSeconds * 1000.0f);
+        //            durationMs *= 0.5;
+
+        //            // Min duration to avoid micro-presses
+        //            if (durationMs > 20) {
+        //                kbd.HoldKeyAsync('A', durationMs);
+        //            }
+        //        }
+        //    }
+        //    else if (angleDiff < -TURN_THRESHOLD) {
+        //        // WE WANT TO GO RIGHT
+        //        if (isTurningLeft) kbd.StopHold('A');
+
+        //        if (!isTurningRight) {
+        //            float durationSeconds = std::abs(angleDiff) / TURN_SPEED_RAD_SEC;
+        //            int durationMs = static_cast<int>(durationSeconds * 1000.0f);
+        //            durationMs *= 0.5;
+
+        //            if (durationMs > 20) {
+        //                kbd.HoldKeyAsync('D', durationMs);
+        //            }
+        //        }
+        //    }
+        //    // DEADZONE (Aligned)
+        //    else {
+        //        // FIX: Force stop if we are aligned, even if the timer is still running.
+        //        // This prevents the bot from continuing to turn if it reached the target faster than calculated.
+        //        if (isTurningLeft) kbd.StopHold('A');
+        //        if (isTurningRight) kbd.StopHold('D');
+        //    }
+        //}
+
+        /*// --- 2. Vertical Steering (Altitude) ---
+        // Just manage the keys; don't block other movement
+
+
+        if (isFlying) {
+            float dz = targetPos.z - currentPos.z;
+
+            // If target is significantly above us
+            if (dz > VERTICAL_DEADZONE) {
+                kbd.SendKey(KEY_ASCEND, 0, true);   // Ascend
+                kbd.SendKey(KEY_DESCEND, 0, false);
+            }
+            // If target is significantly below us
+            else if (dz < -VERTICAL_DEADZONE) {
+                kbd.SendKey(KEY_DESCEND, 0, true);  // Descend
+                kbd.SendKey(KEY_ASCEND, 0, false);
+            }
+            else {
+                kbd.SendKey(KEY_ASCEND, 0, false);
+                kbd.SendKey(KEY_DESCEND, 0, false);
+            }
+        }
+        else {
+            kbd.SendKey(KEY_ASCEND, 0, false);
+            kbd.SendKey(KEY_DESCEND, 0, false);
+        }
+
+        // --- 3. Throttle (W) ---
+
+        // Determine if we are facing the target enough to move forward
+        // While flying, we allow a much wider angle (FLIGHT_STOP_THRESHOLD) so we curve/bank towards the target
+        // instead of stopping to rotate in place.
+        float stopThreshold = isFlying ? FLIGHT_STOP_THRESHOLD : GROUND_STOP_THRESHOLD;
+        bool facingCorrectly = (std::abs(angleDiff) < stopThreshold);
+        if ((dist2D < 10) && (std::abs(angleDiff) > (TURN_THRESHOLD*2)) && (facingCorrectly)) {
+            facingCorrectly = false;
+        }
+
+        // DIAGONAL MOVEMENT FIX:
+        // We removed the (dist2D < 1.0f) check here.
+        // Previously, if the bot was under the target, it would stop 'W' and only use 'Space' (Elevator).
+        // Now, we generally allow 'W' unless we are significantly off-angle.
+        // We rely on the pathfinding logic to switch waypoints when we get close enough in 3D space.
+
+        if (facingCorrectly) {
+            kbd.SendKey('W', 0, true);
+        }
+        else {
+            kbd.SendKey('W', 0, false);
+        }*/
+    }
+
+    bool faceTarget(Vector3 currentPos, Vector3 targetPos, float currentRot, float alignedThreshold = 0.30f, float currentPitch = 0, bool moveVert = false) {
+        float dx = targetPos.x - currentPos.x;
+        float dy = targetPos.y - currentPos.y;
+        float dz = targetPos.z - currentPos.z;
+        float dxy = sqrt(dx*dx + dy*dy);
+        float targetYaw = std::atan2(dy, dx);
+        float yawDiff = NormalizeAngle(targetYaw - currentRot);
+        float targetPitch = std::atan2(dz, dxy);
+        float pitchDiff = targetPitch - currentPitch;
+
+        // --- DEBUG LOGGING (Throttle: 200ms) ---
+        static DWORD lastLog = 0;
+        if (GetTickCount() - lastLog > 200) {
+            // Uncomment to debug specific angles if needed
+            //g_LogFile << "[Face] Diff: " << yawDiff << std::endl;
+            lastLog = GetTickCount();
+        }
+        g_LogFile << GetTickCount() << " " << yawDiff << std::endl;
+
+        // 1. ALIGNED: Release keys and return true
+        if (std::abs(yawDiff) < alignedThreshold) {
+            if (kbd.IsHolding('A')) kbd.SendKey('A', 0, false);
+            if (kbd.IsHolding('D')) kbd.SendKey('D', 0, false);
+            if (!moveVert) return true;
+        }
+        else {
+            // 2. TARGET IS LEFT (Positive Diff): Hold A, Release D
+            if (yawDiff > 0) {
+                if (kbd.IsHolding('D')) kbd.SendKey('D', 0, false); // Ensure conflicting key is up
+                if (!kbd.IsHolding('A')) kbd.SendKey('A', 0, true); // Hold turn key down
+            }
+            // 3. TARGET IS RIGHT (Negative Diff): Hold D, Release A
+            else {
+                if (kbd.IsHolding('A')) kbd.SendKey('A', 0, false);
+                if (!kbd.IsHolding('D')) kbd.SendKey('D', 0, true);
+            }
+        }
+
+        if (moveVert) {
+            // Pitch
+            // 1. ALIGNED: Release keys and return true
+            int pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
+            pixelsPitch = std::clamp(pixelsPitch, -30, 30);
+            g_LogFile << pitchDiff << " " << targetPitch << " " << currentPitch << " " << pixelsPitch << std::endl;
+            if (fabs(pitchDiff) < 0.05) {
+                return true;
+            }
+
+            mouse.PressButton(MOUSE_RIGHT);
+            // Apply Mouse Move
+            if (pixelsPitch != 0) {
+                // Recenter Cursor if it drifts too far
+                RECT rect; GetClientRect(hGameWindow, &rect);
+                POINT cursor; GetCursorPos(&cursor);
+                POINT topLeft = { rect.left, rect.top }; ClientToScreen(hGameWindow, &topLeft);
+
+                if (cursor.x < topLeft.x + 50 || cursor.x > topLeft.x + (rect.right - rect.left) - 50 ||
+                    cursor.y < topLeft.y + 50 || cursor.y > topLeft.y + (rect.bottom - rect.top) - 50) {
+
+                    POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+                    ClientToScreen(hGameWindow, &center);
+                    mouse.MoveAbsolute(center.x, center.y);
+                }
+                mouse.Move(0, pixelsPitch);
+            }
+            mouse.ReleaseButton(MOUSE_RIGHT);
+        }
+
+        return false; // Not facing yet
+    }
+
+    bool moveMouse(float zTarget, PlayerInfo& player) {
+        float pitchDiff = zTarget - player.vertRotation;
+        if (pitchDiff < 0.05) {
+            return true;
+        }
+
+        mouse.PressButton(MOUSE_RIGHT);
+        int pixelsPitch = (int)(pitchDiff * -PIXELS_PER_RADIAN_PITCH);
+        pixelsPitch = std::clamp(pixelsPitch, -30, 30);
+
+        // Apply Mouse Move
+        if (pixelsPitch != 0) {
+            // Recenter Cursor if it drifts too far
+            RECT rect; GetClientRect(hGameWindow, &rect);
+            POINT cursor; GetCursorPos(&cursor);
+            POINT topLeft = { rect.left, rect.top }; ClientToScreen(hGameWindow, &topLeft);
+
+            if (cursor.x < topLeft.x + 50 || cursor.x > topLeft.x + (rect.right - rect.left) - 50 ||
+                cursor.y < topLeft.y + 50 || cursor.y > topLeft.y + (rect.bottom - rect.top) - 50) {
+
+                POINT center = { (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2 };
+                ClientToScreen(hGameWindow, &center);
+                mouse.MoveAbsolute(center.x, center.y);
+            }
+            mouse.Move(0, pixelsPitch);
+        }
+        mouse.ReleaseButton(MOUSE_RIGHT);
+        return false;
+    }
+};

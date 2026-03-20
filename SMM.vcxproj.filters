@@ -1,0 +1,225 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="VMap">
+      <UniqueIdentifier>{305349c8-8278-4c4e-b332-c8a5023c98a8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="VMap\Headers">
+      <UniqueIdentifier>{e925dbbc-4ef6-40df-9808-4abf7cfc0b6b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Combat">
+      <UniqueIdentifier>{78a0c58d-7a95-4076-9d03-a4fef94389e8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Gathering">
+      <UniqueIdentifier>{ebd706e4-56b9-4444-92ab-30a8b5c47431}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Repair/Restock">
+      <UniqueIdentifier>{30934e21-1887-4dc3-ba52-25f9ad6b2ac4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Memory">
+      <UniqueIdentifier>{9708c2b8-6fbb-43a3-b38e-13e01b84f730}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Behaviors">
+      <UniqueIdentifier>{4bfddd62-1bd7-481e-a5ca-fcef621bf5ff}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Web Server">
+      <UniqueIdentifier>{149b64ce-567d-4126-a2ff-4c7ce5982d0c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Profile">
+      <UniqueIdentifier>{71b08981-1a82-4b22-96e1-b1092e28d747}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="dllmain.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="GameGui.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Movement.h">
+      <Filter>Header Files</Filter>
+    </ClCompile>
+    <ClCompile Include="VMapLoader.cpp">
+      <Filter>VMap</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\deflate.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzclose.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzlib.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzread.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzwrite.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\infback.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inffast.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inflate.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inftrees.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\trees.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\uncompr.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zutil.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\adler32.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\compress.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\crc32.c">
+      <Filter>VMap\Headers</Filter>
+    </ClCompile>
+    <ClCompile Include="FMapLoader.cpp">
+      <Filter>VMap</Filter>
+    </ClCompile>
+    <ClCompile Include="WebServer.cpp">
+      <Filter>Web Server</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="GameGui.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SimpleKeyboardClient.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Entity.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Vector.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Database.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MovementController.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="GoapSystem.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Camera.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SimpleMouseClient.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ScreenRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OverlayWindow.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Pathfinding2.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\crc32.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\deflate.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\gzguts.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inffast.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inffixed.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inflate.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\inftrees.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\trees.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zconf.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zlib.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\A\Downloads\SkyFire_548\Core\dep\zlib\zutil.h">
+      <Filter>VMap\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="CombatController.h">
+      <Filter>Combat</Filter>
+    </ClInclude>
+    <ClInclude Include="Combat.h">
+      <Filter>Combat</Filter>
+    </ClInclude>
+    <ClInclude Include="Gathering.h">
+      <Filter>Gathering</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryRead.h">
+      <Filter>Memory</Filter>
+    </ClInclude>
+    <ClInclude Include="WorldState.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="dllmain.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Behaviors.h">
+      <Filter>Behaviors</Filter>
+    </ClInclude>
+    <ClInclude Include="LuaAnchor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Misc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="WebServer.h">
+      <Filter>Web Server</Filter>
+    </ClInclude>
+    <ClInclude Include="ProfileInterface.h">
+      <Filter>Profile</Filter>
+    </ClInclude>
+    <ClInclude Include="ProfileLoader.h">
+      <Filter>Profile</Filter>
+    </ClInclude>
+    <ClInclude Include="Mailing.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Profile.h">
+      <Filter>Profile</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
