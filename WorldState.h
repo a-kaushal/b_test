@@ -19,15 +19,16 @@ struct ActionState {
 };
 
 struct GlobalState : public ActionState {
-    bool vendorOpen = false;
-    bool chatOpen = false;
-    bool reloaded = true;
+    bool vendorOpen  = false;
+    bool chatOpen    = false;
+    bool uiBlocking  = false; // true when any interactive UI frame is open (set by addon, slot 14)
+    bool reloaded    = true;
     DWORD bagEmptyTime = -1;
     int mapId = 0;
-    int areaId = 0; // Local Area ID (lookup from WorldMapArea.csv)
+    int areaId = 0;
     std::string mapName;
-    uint32_t mapHash; // Map name hash
-    float top, bottom, left, right = 0; // Local Map coordinates
+    uint32_t mapHash;
+    float top, bottom, left, right = 0;
     bool inMotion = false;
 };
 
@@ -102,6 +103,8 @@ struct Combat : public ActionState {
     int attackerCount = 0; // Track number of active enemies
     bool hasTarget = false; // True when the bot selects a target to attack, but has not reached within range yet
     bool reset = false;
+    bool pullExtraMobs = false; // when true, ActionCombat will aggro additional nearby enemies
+    int  extraMobLimit = 1;    // maximum simultaneous mobs to pull (including current target)
     Vector3 enemyPosition;
     ULONG_PTR targetGuidLow;
     ULONG_PTR targetGuidHigh;
@@ -114,9 +117,9 @@ struct StuckState : public ActionState {
     DWORD stuckStartTime = 0;
     DWORD lastStuckTime = 0;
 
-    // --- UPDATED TRACKING ---
-    int attemptCount = 0;           // Tracks which stage (Jump, Strafe L, Strafe R, etc.) we are on
-    DWORD lastUnstuckTime = 0;      // Tracks when we last performed an unstuck action
+    int attemptCount = 0;       // Which escape stage we are on
+    DWORD lastUnstuckTime = 0;  // When we last completed an unstuck
+    float stuckAngle = 0.0f;    // Player yaw (radians) when stuck was detected — points toward the obstacle
 };
 
 struct InteractState : public ActionState {
@@ -162,6 +165,43 @@ struct RecorderState : public ActionState {
     std::vector<Vector3> recordedPath;
 };
 
+struct HealState : public ActionState {
+    bool isHealing = false;
+};
+
+struct FleeState : public ActionState {
+    bool fleeActive = false;
+    Vector3 destination = { 0, 0, 0 };
+};
+
+struct GrindState : public ActionState {
+    bool enabled = false;
+    int index;
+    std::vector<int> mobIds;   // entry IDs to target (empty = any mob within level range)
+    bool killAllMobs = false;  // attack any hostile regardless of mob ID (level range still applies)
+    int maxLevelMod = 5;       // engage mobs up to this many levels above player
+    int minLevelMod = 0;       // do not engage mobs more than this many levels below player
+    bool canFly = false;       // allowed to use a flying mount on the route
+    bool loop = true;
+    bool lootMobs = true;      // enable looting after kills
+    int targetLevel = 0;       // stop grinding when player reaches this level (0 = no limit)
+    float pullRange = 60.0f;   // yards to scan for eligible mobs (active only once inLoop is true, or when engageAlways=true)
+    bool engageAlways = false; // when true, engage mobs within pullRange even before reaching the grind loop
+    bool inLoop = false;       // set true once the player first reaches any hotspot
+    std::string taskName;      // display name shown in logs
+    std::vector<Vector3> hotspots; // the route waypoints
+    int hotspotIndex = 0;
+    int mapId = 0;
+    std::vector<PathNode> path;
+    bool hasPath = false;
+
+    // Mobs that have failed interaction 3 times are blacklisted for 5 minutes
+    // so the bot does not keep re-selecting unattackable neutral units.
+    std::vector<ULONG_PTR> blacklistGuidLow  = {};
+    std::vector<ULONG_PTR> blacklistGuidHigh = {};
+    std::vector<DWORD>     blacklistTime     = {}; // GetTickCount() when the entry was added
+};
+
 // --- WORLD STATE (The Knowledge) ---
 struct WorldState {
     GlobalState globalState;
@@ -176,13 +216,12 @@ struct WorldState {
     InteractState interactState;
     RespawnState respawnState;
     RecorderState recorder;
+    HealState healState;
+    FleeState fleeState;
+    GrindState grindState;
 
     std::vector<GameEntity> entities;
     PlayerInfo player;
-
-    // Danger / Interrupts
-    bool isInDanger = false; // e.g., standing in fire
-    Vector3 dangerPos;       // Where the fire is
 
     bool overrideAction = false; // True if the current profile action is being overridden with the same action
 };

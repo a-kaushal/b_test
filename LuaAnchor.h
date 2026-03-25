@@ -170,6 +170,9 @@ public:
             analyzer.ReadDouble(pid, arrayPtr + 0x180, values[16]);
             analyzer.ReadDouble(pid, arrayPtr + 0x198, values[17]);
 
+            double factionVal = 0;
+            analyzer.ReadDouble(pid, arrayPtr + 0x1B0, factionVal);
+
             double prof1Id, prof1Level, prof1Max, prof2Id, prof2Level, prof2Max;
             analyzer.ReadDouble(pid, arrayPtr + 0x1C8, prof1Id);
             analyzer.ReadDouble(pid, arrayPtr + 0x1E0, prof1Level);
@@ -188,6 +191,15 @@ public:
             g_GameState->player.rawLua[22] = prof2Level;
             g_GameState->player.rawLua[23] = prof2Max;
 
+            // Populate named skill fields for gathering checks
+            // WoW skill line IDs: 182 = Herbalism, 186 = Mining
+            g_GameState->player.herbalismSkill = 0;
+            g_GameState->player.miningSkill    = 0;
+            if ((int)prof1Id == 182) g_GameState->player.herbalismSkill = (int)prof1Level;
+            if ((int)prof1Id == 186) g_GameState->player.miningSkill    = (int)prof1Level;
+            if ((int)prof2Id == 182) g_GameState->player.herbalismSkill = (int)prof2Level;
+            if ((int)prof2Id == 186) g_GameState->player.miningSkill    = (int)prof2Level;
+
             //g_LogFile << prof1Id << " " << prof1Level << " " << prof1Max << " " << prof2Id << " " << prof2Level << " " << prof2Max << std::endl;
 
             ((values[1] > 0.5) ? g_GameState->player.needRepair = true : g_GameState->player.needRepair = false);
@@ -199,11 +211,15 @@ public:
             ((values[7] > 0.5) ? g_GameState->player.isGhost = true : g_GameState->player.isGhost = false);
             ((values[10] > 0.5) ? g_GameState->player.canRespawn = true : g_GameState->player.canRespawn = false);
             ((values[11] > 0.5) ? g_GameState->player.isDeadBody = true : g_GameState->player.isDeadBody = false);
-            ((values[12] > 0.5) ? g_GameState->globalState.vendorOpen = true : g_GameState->globalState.vendorOpen = false);
-            ((values[13] > 0.5) ? g_GameState->globalState.chatOpen = true : g_GameState->globalState.chatOpen = false);
-            ((values[16] > 0.5) ? g_GameState->player.onGround = true : g_GameState->player.onGround = false);
+            ((values[12] > 0.5) ? g_GameState->globalState.vendorOpen  = true : g_GameState->globalState.vendorOpen  = false);
+            ((values[13] > 0.5) ? g_GameState->globalState.chatOpen    = true : g_GameState->globalState.chatOpen    = false);
+            ((values[14] > 0.5) ? g_GameState->globalState.uiBlocking  = true : g_GameState->globalState.uiBlocking  = false);
+            ((values[16] > 0.5) ? g_GameState->player.onGround         = true : g_GameState->player.onGround         = false);
             ((values[17] > 0.5) ? g_GameState->interactState.sellComplete = true : g_GameState->interactState.sellComplete = false);
-            //((values[14 > 0.5) ? g_LogFile << "Mail Window Open" << std::endl : g_LogFile << "Mail Window Closed" << std::endl);
+            if (factionVal >= 1.5) // 2 = Horde
+                g_ProfileSettings.playerFaction = PlayerFactions::Horde;
+            else if (factionVal >= 0.5) // 1 = Alliance
+                g_ProfileSettings.playerFaction = PlayerFactions::Alliance;
 
 
             g_GameState->player.isDead = g_GameState->player.isGhost || g_GameState->player.isDeadBody;

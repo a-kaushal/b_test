@@ -81,6 +81,9 @@ struct PlayerInfo : EntityInfo {
     bool isDeadBody; // Player is dead but not a ghost yet
     bool canRespawn; // Player ghost in reange of body and able to respawn
     double rawLua[25] = { 0 }; // Raw Lua Data for debugging
+
+    int herbalismSkill = 0; // Current herbalism skill level (0 = not learned)
+    int miningSkill    = 0; // Current mining skill level (0 = not learned)
 };
 
 struct OtherPlayerInfo : EntityInfo {
@@ -99,11 +102,17 @@ struct EnemyInfo : EntityInfo {
     float agroRange = 0;
     bool inCombat = false;
     std::string name;
-    int reaction;  // 0 = Hostile, 1 = Neutral, 2 = Friendly
-    int rank;  // (0=Normal, 1=Elite, 2=Rare Elite, 3=Boss)
+    int reaction;        // 0 = Hostile, 1 = Neutral, 2 = Friendly
+    int rank;            // (0=Normal, 1=Elite, 2=Rare Elite, 3=Boss)
     int npcFlag;
+    uint32_t unitFlags;     // creature_template unit_flags; 0x2=NON_ATTACKABLE, 0x100=IMMUNE_TO_PC, 0x02000000=NOT_SELECTABLE
+    uint32_t liveUnitFlags; // live UNIT_FIELD_FLAGS from game memory; 0x01000000=PLAYER_CONTROLLED (pet/vehicle)
+    uint32_t flagsExtra;    // creature_template flags_extra; 0x2=CIVILIAN, 0x80=TRIGGER, 0x8000=GUARD
+    uint32_t inhabitType;   // creature_template InhabitType; 1=Ground, 2=Water, 3=Ground+Water, 4=Air, 7=All
+    uint32_t creatureType;  // creature_template type; 8=CRITTER, 11=TOTEM, 12=NON_COMBAT_PET, 13=GAS_CLOUD, 14=WILD_PET
     ULONG_PTR targetGuidLow; // GUID for the unit being targetted by the entity
     ULONG_PTR targetGuidHigh;
+    ULONG_PTR summonedByGuidLow = 0; // UNIT_FIELD_SUMMONED_BY (low); non-zero if this unit was summoned by a player/NPC
 };
 
 struct ObjectInfo : EntityInfo {

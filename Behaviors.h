@@ -91,6 +91,7 @@ public:
             state->pathFollowState.hasPath = true;
             state->pathFollowState.pathIndexChange = true;
             state->pathFollowState.mapId = mapId;
+            state->waypointReturnState.flyingPath = flyingPath;
             started = true;
             return false;
         }
@@ -136,6 +137,105 @@ public:
     }
 };
 
+// Helper: Parse comma-separated integer IDs e.g. "25817, 25818, 25819"
+inline std::vector<int> ParseMobIds(const std::string& input) {
+    std::vector<int> ids;
+    std::stringstream ss(input);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+        // Trim whitespace
+        size_t s = token.find_first_not_of(" \t");
+        size_t e = token.find_last_not_of(" \t");
+        if (s != std::string::npos)
+            ids.push_back(std::stoi(token.substr(s, e - s + 1)));
+    }
+    return ids;
+}
+
+// Task: Grind Mobs
+class TaskGrind : public IProfileTask {
+    std::vector<Vector3> hotspots;
+    int              mapId;
+    std::vector<int> mobIds;
+    bool             killAllMobs;
+    bool             canFly;
+    int              maxLevelMod;
+    int              minLevelMod;
+    bool             loop;
+    bool             lootMobs;
+    int              targetLevel;
+    float            pullRange;
+    bool             engageAlways;
+    int              extraMobLimit;
+    std::string      taskName;
+    bool             started = false;
+public:
+    TaskGrind(int mapId, const std::string& hotspotsStr,
+              const std::string& mobIdsStr, bool killAllMobs,
+              bool canFly, int maxLevelMod, int minLevelMod, bool loop,
+              bool lootMobs, int targetLevel,
+              float pullRange, bool engageAlways,
+              int extraMobLimit,
+              const std::string& taskName)
+        : mapId(mapId), killAllMobs(killAllMobs), canFly(canFly),
+          maxLevelMod(maxLevelMod), minLevelMod(minLevelMod), loop(loop),
+          lootMobs(lootMobs), targetLevel(targetLevel),
+          pullRange(pullRange), engageAlways(engageAlways),
+          extraMobLimit(extraMobLimit), taskName(taskName) {
+        mobIds = ParseMobIds(mobIdsStr);
+        std::vector<Vector3> raw = ParsePathStr(hotspotsStr);
+        // Preserve hotspot density — use a gentle filter
+        hotspots = FilterPath(raw, 10.0f);
+    }
+
+    std::string GetName() const override { return taskName.empty() ? "Grind" : taskName; }
+    void OnInterrupt() override { }
+
+    bool Execute(WorldState* state) override {
+        if (started && !state->grindState.enabled) {
+            return true; // Engine disabled us — task complete
+        }
+
+        // Stop when player reaches target level
+        if (started && targetLevel > 0 && g_GameState->player.level >= targetLevel) {
+            state->grindState.enabled = false;
+            state->grindState.hasPath = false;
+            return true;
+        }
+
+        if (!started) {
+            std::vector<PathNode> emptyNav = {};
+            state->grindState.hotspots              = hotspots;
+            state->grindState.hotspotIndex          = FindClosestWaypoint(hotspots, emptyNav, g_GameState->player.position);
+            state->grindState.mobIds                = mobIds;
+            state->grindState.killAllMobs           = killAllMobs;
+            state->grindState.canFly                = canFly;
+            state->grindState.maxLevelMod           = maxLevelMod;
+            state->grindState.minLevelMod           = minLevelMod;
+            state->grindState.loop                  = loop;
+            state->grindState.lootMobs              = lootMobs;
+            state->grindState.targetLevel           = targetLevel;
+            state->grindState.pullRange             = pullRange;
+            state->grindState.engageAlways          = engageAlways;
+            state->grindState.inLoop                = false;
+            state->grindState.taskName              = taskName;
+            state->combatState.extraMobLimit        = extraMobLimit;
+            state->grindState.mapId                 = mapId;
+            state->grindState.path.clear();
+            state->grindState.index                 = 0;
+            state->grindState.enabled               = true;
+            state->grindState.hasPath               = true;
+            // Apply looting preference
+            state->lootState.enabled                = lootMobs;
+            state->combatState.enabled              = true;
+            state->waypointReturnState.flyingPath   = canFly;
+            started = true;
+            return false;
+        }
+        return false; // Running until engine disables grindState
+    }
+};
+
 // =============================================================
 // 2. HELPER CLASS (The Fix for your Profile)
 // =============================================================
@@ -151,6 +251,29 @@ public:
 
     void QueueRepair(int mapId, Vector3 loc, int npcId) {
         AddTask(std::make_shared<TaskInteract>(mapId, loc, npcId, true));
+    }
+
+    // mobIds: comma-separated entry IDs e.g. "25817, 25818". Empty = any mob in level range.
+    // killAllMobs: attack any hostile regardless of ID or level range.
+    // maxLevelMod / minLevelMod: levels above / below the player that are acceptable targets.
+    // canFly: allow a flying mount on the grind route.
+    // lootMobs: enable looting after kills (default true).
+    // targetLevel: stop when player reaches this level (0 = no limit).
+    // pullRange: scan radius in yards for eligible mobs (active only once inLoop is true, or when engageAlways=true).
+    // engageAlways: when true, engage mobs within pullRange even before reaching the grind loop.
+    // taskName: display name for logs.
+    void QueueGrind(int mapId, const std::string& hotspots,
+                    const std::string& mobIds = "",
+                    bool killAllMobs = false, bool canFly = false,
+                    int maxLevelMod = 5, int minLevelMod = 0, bool loop = true,
+                    bool lootMobs = true, int targetLevel = 0,
+                    float pullRange = 60.0f, bool engageAlways = false,
+                    const std::string& taskName = "",
+                    int extraMobLimit = 1) {
+        AddTask(std::make_shared<TaskGrind>(mapId, hotspots, mobIds, killAllMobs, canFly,
+                                            maxLevelMod, minLevelMod, loop,
+                                            lootMobs, targetLevel, pullRange, engageAlways,
+                                            extraMobLimit, taskName));
     }
 };
 

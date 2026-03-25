@@ -55,9 +55,14 @@ bool UnderAttackCheck() {
     }
 
     // No attackers found
+    // Only clear hasTarget if it was driven by an attacker (underAttack=true).
+    // Proactive targets set by ActionGrind (underAttack=false) must be preserved
+    // so ActionCombat can win the priority evaluation on the next GOAP tick.
+    if (g_GameState->combatState.underAttack) {
+        g_GameState->combatState.hasTarget = false;
+    }
     g_GameState->combatState.underAttack = false;
     g_GameState->combatState.inCombat = false;
-    g_GameState->combatState.hasTarget = false;
     return false;
 }
 

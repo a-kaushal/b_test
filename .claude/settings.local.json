@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \":*)",
+      "Bash(python3:*)",
+      "Bash(python:*)",
+      "WebSearch",
+      "WebFetch(domain:www.icy-veins.com)",
+      "WebFetch(domain:www.wowhead.com)",
+      "WebFetch(domain:www.mmo-champion.com)",
+      "WebFetch(domain:snwflake.gitlab.io)",
+      "Bash(grep -r 'CREATE TABLE.*creature_template' /c/Users/A/Downloads/SkyFire_548-main/SkyFire_548-main/Core/sql --include=*.sql)",
+      "Bash(find /c/Users/A/Downloads/SkyFire_548-main -name *world.sql -o -name *creature_template*)",
+      "Bash(grep -A 200 \"CREATE TABLE IF NOT EXISTS \\\\`creature_template\\\\`\" /c/Users/A/Downloads/SkyFire_548-main/SkyFire_548-main/Core/sql/old/5.4.8/world/SFDB_release_21.0_to_22.6/2021_07_29-02_world.sql)",
+      "Bash(grep -E '^\\\\s+`[^`]+`')",
+      "Bash(xargs grep:*)",
+      "Bash(grep -r \"MapId.*= 10\\\\b\\\\|id.*= 10\\\\b.*map\\\\|''''10''''\" C:/Users/A/Downloads/SkyFire_548-main/SkyFire_548-main/Core/sql --include=*.sql -i -l)",
+      "Bash(grep -r \"MAP_ID.*10\\\\b\\\\|10.*Onyxia\\\\|MAP.*= 10\" C:/Users/A/Downloads/SkyFire_548-main/SkyFire_548-main/Core/src --include=*.h --include=*.cpp -i)",
+      "Bash(grep -r \"10.*map\\\\|map.*10\\\\|mapId.*10\\\\b\" C:/Users/A/Downloads/SkyFire_548-main/SkyFire_548-main/Core/sql/base --include=*.sql)",
+      "Bash(grep -r \"mapId.*10\\\\b\\\\|10.*map\" C:/Users/A/Downloads/SkyFire_548-main/SkyFire_548-main/Core/src/tools/mmaps_generator --include=*.cpp --include=*.h)",
+      "Bash(grep -v \"//.*10\\\\|mapId.*[0-9][0-9][0-9]\\\\|100\\\\|106\\\\|107\\\\|108\\\\|109\")",
+      "Bash(grep -r INSERT.*mapb C:/Users/A/Downloads/SkyFire_548-main/SkyFire_548-main/Core/sql --include=*.sql -i)",
+      "Read(//c/SMM/**)",
+      "Read(//c//**)"
+    ]
+  }
+}

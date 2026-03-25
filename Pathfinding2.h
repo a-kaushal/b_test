@@ -14,6 +14,7 @@
 #include <list>
 #include <set>
 #include <utility>
+#include <tuple>
 
 // DETOUR INCLUDES
 #include "DetourNavMesh.h"
@@ -39,7 +40,8 @@ const unsigned short AREA_WATER = 0x08; // 8 (Surface)
 const unsigned short AREA_UNDERWATER = 0x10; // 16 (Sea Floor)
 const unsigned short AREA_ROAD = 0x20; // 32 (Roads)
 const unsigned short AREA_DEEP_WATER = 0x06; // 6 (Deep Water)
-const unsigned short AREA_INDOOR_UNDERGROUND = 0x0A; // 10 
+const unsigned short AREA_INDOOR_UNDERGROUND = 0x0A; // 10
+const unsigned short AREA_DANGER = 0x4000; // Runtime-only: marks polys near dangerous enemies during flee pathfinding
 
 // --- CONFIGURATION ---
 const float COLLISION_STEP_SIZE = 0.5f;    // Was 0.5f - less sampling
@@ -241,14 +243,14 @@ inline void CleanGroundPath(std::vector<PathNode>& path, int mapId) {
     }
 }
 
-std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, bool ignoreWater, bool pointAdjust = true, bool zCheck = true, float zExtent = 5.0f);
+std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, bool ignoreWater, bool pointAdjust = true, bool zCheck = true, float zExtent = 5.0f, unsigned short extraExcludeFlags = 0);
 
 class NavMesh {
 public:
     dtNavMesh* mesh = nullptr;
     dtNavMeshQuery* query = nullptr;
     int currentMapId = -1;
-    std::set<std::pair<int, int>> loadedTiles; // Tracks loaded tile coordinates (x, y)
+    std::set<std::tuple<int, int, int>> loadedTiles; // Tracks loaded tile coordinates (x, y, layer)
 
     NavMesh() { query = dtAllocNavMeshQuery(); }
     ~NavMesh() { dtFreeNavMesh(mesh); dtFreeNavMeshQuery(query); }
@@ -401,6 +403,8 @@ public:
 
         float searchExt[3] = { 2.0f, 5.0f, 2.0f };
 
+        int nanCount = 0;
+
         for (size_t i = 1; i < path.size() - 1; ++i) {
             if (path[i].type != PATH_GROUND) continue;
 
@@ -424,13 +428,16 @@ public:
                 if (dtStatusSucceed(query->findDistanceToWall(polyRef, nearestPt, 10.0f, &filter, &hitDist, hitPos, hitNormal))) {
 
                     // 3. NAN / INFINITY CHECKS
+                    // NaN from findDistanceToWall is normal on open terrain (no wall within
+                    // search radius) or near tile boundaries. The waypoint position itself is
+                    // valid — just skip the nudge and count for a single summary log below.
                     bool validMath = std::isfinite(hitDist) &&
                         std::isfinite(hitNormal[0]) &&
                         std::isfinite(hitNormal[1]) &&
                         std::isfinite(hitNormal[2]);
 
                     if (!validMath) {
-                        if (DEBUG_PATHFINDING) g_LogFile << "[RefinePath] Warning: NaN detected at waypoint " << i << ". Skipping." << std::endl;
+                        nanCount++;
                         continue;
                     }
 
@@ -468,6 +475,11 @@ public:
                     }
                 }
             }
+        }
+
+        if (DEBUG_PATHFINDING && nanCount > 0) {
+            g_LogFile << "[RefinePath] " << nanCount << "/" << (path.size() - 2)
+                      << " waypoints skipped wall-nudge (open terrain / tile boundary)." << std::endl;
         }
     }
 
@@ -1089,10 +1101,10 @@ public:
 
                         // Check if this tile is needed
                         if (neededTiles.count({ dtHeader.x, dtHeader.y })) {
-                            // Only load if not already loaded
-                            if (loadedTiles.find({ dtHeader.x, dtHeader.y }) == loadedTiles.end()) {
+                            // Only load if not already loaded (keyed by x,y,layer to support multi-layer tiles)
+                            if (loadedTiles.find({ dtHeader.x, dtHeader.y, dtHeader.layer }) == loadedTiles.end()) {
                                 if (AddTile(entry.path().string())) {
-                                    loadedTiles.insert({ dtHeader.x, dtHeader.y });
+                                    loadedTiles.insert({ dtHeader.x, dtHeader.y, dtHeader.layer });
                                     tilesLoadedCount++;
                                 }
                             }
@@ -1108,31 +1120,16 @@ public:
                     // But for 'LoadAll' performance, we might skip peeking if we know it's a fresh map.
 
                     if (isNewMap) {
-                        // Just load everything
-                        if (AddTile(entry.path().string())) {
-                            // Ideally we'd update loadedTiles, but peeking every file is slow?
-                            // User requirement implies sparse loading is the optimization.
-                            // We will just let AddTile run. We won't maintain loadedTiles accurately for LoadAll 
-                            // because we don't want to peek 1000 files.
-                            // BUT: If we switch from LoadAll -> Sparse, loadedTiles will be empty.
-                            // This suggests Sparse Logic assumes it knows what's loaded.
-                            // If we want to support mixed usage, we should maintain loadedTiles.
-                            // Let's take the hit and peek, or rely on Detour rejection.
-                            // Simpler: If loadAll, we clear loadedTiles (done in Clear) and just don't track them?
-                            // No, user said "Keep the option...".
-                            // Let's implement the loop with peeking to keep state consistent.
+                        std::ifstream file(entry.path().string(), std::ios::binary);
+                        if (file.is_open()) {
+                            MmapTileHeader mmapHeader;
+                            file.read((char*)&mmapHeader, sizeof(MmapTileHeader));
+                            dtMeshHeader dtHeader;
+                            file.read((char*)&dtHeader, sizeof(dtMeshHeader));
+                            file.close();
 
-                            std::ifstream file(entry.path().string(), std::ios::binary);
-                            if (file.is_open()) {
-                                MmapTileHeader mmapHeader;
-                                file.read((char*)&mmapHeader, sizeof(MmapTileHeader));
-                                dtMeshHeader dtHeader;
-                                file.read((char*)&dtHeader, sizeof(dtMeshHeader));
-                                file.close();
-
-                                if (AddTile(entry.path().string())) {
-                                    loadedTiles.insert({ dtHeader.x, dtHeader.y });
-                                }
+                            if (AddTile(entry.path().string())) {
+                                loadedTiles.insert({ dtHeader.x, dtHeader.y, dtHeader.layer });
                             }
                         }
                     }
@@ -1147,9 +1144,9 @@ public:
                             file.read((char*)&dtHeader, sizeof(dtMeshHeader));
                             file.close();
 
-                            if (loadedTiles.find({ dtHeader.x, dtHeader.y }) == loadedTiles.end()) {
+                            if (loadedTiles.find({ dtHeader.x, dtHeader.y, dtHeader.layer }) == loadedTiles.end()) {
                                 if (AddTile(entry.path().string())) {
-                                    loadedTiles.insert({ dtHeader.x, dtHeader.y });
+                                    loadedTiles.insert({ dtHeader.x, dtHeader.y, dtHeader.layer });
                                 }
                             }
                         }
@@ -1173,6 +1170,7 @@ public:
         file.read((char*)&header, sizeof(MmapTileHeader));
         unsigned char* data = (unsigned char*)dtAlloc(header.size, DT_ALLOC_PERM);
         file.read((char*)data, header.size);
+
         dtMeshHeader* meshHeader = (dtMeshHeader*)data;
         int tileIndex = meshHeader->x + meshHeader->y * 64;
         dtTileRef tileRefHint = ((dtTileRef)tileIndex) << 20;
@@ -1188,8 +1186,18 @@ public:
         std::vector<PathNode> output;
         output.push_back(input[0]);
         dtQueryFilter filter;
-        filter.setIncludeFlags(0xFFFF);
+        // Match FindPath costs so moveAlongSurface stays on the same polygon type
+        // that was chosen during pathfinding (avoids snapping intermediate waypoints
+        // onto high-cost areas that the original path avoided).
+        filter.setIncludeFlags(AREA_GROUND | AREA_ROAD | AREA_WATER | AREA_DEEP_WATER | AREA_MAGMA | AREA_SLIME | AREA_UNDERWATER | AREA_INDOOR_UNDERGROUND);
         filter.setExcludeFlags(0);
+        filter.setAreaCost(1,  1.0f);
+        filter.setAreaCost(32, 1.0f);
+        filter.setAreaCost(2,  200.0f);
+        filter.setAreaCost(4,  200.0f);
+        filter.setAreaCost(8,  2.5f);
+        filter.setAreaCost(6,  10.0f);
+        filter.setAreaCost(16, 4.0f);
 
         for (size_t i = 0; i < input.size() - 1; ++i) {
             Vector3 start = input[i].pos;
@@ -1295,6 +1303,57 @@ public:
         return -99999.0f;
     }
 
+    // Marks all navmesh polygons whose 2D centre falls within `radius` yards of `center`
+    // with `flagToAdd`, saving the original flags so they can be restored after pathfinding.
+    // Detour coordinate convention: (detour.x, detour.y, detour.z) == (wow.y, wow.z, wow.x)
+    void MarkPolysInRadius(const Vector3& center, float radius, unsigned short flagToAdd,
+                           std::vector<std::pair<dtPolyRef, unsigned short>>& savedFlags) {
+        if (!mesh || !query) return;
+
+        float centerDt[3] = { center.y, center.z, center.x };
+        float halfExtents[3] = { radius, radius, radius };
+
+        dtQueryFilter filter;
+        filter.setIncludeFlags(0xFFFF);
+        filter.setExcludeFlags(0);
+
+        dtPolyRef polys[512];
+        int polyCount = 0;
+        query->queryPolygons(centerDt, halfExtents, &filter, polys, &polyCount, 512);
+
+        for (int i = 0; i < polyCount; i++) {
+            const dtMeshTile* tile = nullptr;
+            const dtPoly* poly = nullptr;
+            if (dtStatusFailed(mesh->getTileAndPolyByRef(polys[i], &tile, &poly))) continue;
+            if (!tile || !poly) continue;
+
+            // Compute polygon centre in WoW coordinates
+            // Detour verts layout: [detour.x, detour.y, detour.z] == [wow.y, wow.z, wow.x]
+            float sumX = 0, sumY = 0;
+            for (int v = 0; v < poly->vertCount; v++) {
+                const float* vert = &tile->verts[poly->verts[v] * 3];
+                sumX += vert[2]; // detour.z == wow.x
+                sumY += vert[0]; // detour.x == wow.y
+            }
+            float polyCentreX = sumX / poly->vertCount;
+            float polyCentreY = sumY / poly->vertCount;
+
+            float dx = polyCentreX - center.x;
+            float dy = polyCentreY - center.y;
+            if (sqrtf(dx * dx + dy * dy) > radius) continue;
+
+            savedFlags.push_back({ polys[i], poly->flags });
+            mesh->setPolyFlags(polys[i], poly->flags | flagToAdd);
+        }
+    }
+
+    // Restores polygon flags saved by MarkPolysInRadius.
+    void RestorePolyFlags(const std::vector<std::pair<dtPolyRef, unsigned short>>& savedFlags) {
+        for (const auto& entry : savedFlags) {
+            mesh->setPolyFlags(entry.first, entry.second);
+        }
+    }
+
     Vector3 GetPolyNormal(dtPolyRef polyRef) {
         float normal[3] = { 0, 0, 0 };
         if (!mesh || polyRef == 0) return Vector3(0, 0, 1);
@@ -1320,9 +1379,145 @@ public:
         // Convert Detour (Y, Z, X) back to WoW (X, Y, Z)
         return Vector3(normal[2], normal[0], normal[1]);
     }
+
+    // -----------------------------------------------------------------------
+    // GROUND PATH SIMPLIFICATION via NavMesh raycast (string-pull pass 2)
+    //
+    // findStraightPath already does one string-pull over the polygon corridor,
+    // but it is limited by the corridor itself.  After that, any waypoint that
+    // has clear navmesh line-of-sight from a predecessor can be removed.
+    //
+    // Algorithm (greedy forward scan, O(n)):
+    //   anchor = first point
+    //   scan forward; for each candidate try dtNavMeshQuery::raycast from anchor
+    //     t >= 1.0  -> clear LoS, keep scanning (candidate becomes new furthest)
+    //     t <  1.0  -> blocked, emit previous furthest, set it as new anchor
+    //   always emit last point
+    //
+    // This collapses long straight runs over open terrain into two waypoints
+    // and keeps only the true turning points near obstacles.
+    // -----------------------------------------------------------------------
+    std::vector<PathNode> SimplifyGroundPath(const std::vector<PathNode>& input) {
+        if (input.size() <= 2 || !query || !mesh) return input;
+
+        dtQueryFilter filter;
+        filter.setIncludeFlags(AREA_GROUND | AREA_ROAD | AREA_WATER | AREA_DEEP_WATER |
+                               AREA_INDOOR_UNDERGROUND | AREA_MAGMA | AREA_SLIME);
+        filter.setExcludeFlags(0);
+        filter.setAreaCost(1,  1.0f);
+        filter.setAreaCost(32, 1.0f);
+        filter.setAreaCost(8,  2.5f);
+        filter.setAreaCost(6,  50.0f);
+
+        const float extent[3] = { 2.0f, 5.0f, 2.0f };
+
+        std::vector<PathNode> result;
+        result.reserve(input.size());
+        result.push_back(input[0]);
+
+        size_t anchor = 0;
+        while (anchor < input.size() - 1) {
+            float anchorDt[3] = { input[anchor].pos.y, input[anchor].pos.z, input[anchor].pos.x };
+            dtPolyRef anchorRef = 0;
+            float anchorPt[3]  = { 0, 0, 0 };
+
+            if (dtStatusFailed(query->findNearestPoly(anchorDt, extent, &filter, &anchorRef, anchorPt))
+                || anchorRef == 0) {
+                // Can't find a poly for this anchor — just include next and advance
+                result.push_back(input[anchor + 1]);
+                anchor++;
+                continue;
+            }
+
+            size_t furthest = anchor + 1;
+
+            for (size_t j = anchor + 2; j < input.size(); j++) {
+                float targetDt[3] = { input[j].pos.y, input[j].pos.z, input[j].pos.x };
+                float t           = 0.0f;
+                float hitNormal[3]= { 0, 0, 0 };
+                dtPolyRef polys[64];
+                int polyCount     = 0;
+
+                dtStatus st = query->raycast(anchorRef, anchorPt, targetDt,
+                                             &filter, &t, hitNormal,
+                                             polys, &polyCount, 64);
+
+                if (dtStatusSucceed(st) && t >= 1.0f) {
+                    // Navmesh LoS is clear, but also verify the physical straight line
+                    // doesn't cross a cave wall/ceiling. The bot walks in straight lines
+                    // between waypoints, so navmesh topology alone is not sufficient.
+                    if (!CheckFMapLine(currentMapId,
+                            input[anchor].pos.x, input[anchor].pos.y, input[anchor].pos.z,
+                            input[j].pos.x, input[j].pos.y, input[j].pos.z, false)) {
+                        furthest = j; // Both navmesh and physical LoS clear
+                    } else {
+                        break; // Physical wall in the way — stop simplifying
+                    }
+                } else {
+                    break;        // blocked — stop looking further ahead
+                }
+            }
+
+            result.push_back(input[furthest]);
+            anchor = furthest;
+        }
+
+        return result;
+    }
 };
 
-static NavMesh globalNavMesh;
+inline NavMesh globalNavMesh;
+
+// -------------------------------------------------------------------------
+// GROUND PATH SUBDIVISION
+//
+// Adds intermediate waypoints along each segment so the bot always has a
+// nearby target to steer toward on hilly terrain.  Unlike SubdivideOnMesh
+// (which used moveAlongSurface and could deviate from the straight line),
+// this interpolates purely along the 2D straight line between waypoints and
+// snaps each intermediate point's Z to the FMap floor height.  This keeps
+// the horizontal path exactly as Detour planned it.
+// -------------------------------------------------------------------------
+inline std::vector<PathNode> SubdivideGroundPath(const std::vector<PathNode>& input,
+                                                  int mapId,
+                                                  float stepSize = 10.0f) {
+    if (input.size() < 2) return input;
+
+    std::vector<PathNode> output;
+    output.reserve(input.size() * 3);
+    output.push_back(input[0]);
+
+    for (size_t i = 0; i + 1 < input.size(); ++i) {
+        const Vector3& a = input[i].pos;
+        const Vector3& b = input[i + 1].pos;
+
+        float dx   = b.x - a.x;
+        float dy   = b.y - a.y;
+        float dist = std::sqrt(dx * dx + dy * dy); // 2D distance
+
+        int steps = (int)(dist / stepSize);
+        if (steps > 0) {
+            float invDist = 1.0f / dist;
+            float dirX    = dx * invDist;
+            float dirY    = dy * invDist;
+
+            for (int j = 1; j <= steps; ++j) {
+                float t  = (float)j * stepSize;
+                Vector3 pt(a.x + dirX * t, a.y + dirY * t, a.z);
+
+                // Snap Z to FMap floor so the waypoint sits on the actual terrain
+                float groundZ = GetFMapFloorHeight(mapId, pt.x, pt.y, pt.z + 5.0f, true);
+                if (groundZ > -90000.0f) pt.z = groundZ + 0.5f;
+
+                output.push_back(PathNode(pt, PATH_GROUND));
+            }
+        }
+
+        output.push_back(input[i + 1]);
+    }
+
+    return output;
+}
 
 inline bool IsPointIndoors(const Vector3& pos, int mapId) {
     if (!globalNavMesh.mesh || !globalNavMesh.query) return false;
@@ -1355,8 +1550,18 @@ inline bool IsPointIndoors(const Vector3& pos, int mapId) {
     return false;
 }
 
-inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, bool ignoreWater, bool pointAdjust, bool zCheck, float zExtent) {
-    if (!globalNavMesh.query || !globalNavMesh.mesh) return {};
+inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, bool ignoreWater, bool pointAdjust, bool zCheck, float zExtent, unsigned short extraExcludeFlags) {
+    if (!globalNavMesh.query || !globalNavMesh.mesh) {
+        g_LogFile << "[FindPath] FAIL: No NavMesh query/mesh loaded (mapId=" << globalNavMesh.currentMapId << ")" << std::endl;
+        return {};
+    }
+
+    if (DEBUG_PATHFINDING) {
+        g_LogFile << "[FindPath] start=(" << start.x << "," << start.y << "," << start.z
+                  << ") end=(" << end.x << "," << end.y << "," << end.z
+                  << ") mapId=" << globalNavMesh.currentMapId
+                  << " zExtent=" << zExtent << std::endl;
+    }
 
     // --- ESCAPE LOGIC FOR GROUND PATHS ---
     // If the start point is inside an obstacle or safety margin, move it out.
@@ -1367,7 +1572,30 @@ inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, 
     int mapId = globalNavMesh.currentMapId; // Use currently loaded map
 
     // --- ESCAPE LOGIC: USE UNIVERSAL SPIRAL ---
-    if ((!globalNavMesh.IsClearSafePoint(actualStart, mapId)) && pointAdjust) {
+    // Skip if the start is already on the navmesh. Detour is fully 3D-aware and
+    // will path correctly along cave floors / multi-level geometry without needing
+    // FMap ray-cast escape tricks. IsClearSafePoint fires horizontal rays that hit
+    // cave walls and incorrectly relocates the start outside the cave.
+    bool startOnNavMesh = false;
+    float preNearPt[3] = { 0, 0, 0 };
+    if (globalNavMesh.query) {
+        dtQueryFilter preFilter;
+        preFilter.setIncludeFlags(0xffff); // Accept any polygon — just checking if we're on the mesh
+        preFilter.setExcludeFlags(0);
+        float preExt[3] = { 5.0f, zExtent, 5.0f };
+        float prePt[3] = { actualStart.y, actualStart.z, actualStart.x };
+        dtPolyRef preRef = 0;
+        globalNavMesh.query->findNearestPoly(prePt, preExt, &preFilter, &preRef, preNearPt);
+        startOnNavMesh = (preRef != 0);
+        if (DEBUG_PATHFINDING) {
+            g_LogFile << "[Escape] startOnNavMesh=" << startOnNavMesh
+                      << " preRef=" << preRef
+                      << " playerZ=" << actualStart.z
+                      << " nearMeshZ=" << preNearPt[1] // Detour Y = WoW Z
+                      << " isClear=" << globalNavMesh.IsClearSafePoint(actualStart, mapId) << std::endl;
+        }
+    }
+    if ((!globalNavMesh.IsClearSafePoint(actualStart, mapId)) && pointAdjust && !startOnNavMesh) {
         if (DEBUG_PATHFINDING) {
             g_LogFile << "[Ground] Start point unsafe/blocked. Seeking escape..." << std::endl;
         }
@@ -1375,47 +1603,51 @@ inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, 
 
         // If a safe point was found
         if (safeStart.x != 0.0f || safeStart.y != 0.0f || safeStart.z != 0.0f) {
+            float escapeDist = actualStart.Dist3D(safeStart);
             actualStart = safeStart;
             if (DEBUG_PATHFINDING) {
-                g_LogFile << "[Ground] Escaped to: " << actualStart.x << ", " << actualStart.y << ", " << actualStart.z << std::endl;
+                g_LogFile << "[Ground] Escaped to: " << actualStart.x << ", " << actualStart.y << ", " << actualStart.z
+                          << " (moved " << escapeDist << " yards)" << std::endl;
             }
         }
+    } else if (DEBUG_PATHFINDING && !globalNavMesh.IsClearSafePoint(actualStart, mapId)) {
+        g_LogFile << "[Escape] Skipped escape — startOnNavMesh=true, playerZ=" << actualStart.z
+                  << " nearMeshZ=" << preNearPt[1] << std::endl;
     }
 
     float endGround = GetFMapFloorHeight(mapId, actualEnd.x, actualEnd.y, actualEnd.z, true);
     if (endGround > -90000.0f && fabs(endGround - actualEnd.z) < GROUND_HEIGHT_THRESHOLD) {
-        actualEnd.z = endGround + 1.0f; // Changed from MIN_CLEARANCE + 1.0f
-        //end.z = actualEnd.z;
+        actualEnd.z = endGround + 1.0f;
         if (DEBUG_PATHFINDING) {
-            g_LogFile << "Goal is on ground, adjusted end height to: " << actualEnd.z
-                << " (ground: " << endGround << ")" << std::endl;
+            g_LogFile << "[FindPath] Goal adjusted: end.z=" << actualEnd.z << " (FMap ground=" << endGround << ")" << std::endl;
         }
+    }
+    else if (DEBUG_PATHFINDING) {
+        g_LogFile << "[FindPath] No end Z adjust: FMap ground=" << endGround << " end.z=" << actualEnd.z << std::endl;
+    }
+
+    if (DEBUG_PATHFINDING) {
+        g_LogFile << "[FindPath] actualStart=(" << actualStart.x << "," << actualStart.y << "," << actualStart.z
+                  << ") actualEnd=(" << actualEnd.x << "," << actualEnd.y << "," << actualEnd.z << ")" << std::endl;
     }
 
     // -------------------------------------------
 
     dtQueryFilter filter;
 
-    // 1. DEFINE COSTS
-    // "Preferring" roads means penalizing everything else.
-    // Cost 1.0 is normal. Cost 2.0 means "feels like double the distance".
+    // Area travel costs.  Cost 1.0 = normal speed; higher = Detour treats it as farther away.
+    // Keep ground and road at 1.0 so the planner picks the geometrically shortest path
+    // instead of hunting for roads.  Any road preference causes zigzag detours across
+    // open terrain when road polygons are scattered nearby.
+    filter.setAreaCost(1,  1.0f);   // AREA_GROUND   — normal terrain, baseline cost
+    filter.setAreaCost(32, 1.0f);   // AREA_ROAD     — no special preference (roads don't make you faster on foot)
+    filter.setAreaCost(2,  200.0f); // AREA_MAGMA    — deadly, avoid
+    filter.setAreaCost(4,  200.0f); // AREA_SLIME    — deadly, avoid
+    filter.setAreaCost(8,  2.5f);   // AREA_WATER    — swimming is slower than running
+    filter.setAreaCost(6,  50.0f);  // AREA_DEEP_WATER — very slow, strongly avoid
 
-    // Make standard ground twice as "expensive" as a road
-    filter.setAreaCost(1, 5.0f);   // AREA_GROUND (ID 1)
-
-    // Keep Road at standard cost (Preferred)
-    filter.setAreaCost(32, 1.0f);  // AREA_ROAD (ID 32)
-
-    // Set high penalties for bad terrain so we only use them if absolutely necessary
-    filter.setAreaCost(2, 200.0f);  // AREA_MAGMA (ID 2)
-    filter.setAreaCost(4, 200.0f);  // AREA_SLIME (ID 4)
-
-    filter.setAreaCost(8, 5.0f);   // AREA_WATER (ID 8)
-    filter.setAreaCost(6, 100.0f);   // AREA_DEEP_WATER (ID 8)
-
-    // If we allow water, make it sluggish (like 3x distance)
     if (!ignoreWater) {
-        filter.setAreaCost(16, .0f);  // AREA_UNDERWATER (ID 16)
+        filter.setAreaCost(16, 4.0f);  // AREA_UNDERWATER — slowest walkable surface
     }
 
     // --- UPDATED FILTERING LOGIC ---
@@ -1428,25 +1660,72 @@ inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, 
     }
 
     filter.setIncludeFlags(includeFlags);
-    filter.setExcludeFlags(0);
+    filter.setExcludeFlags(extraExcludeFlags);
 
     dtPolyRef startRef = 0, endRef = 0;
     float startPt[3], endPt[3];
-    float detourStart[3] = { start.y, start.z, start.x };
-    float detourEnd[3] = { end.y, end.z, end.x };
+    float detourStart[3] = { actualStart.y, actualStart.z, actualStart.x };
+    float detourEnd[3] = { actualEnd.y, actualEnd.z, actualEnd.x };
     // Reduced from { 500.0f, 1000.0f, 500.0f } to prevent snapping through walls
     float extent[3] = { 5.0f, zExtent, 5.0f };
 
-    globalNavMesh.query->findNearestPoly(detourStart, extent, &filter, &startRef, startPt);
-    globalNavMesh.query->findNearestPoly(detourEnd, extent, &filter, &endRef, endPt);
+    if (DEBUG_PATHFINDING) {
+        g_LogFile << "[FindPath] Querying polys: detourStart=(" << detourStart[0] << "," << detourStart[1] << "," << detourStart[2]
+                  << ") detourEnd=(" << detourEnd[0] << "," << detourEnd[1] << "," << detourEnd[2]
+                  << ") extent=(" << extent[0] << "," << extent[1] << "," << extent[2] << ")" << std::endl;
+    }
 
-    // --- DEBUGGING: Why is path empty? ---
+    globalNavMesh.query->findNearestPoly(detourStart, extent, &filter, &startRef, startPt);
+    globalNavMesh.query->findNearestPoly(detourEnd,   extent, &filter, &endRef,   endPt);
+
+    // If end poly not found, retry with progressively wider XZ extents.
+    // Only accept if the snapped point is within 10 yards of the intended target —
+    // a wider snap means we've crossed into a different NavMesh region and the
+    // resulting path segment would be wrong.
+    if (!endRef) {
+        static const float FALLBACK_EXTENTS[] = { 10.0f, 20.0f, 50.0f };
+        const float MAX_SNAP_DIST = 10.0f;
+        for (float fe : FALLBACK_EXTENTS) {
+            float wideExtent[3] = { fe, zExtent, fe };
+            globalNavMesh.query->findNearestPoly(detourEnd, wideExtent, &filter, &endRef, endPt);
+            if (endRef) {
+                float dx = endPt[0] - detourEnd[0];
+                float dz = endPt[2] - detourEnd[2];
+                float snapDist = std::sqrt(dx * dx + dz * dz);
+                if (snapDist <= MAX_SNAP_DIST) {
+                    if (DEBUG_PATHFINDING) g_LogFile << "[FindPath] End poly found with wider extent=" << fe << " snapDist=" << snapDist << std::endl;
+                    break;
+                }
+                // Snapped too far — reject and keep searching
+                endRef = 0;
+            }
+        }
+    }
+
+    if (DEBUG_PATHFINDING) {
+        g_LogFile << "[FindPath] startRef=" << startRef << " snappedStart=(" << startPt[0] << "," << startPt[1] << "," << startPt[2] << ")"
+                  << " endRef=" << endRef   << " snappedEnd=("   << endPt[0]   << "," << endPt[1]   << "," << endPt[2]   << ")" << std::endl;
+    }
+
+    auto logTileStatus = [&](const Vector3& pos, const char* label) {
+        int ttx, tty;
+        globalNavMesh.GetTileCoords(pos, ttx, tty);
+        // Check the 3x3 grid around the expected tile
+        int loadedCount = 0;
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dy = -1; dy <= 1; ++dy)
+                if (globalNavMesh.mesh->getTileAt(ttx + dx, tty + dy, 0)) ++loadedCount;
+        g_LogFile << "[FindPath] " << label << " pos=(" << pos.x << "," << pos.y << "," << pos.z
+                  << ") GetTileCoords=(" << ttx << "," << tty << ")"
+                  << " tiles loaded in 3x3=" << loadedCount << "/9" << std::endl;
+    };
+
     if (!startRef) {
-        if (DEBUG_PATHFINDING) g_LogFile << "[FindPath] FAIL: Could not find NavMesh near START point." << std::endl;
+        logTileStatus(actualStart, "START FAIL");
         return {};
     }
     if (!endRef) {
-        if (DEBUG_PATHFINDING) g_LogFile << "[FindPath] FAIL: Could not find NavMesh near END point." << std::endl;
+        logTileStatus(actualEnd, "END FAIL");
         return {};
     }
 
@@ -1479,13 +1758,20 @@ inline std::vector<PathNode> FindPath(const Vector3& start, const Vector3& end, 
     for (int i = 0; i < straightPathCount; ++i) {
         result.push_back(PathNode(
             Vector3(straightPath[i * 3 + 2], straightPath[i * 3 + 0], straightPath[i * 3 + 1]),
-            PATH_GROUND // NavMesh paths are always GROUND
+            PATH_GROUND
         ));
     }
-    // Add goal if final point is not near goal (Force it to attempt the final stretch)
+    // Ensure the destination is included even if findStraightPath stopped short
     if (result.back().pos.Dist3D(end) > 2.0f) {
         result.push_back(PathNode(end, PATH_GROUND));
     }
+
+    // Raycast simplification pass: remove any intermediate waypoints that have
+    // clear navmesh line-of-sight from their predecessor.  This is the standard
+    // Detour post-process step and is what eliminates unnecessary zigzag that
+    // comes from polygon-edge turn points in the corridor.
+    result = globalNavMesh.SimplifyGroundPath(result);
+
     return result;
 }
 
@@ -1744,9 +2030,6 @@ inline std::vector<PathNode> Calculate3DFlightPath(Vector3& start, Vector3& end,
         }
         else {
             path.push_back(PathNode(flightGoal, PATH_AIR));
-        }
-        for (int i = 0; i < path.size(); i++) {
-            g_LogFile << path[i].pos.x << " " << path[i].pos.y << " " << path[i].pos.z << " " << std::endl;
         }
         return path;
     }
@@ -2460,11 +2743,18 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
 
     // If area is mountable -> Strictly try Flying.
     // If area is NOT mountable -> Strictly try Ground.
-    bool attemptFlight = (canMount && canFly && inputPath.back().Dist3D(startPos) > 20.0f) || isFlying || g_GameState->player.flyingMounted;
+    // flyingMounted only contributes when canFly is explicitly requested.
+    // Without this guard, a mounted player always gets a flight path even when
+    // the caller passes canFly=false (e.g. ActionCombat always wants a ground path).
+    bool attemptFlight = (canMount && canFly && inputPath.back().Dist3D(startPos) > 20.0f) || isFlying || (canFly && g_GameState->player.flyingMounted);
 
-    // Log the decision
     if (DEBUG_PATHFINDING) {
-        g_LogFile << "[Pathfinding] Overhaul Mode: " << (attemptFlight ? "FLIGHT (Area Mountable)" : "GROUND (Area Not Mountable)") << std::endl;
+        g_LogFile << "[CalculatePath] mode=" << (attemptFlight ? "FLIGHT" : "GROUND")
+                  << " canFly=" << canFly << " isFlying=" << isFlying
+                  << " canMount=" << canMount << " flyingMounted=" << (g_GameState ? g_GameState->player.flyingMounted : false)
+                  << " startPos=(" << startPos.x << "," << startPos.y << "," << startPos.z << ")"
+                  << " mapId=" << mapId
+                  << " hotspots=" << inputPath.size() << std::endl;
     }
     // ------------------------------------------------
 
@@ -2473,6 +2763,12 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
         for (int i = currentIndex; i < inputPath.size(); ++i) modifiedInput.push_back(inputPath[i]);
     }
     else {
+        // Always begin from the player's actual position so the first segment is
+        // player→hotspot[currentIndex] rather than hotspot[currentIndex]→hotspot[currentIndex+1].
+        // Without this, each hotspot node itself becomes a path start-point which the
+        // ground pathfinder treats as unsafe/blocked (hotspot Z values sit at or just
+        // below the NavMesh surface), triggering the escape routine on every segment.
+        modifiedInput.push_back(startPos);
         for (int i = currentIndex; i < inputPath.size(); ++i) modifiedInput.push_back(inputPath[i]);
         for (int i = 0; i < currentIndex; ++i) modifiedInput.push_back(inputPath[i]);
     }
@@ -2497,9 +2793,15 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
     }
 
     // Sparse loading of only needed tiles
+    if (DEBUG_PATHFINDING) {
+        g_LogFile << "[CalculatePath] LoadMap mapId=" << mapId << " loadPoints=" << mapLoadPoints.size() << std::endl;
+    }
     if (!globalNavMesh.LoadMap(mmapFolder, mapId, &mapLoadPoints, true)) {
-        g_LogFile << "Load Map failed" << std::endl;
+        g_LogFile << "[CalculatePath] LoadMap FAILED mapId=" << mapId << std::endl;
         return {};
+    }
+    if (DEBUG_PATHFINDING) {
+        g_LogFile << "[CalculatePath] LoadMap OK. NavMesh currentMapId=" << globalNavMesh.currentMapId << std::endl;
     }
 
     size_t lookahead = modifiedInput.size() - 1;
@@ -2541,14 +2843,14 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
 
                 // --- VALIDATION: Check Final Point ---
                 if (segment.empty()) {
-                    g_LogFile << "[Pathfinding] Ground path failed (Empty path generated)." << std::endl;
-                    return {}; // STRICT FAILURE -> Stop Script
+                    if (DEBUG_PATHFINDING) g_LogFile << "[Pathfinding] Ground segment " << i << " no NavMesh coverage, skipping." << std::endl;
+                    continue; // Skip this segment — don't abort the entire route
                 }
 
                 if (segment.back().pos.Dist3D(end) > pathThreshold) {
-                    g_LogFile << "[Pathfinding] Ground path incomplete. Final point is "
-                        << segment.back().pos.Dist3D(end) << " yards from destination (Threshold: " << pathThreshold << ")." << std::endl;
-                    return {}; // STRICT FAILURE -> Stop Script
+                    if (DEBUG_PATHFINDING) g_LogFile << "[Pathfinding] Ground segment " << i << " endpoint off by "
+                        << segment.back().pos.Dist3D(end) << " yards, skipping." << std::endl;
+                    continue; // Skip rather than abort
                 }
             }
 
@@ -2578,49 +2880,30 @@ inline std::vector<PathNode> CalculatePath(const std::vector<Vector3>& inputPath
     // It pushes the bot towards the center (1.0y) without blocking the path.
     // If you use a value > 1.0f, you might block the bot from passing through narrow doors.
 
-    if (!attemptFlight) {
-        for (int i = 0; i < stitchedPath.size(); i++) {
-            //g_LogFile << "Pre: " << stitchedPath[i].pos.x << " " << stitchedPath[i].pos.y << " " << stitchedPath[i].pos.z << " " << std::endl;
-        }
-        globalNavMesh.RefinePathClearance(stitchedPath, 0.7f, mapId);
-        for (int i = 0; i < stitchedPath.size(); i++) {
-            //g_LogFile << "Post: " << stitchedPath[i].pos.x << " " << stitchedPath[i].pos.y << " " << stitchedPath[i].pos.z << " " << std::endl;
-        }
-    }
-
-    // Optional: Keep NudgeGroundPath only if RefinePathClearance isn't enough, 
-    // but RefinePathClearance is generally superior for wall collisions.
-    // stitchedPath = NudgeGroundPath(stitchedPath, 1.0f, mapId);
-
-    // --- SUBDIVISION BASED ON MODE ---
+    // --- SUBDIVISION AND CLEANUP BASED ON MODE ---
     if (attemptFlight) {
-        // Subdivide for flight (simple linear interpolation + ground clearance check)
         stitchedPath = SubdivideFlightPath(stitchedPath, mapId);
-
-        // Optional: Clean only GROUND nodes in flight path
         for (auto& node : stitchedPath) {
             if (node.type == PATH_GROUND) {
                 float realZ = GetFMapFloorHeight(mapId, node.pos.x, node.pos.y, node.pos.z + 5.0f, true);
-                if (realZ > -90000.0f && node.pos.z < realZ + 0.5f) {
-                    node.pos.z = realZ + 0.5f;
-                }
+                if (realZ > -90000.0f && node.pos.z < realZ + 0.5f) node.pos.z = realZ + 0.5f;
             }
         }
-        // --- CLEAN UP STRAIGHT LINES ---
-        // This removes the excessive waypoint density from Subdivision 
-        // where it isn't needed (straight lines), but keeps it for curves/terrain.
-        // Pass 25.0f to enforce minimum spacing
         stitchedPath = OptimizeFlightPath(stitchedPath, 25.0f);
-
-        for (int i = 0; i < stitchedPath.size(); i++) {
-            g_LogFile << stitchedPath[i].pos.x << " " << stitchedPath[i].pos.y << " " << stitchedPath[i].pos.z << " " << stitchedPath[i].type << std::endl;
-        }
-
         return stitchedPath;
     }
     else {
-        // Subdivide for ground (NavMesh surface fitting)
-        stitchedPath = globalNavMesh.SubdivideOnMesh(stitchedPath);
+        // Ground path post-processing:
+        //   1. SubdivideGroundPath  — inserts intermediate waypoints every 10 yards
+        //      along the straight 2D line between Detour waypoints, then snaps each
+        //      one to the FMap floor height.  Unlike the old SubdivideOnMesh approach
+        //      (which used moveAlongSurface and followed polygon edges), this keeps
+        //      the horizontal path exactly as Detour planned it.
+        //   2. CleanPathGroundZ     — final Z-snap pass for any remaining drift.
+        //   RefinePathClearance is intentionally removed: it displaced waypoints
+        //   away from walls using noisy findDistanceToWall normals, which degraded
+        //   already-clean Detour paths on open terrain.
+        stitchedPath = SubdivideGroundPath(stitchedPath, mapId, 10.0f);
         CleanPathGroundZ(stitchedPath, mapId);
         return stitchedPath;
     }

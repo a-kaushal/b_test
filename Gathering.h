@@ -99,7 +99,9 @@ void UpdateGatherTarget(WorldState& ws) {
             //if (object->position.z <= 0.0f) continue;
             if (object->nodeActive == 0) continue;
 
-            if (((object->type == 1) && (g_ProfileSettings.herbalismEnabled == true)) || ((object->type == 2) && (g_ProfileSettings.miningEnabled == true))) {
+            bool isHerb  = (object->type == 1) && g_ProfileSettings.herbalismEnabled && (ws.player.herbalismSkill >= object->skillLevel);
+            bool isOre   = (object->type == 2) && g_ProfileSettings.miningEnabled    && (ws.player.miningSkill    >= object->skillLevel);
+            if (isHerb || isOre) {
                 // --- CLEANER IGNORE WATER LOGIC ---
                 if (g_GameState->globalState.ignoreUnderWater) {
                     // Get the Area ID directly from our new function

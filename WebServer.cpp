@@ -63,6 +63,87 @@ std::string EscapeJSON(const std::string& s) {
     return out;
 }
 
+// --- NAVMESH SERIALIZATION ---
+static std::string s_navMeshCache;
+static std::string s_navMeshCacheKey;
+
+static std::string SerializeNavMeshGeometry() {
+    if (!globalNavMesh.mesh) {
+        return "{\"key\":\"\",\"verts\":[],\"indices\":[],\"areas\":[]}";
+    }
+
+    // Build a key from the set of loaded tiles
+    std::stringstream keyss;
+    for (const auto& t : globalNavMesh.loadedTiles) {
+        keyss << std::get<0>(t) << "_" << std::get<1>(t) << "_" << std::get<2>(t) << "|";
+    }
+    std::string key = keyss.str();
+
+    if (!key.empty() && key == s_navMeshCacheKey && !s_navMeshCache.empty()) {
+        return s_navMeshCache;
+    }
+
+    dtNavMesh* dtmesh = globalNavMesh.mesh;
+    std::vector<float> verts;
+    std::vector<int>   indices;
+    std::vector<int>   areas;
+    verts.reserve(8192);
+    indices.reserve(16384);
+    areas.reserve(4096);
+
+    for (const auto& coord : globalNavMesh.loadedTiles) {
+        const dtMeshTile* tile = dtmesh->getTileAt(
+            std::get<0>(coord), std::get<1>(coord), std::get<2>(coord));
+        if (!tile || !tile->header || tile->header->vertCount == 0) continue;
+
+        int baseVert = (int)(verts.size() / 3);
+
+        // Detour vertex layout: [WoW_Y, WoW_Z(height), WoW_X]
+        for (int v = 0; v < tile->header->vertCount; ++v) {
+            verts.push_back(tile->verts[3*v+2]); // WoW X
+            verts.push_back(tile->verts[3*v+0]); // WoW Y
+            verts.push_back(tile->verts[3*v+1]); // WoW Z (height)
+        }
+
+        // Fan-triangulate ground polygons
+        for (int p = 0; p < tile->header->polyCount; ++p) {
+            const dtPoly& poly = tile->polys[p];
+            if (poly.getType() != DT_POLYTYPE_GROUND) continue;
+            int vc = poly.vertCount;
+            if (vc < 3) continue;
+            int area = (int)poly.getArea();
+            for (int v = 1; v < vc - 1; ++v) {
+                indices.push_back(baseVert + poly.verts[0]);
+                indices.push_back(baseVert + poly.verts[v]);
+                indices.push_back(baseVert + poly.verts[v+1]);
+                areas.push_back(area);
+            }
+        }
+    }
+
+    std::stringstream ss;
+    ss << "{\"key\":\"" << EscapeJSON(key) << "\",\"verts\":[";
+    for (size_t i = 0; i < verts.size(); ++i) {
+        if (i > 0) ss << ",";
+        ss << std::fixed << std::setprecision(2) << verts[i];
+    }
+    ss << "],\"indices\":[";
+    for (size_t i = 0; i < indices.size(); ++i) {
+        if (i > 0) ss << ",";
+        ss << indices[i];
+    }
+    ss << "],\"areas\":[";
+    for (size_t i = 0; i < areas.size(); ++i) {
+        if (i > 0) ss << ",";
+        ss << areas[i];
+    }
+    ss << "]}";
+
+    s_navMeshCacheKey = key;
+    s_navMeshCache = ss.str();
+    return s_navMeshCache;
+}
+
 std::string WebServer::ReadLogFileTail(int charsToRead) {
     std::string filepath = "C:\\SMM\\SMM_Debug.log";
     std::ifstream file(filepath, std::ios::binary | std::ios::ate); // Open at end
@@ -179,7 +260,7 @@ std::string WebServer::GenerateJSONState() {
     ss << "\"path\": [";
     for (size_t i = 0; i < g_GameState->globalState.activePath.size(); ++i) {
         auto& node = g_GameState->globalState.activePath[i];
-        ss << "{\"x\":" << node.pos.x << ",\"y\":" << node.pos.y << "}";
+        ss << "{\"x\":" << node.pos.x << ",\"y\":" << node.pos.y << ",\"z\":" << node.pos.z << "}";
         if (i < g_GameState->globalState.activePath.size() - 1) ss << ",";
     }
     ss << "],";
@@ -330,7 +411,8 @@ std::string WebServer::GenerateJSONState() {
                 if (!first) ss << ",";
                 ss << "{\"type\":\"" << typeStr << "\",\"name\":\"" << EscapeJSON(npc->name) << "\","
                     << "\"id\":" << npc->id << ",\"dist\":" << npc->distance
-                    << ",\"x\":" << npc->position.x << ",\"y\":" << npc->position.y << ",\"z\":" << npc->position.z << extra.str() << "}";
+                    << ",\"x\":" << npc->position.x << ",\"y\":" << npc->position.y << ",\"z\":" << npc->position.z
+                    << ",\"addr\":\"0x" << std::hex << std::uppercase << ent.entityPtr << std::dec << "\"" << extra.str() << "}";
                 first = false;
             }
         }
@@ -341,7 +423,8 @@ std::string WebServer::GenerateJSONState() {
                 if (!first) ss << ",";
                 ss << "{\"type\":\"" << typeStr << "\",\"name\":\"" << EscapeJSON(obj->name) << "\","
                     << "\"id\":" << obj->id << ",\"dist\":" << obj->distance
-                    << ",\"x\":" << obj->position.x << ",\"y\":" << obj->position.y << ",\"z\":" << obj->position.z << extra.str() << "}";
+                    << ",\"x\":" << obj->position.x << ",\"y\":" << obj->position.y << ",\"z\":" << obj->position.z
+                    << ",\"addr\":\"0x" << std::hex << std::uppercase << ent.entityPtr << std::dec << "\"" << extra.str() << "}";
                 first = false;
             }
         }
@@ -671,6 +754,11 @@ void WebServer::HandleClient(unsigned __int64 clientSocketRaw) {
             }
         }
     }
+    else if (requestData.find("GET /api/navmesh") != std::string::npos) {
+        std::lock_guard<std::mutex> lock(g_EntityMutex);
+        responseBody = SerializeNavMeshGeometry();
+        contentType = "application/json";
+    }
     else {
         responseBody = GetHTML();
     }
@@ -775,7 +863,10 @@ std::string WebServer::GetHTML() {
 
         .recorder-controls { background: var(--panel); padding: 15px; display: flex; gap: 15px; align-items: center; border-bottom: 1px solid var(--border); }
         .rec-output { width: 100%; height: calc(100% - 60px); background: #111; border: none; color: lime; font-family: 'Consolas', monospace; padding: 15px; resize: none; }
+        #view3d-container { flex: 1; position: relative; overflow: hidden; background: #111; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 )HTML";
 
@@ -808,6 +899,7 @@ std::string WebServer::GetHTML() {
         <div class="tab" onclick="switchTab('recorder')">Path Recorder</div>
         <div class="tab" onclick="switchTab('path')">Path Tester</div>
         <div class="tab" onclick="switchTab('debug')">Debug State</div>
+        <div class="tab" onclick="switchTab('view3d')">3D View</div>
     </div>
 
     <div class="content">
@@ -900,6 +992,23 @@ std::string WebServer::GetHTML() {
                 </div>
             </div>
         </div>
+        <div id="view3d" class="view">
+            <div style="height:100%; display:flex; flex-direction:column;">
+                <div style="background:#252526; padding:8px 15px; border-bottom:1px solid #333; display:flex; align-items:center; gap:15px; flex-shrink:0;">
+                    <span style="font-size:12px; color:#aaa;">Left drag: Rotate | Right drag: Pan | Scroll: Zoom</span>
+                    <button class="btn-blue" onclick="reset3DCamera()" style="padding:4px 12px; font-size:12px;">Reset View</button>
+                    <span id="view3d-status" style="font-size:11px; color:#888; margin-left:auto;"></span>
+                </div>
+                <div id="view3d-container"></div>
+            </div>
+            <div style="position:absolute; bottom:40px; left:20px; background:rgba(0,0,0,0.7); padding:10px; border-radius:4px; pointer-events:none; font-size:12px; z-index:10;">
+                <div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:cyan;margin-right:6px;vertical-align:middle;"></span>Player</div>
+                <div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ff3333;margin-right:6px;vertical-align:middle;"></span>Enemy</div>
+                <div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#dd00aa;margin-right:6px;vertical-align:middle;"></span>Object</div>
+                <div><span style="display:inline-block;width:10px;height:10px;background:lime;margin-right:6px;vertical-align:middle;"></span>Active Path</div>
+                <div><span style="display:inline-block;width:10px;height:10px;background:#336633;margin-right:6px;vertical-align:middle;"></span>NavMesh</div>
+            </div>
+        </div>
     </div>
 
     <div class="status-bar">
@@ -967,6 +1076,7 @@ std::string WebServer::GetHTML() {
             document.getElementById(name).classList.add('active');
             event.target.classList.add('active');
             if(name === 'map') resizeCanvas();
+            if(name === 'view3d') setTimeout(function() { init3DScene(); on3DResize(); }, 50);
         }
 
         function resizeCanvas() {
@@ -975,7 +1085,7 @@ std::string WebServer::GetHTML() {
                 canvas.height = canvas.parentElement.clientHeight;
             }
         }
-        window.onresize = resizeCanvas;
+        window.onresize = function() { resizeCanvas(); on3DResize(); };
 
         // --- RECORDER LOGIC ---
         async function toggleRecord(enable) {
@@ -1106,6 +1216,148 @@ std::string WebServer::GetHTML() {
             });
             cx.stroke();
         }
+)HTML";
+
+    // PART 3: SCRIPT 3D
+    ss << R"HTML(
+        // --- 3D SCENE ---
+        let renderer3d = null, scene3d = null, camera3d = null, controls3d = null;
+        let navMeshMesh = null, navMeshWire = null;
+        let playerMarker = null;
+        let entityMarkers = [], pathLine3d = null;
+        let lastNavKey = null;
+        let is3DInited = false;
+        let navMeshPollTick = 0;
+
+        function init3DScene() {
+            if (is3DInited) return;
+            if (typeof THREE === 'undefined') { document.getElementById('view3d-status').innerText = 'THREE.js not loaded'; return; }
+            const container = document.getElementById('view3d-container');
+            if (!container || container.clientWidth === 0) return;
+
+            renderer3d = new THREE.WebGLRenderer({ antialias: true });
+            renderer3d.setPixelRatio(window.devicePixelRatio);
+            renderer3d.setSize(container.clientWidth, container.clientHeight);
+            renderer3d.setClearColor(0x111111);
+            container.appendChild(renderer3d.domElement);
+
+            scene3d = new THREE.Scene();
+
+            camera3d = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 1, 20000);
+            camera3d.position.set(0, 300, 300);
+
+            controls3d = new THREE.OrbitControls(camera3d, renderer3d.domElement);
+            controls3d.enableDamping = true;
+            controls3d.dampingFactor = 0.1;
+
+            scene3d.add(new THREE.AmbientLight(0x999999));
+            const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+            dir.position.set(100, 200, 100);
+            scene3d.add(dir);
+
+            (function animate() {
+                requestAnimationFrame(animate);
+                if (controls3d) controls3d.update();
+                if (renderer3d) renderer3d.render(scene3d, camera3d);
+            })();
+
+            is3DInited = true;
+            document.getElementById('view3d-status').innerText = 'Ready';
+        }
+
+        function on3DResize() {
+            if (!renderer3d || !camera3d) return;
+            const container = document.getElementById('view3d-container');
+            if (!container || container.clientWidth === 0) return;
+            renderer3d.setSize(container.clientWidth, container.clientHeight);
+            camera3d.aspect = container.clientWidth / container.clientHeight;
+            camera3d.updateProjectionMatrix();
+        }
+
+        function reset3DCamera() {
+            if (!camera3d || !controls3d) return;
+            const target = playerMarker ? playerMarker.position.clone() : new THREE.Vector3();
+            controls3d.target.copy(target);
+            camera3d.position.set(target.x, target.y + 200, target.z + 200);
+            controls3d.update();
+        }
+
+        async function checkNavMesh3D() {
+            if (!is3DInited) return;
+            try {
+                const res = await fetch('/api/navmesh');
+                const data = await res.json();
+                const status = document.getElementById('view3d-status');
+                if (data.key !== lastNavKey) {
+                    lastNavKey = data.key;
+                    loadNavMesh3D(data);
+                }
+                if (data.verts) status.innerText = (data.verts.length/3|0) + ' verts, ' + (data.indices.length/3|0) + ' tris';
+            } catch(e) {}
+        }
+
+        function loadNavMesh3D(data) {
+            if (navMeshMesh) { scene3d.remove(navMeshMesh); navMeshMesh.geometry.dispose(); navMeshMesh.material.dispose(); navMeshMesh = null; }
+            if (navMeshWire) { scene3d.remove(navMeshWire); navMeshWire = null; }
+            if (!data.verts || data.verts.length === 0) return;
+
+            const n = data.verts.length / 3;
+            const pos = new Float32Array(n * 3);
+            for (let i = 0; i < n; i++) {
+                pos[i*3+0] = data.verts[i*3+0]; // Three X = WoW X
+                pos[i*3+1] = data.verts[i*3+2]; // Three Y = WoW Z (height)
+                pos[i*3+2] = data.verts[i*3+1]; // Three Z = WoW Y
+            }
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+            geo.setIndex(data.indices);
+            geo.computeVertexNormals();
+
+            navMeshMesh = new THREE.Mesh(geo,
+                new THREE.MeshPhongMaterial({ color: 0x336633, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }));
+            scene3d.add(navMeshMesh);
+
+            navMeshWire = new THREE.Mesh(geo,
+                new THREE.MeshBasicMaterial({ color: 0x44bb44, wireframe: true, transparent: true, opacity: 0.2 }));
+            scene3d.add(navMeshWire);
+        }
+
+        function update3DScene(state) {
+            if (!is3DInited || !scene3d) return;
+
+            if (state.player) {
+                if (!playerMarker) {
+                    playerMarker = new THREE.Mesh(
+                        new THREE.SphereGeometry(2, 8, 8),
+                        new THREE.MeshBasicMaterial({ color: 0x00ffff }));
+                    scene3d.add(playerMarker);
+                }
+                playerMarker.position.set(state.player.x, state.player.z, state.player.y);
+            }
+
+            entityMarkers.forEach(m => { scene3d.remove(m); m.geometry.dispose(); });
+            entityMarkers = [];
+            if (state.entities) {
+                state.entities.forEach(ent => {
+                    const color = ent.type === 'Enemy' ? 0xff3333 : ent.type === 'Object' ? 0xdd00aa : 0x888888;
+                    const m = new THREE.Mesh(
+                        new THREE.SphereGeometry(1.5, 6, 6),
+                        new THREE.MeshBasicMaterial({ color }));
+                    m.position.set(ent.x, ent.z, ent.y);
+                    scene3d.add(m);
+                    entityMarkers.push(m);
+                });
+            }
+
+            if (pathLine3d) { scene3d.remove(pathLine3d); pathLine3d.geometry.dispose(); pathLine3d = null; }
+            if (state.path && state.path.length > 1) {
+                const pts = state.path.map(p => new THREE.Vector3(p.x, p.z, p.y));
+                pathLine3d = new THREE.Line(
+                    new THREE.BufferGeometry().setFromPoints(pts),
+                    new THREE.LineBasicMaterial({ color: 0x00ff00 }));
+                scene3d.add(pathLine3d);
+            }
+        }
 
         // --- DEBUG GRID RENDERER [FIXED: PRIORITY HIGHLIGHTING] ---
         function renderDebugGrid() {
@@ -1226,6 +1478,11 @@ std::string WebServer::GetHTML() {
                 if(document.getElementById('map').classList.contains('active')) drawMap();
                 if(document.getElementById('entities').classList.contains('active')) updateTable();
                 if(document.getElementById('debug').classList.contains('active')) renderDebugGrid();
+                if(document.getElementById('view3d').classList.contains('active')) {
+                    update3DScene(gameState);
+                    navMeshPollTick++;
+                    if(navMeshPollTick % 3 === 0) checkNavMesh3D();
+                }
 
             } catch(e) { console.log(e); }
         }
@@ -1313,7 +1570,7 @@ std::string WebServer::GetHTML() {
                 return;
             }
 
-            thead.innerHTML = `<th>Type</th><th>Name</th><th>Dist</th><th>Pos</th><th>Health</th>`;
+            thead.innerHTML = `<th>Type</th><th>Name</th><th>Dist</th><th>Pos</th><th>Health</th><th>Offset</th>`;
             if (!gameState.entities) return;
 
             gameState.entities.filter(e => filter === 'All' || e.type === filter).sort((a, b) => a.dist - b.dist).forEach(ent => {
@@ -1348,6 +1605,7 @@ std::string WebServer::GetHTML() {
                     <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${healthInfo}</td>
                     <td onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${combatInfo}</td>
                     <td style="font-family:monospace; font-size:11px;" onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${targetInfo}</td>
+                    <td style="font-family:monospace; font-size:11px;" onclick="copyToClipboard(this.innerText, this)" title="Click to copy">${ent.addr || '-'}</td>
                 `;
                 tbody.appendChild(tr);
             });

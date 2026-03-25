@@ -84,7 +84,14 @@ struct ProfileSettings {
     std::vector<MailBox> mailboxes;
     std::vector<Vendor> vendors;
 
+    // Per-action flying toggles (independent of grind canFly)
+    bool canFlyLoot          = false; // fly to corpse when looting
+    bool canFlyGather        = true; // fly to herb/ore nodes
+    bool canFlyVendor        = true; // fly to vendor/repair/mailbox
+    bool canFlyWaypointReturn = true; // fly when returning to grind path after combat
+
     std::string mountName = "Blue Wind Rider";
+    PlayerFactions playerFaction = PlayerFactions::Horde;
 };
 
 // Global Declaration (So everyone knows this variable exists)

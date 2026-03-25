@@ -122,6 +122,12 @@ LONG WINAPI CrashHandler(EXCEPTION_POINTERS* pExceptionInfo) {
 
     if (g_LogFile.is_open()) {
         g_LogFile << "\n[CRITICAL] " << ss.str() << std::endl;
+        // For access violations, log the actual bad memory address (crucial for heap corruption diagnosis)
+        if (code == 0xc0000005 && pExceptionInfo->ExceptionRecord->NumberParameters >= 2) {
+            g_LogFile << "[CRITICAL] AV Type: " << (pExceptionInfo->ExceptionRecord->ExceptionInformation[0] ? "WRITE" : "READ")
+                      << " | Bad Addr: 0x" << std::hex << pExceptionInfo->ExceptionRecord->ExceptionInformation[1]
+                      << std::dec << std::endl;
+        }
     }
 
     // 4. WRITE DUMP
@@ -323,7 +329,7 @@ void GUIDBreakdown(uint32_t& low_counter, uint32_t& type_field, uint32_t& instan
     low_counter = (uint32_t)get_bits_u128(guidLow, guidHigh, 0, 32);    // bits 0..31
     type_field = (uint32_t)get_bits_u128(guidLow, guidHigh, 18, 3);    // bits 18..20
     instance = (uint32_t)get_bits_u128(guidLow, guidHigh, 40, 6);    // bits 40..45
-    id = (uint32_t)get_bits_u128(guidLow, guidHigh, 70, 24);   // bits 70..93
+    id = (uint32_t)get_bits_u128(guidLow, guidHigh, 70, 23);   // bits 70..92
     map_id = (uint32_t)get_bits_u128(guidLow, guidHigh, 93, 13);   // bits 93..105
     server_id = (uint32_t)get_bits_u128(guidLow, guidHigh, 106, 16);  // bits 106..121
 }
@@ -549,9 +555,12 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                         analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->health);
                         analyzer.ReadInt32(procId, entity_ptr + ENTITY_ENEMY_MAX_HEALTH, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->maxHealth);
                         analyzer.ReadInt32(procId, entity_ptr + ENTITY_LEVEL, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->level);
+                        analyzer.ReadUInt32(procId, entity_ptr + ENTITY_LIVE_UNIT_FLAGS, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->liveUnitFlags);
+                        analyzer.ReadPointer(procId, entity_ptr + ENTITY_SUMMONED_BY_LOW, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->summonedByGuidLow);
                         std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id = id;
 
-                        creature_db.getCreatureReaction(std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id, true, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->reaction);
+
+                        creature_db.getCreatureReaction(std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->id, g_ProfileSettings.playerFaction == PlayerFactions::Horde, std::dynamic_pointer_cast<EnemyInfo>(newEntity.info)->reaction);
                         if (id > 0 && id < 200000) {
                             string rawData = creature_db.getRawLine(id);
 
@@ -562,15 +571,38 @@ void ExtractEntities(MemoryAnalyzer& analyzer, DWORD procId, ULONG_PTR hashArray
                                 // SAFE PARSING REPLACEMENT
                                 try {
                                     std::string flagStr = creature_db.getColumn(rawData, NPC_FLAG_COLUMN_INDEX);
-                                    if (!flagStr.empty()) {
-                                        enemyInfo->npcFlag = std::stoi(flagStr);
-                                    }
-                                    else {
-                                        enemyInfo->npcFlag = 0; // Default value
-                                    }
+                                    enemyInfo->npcFlag = flagStr.empty() ? 0 : std::stoi(flagStr);
                                 }
                                 catch (...) {
-                                    enemyInfo->npcFlag = 0; // Fallback on error
+                                    enemyInfo->npcFlag = 0;
+                                }
+                                try {
+                                    std::string unitFlagStr = creature_db.getColumn(rawData, UNIT_FLAG_COLUMN_INDEX);
+                                    enemyInfo->unitFlags = unitFlagStr.empty() ? 0 : std::stoul(unitFlagStr);
+                                }
+                                catch (...) {
+                                    enemyInfo->unitFlags = 0;
+                                }
+                                try {
+                                    std::string flagsExtraStr = creature_db.getColumn(rawData, FLAGS_EXTRA_COLUMN_INDEX);
+                                    enemyInfo->flagsExtra = flagsExtraStr.empty() ? 0 : std::stoul(flagsExtraStr);
+                                }
+                                catch (...) {
+                                    enemyInfo->flagsExtra = 0;
+                                }
+                                try {
+                                    std::string inhabitStr = creature_db.getColumn(rawData, INHABIT_TYPE_COLUMN_INDEX);
+                                    enemyInfo->inhabitType = inhabitStr.empty() ? 1 : std::stoul(inhabitStr);
+                                }
+                                catch (...) {
+                                    enemyInfo->inhabitType = 1; // default: ground
+                                }
+                                try {
+                                    std::string typeStr = creature_db.getColumn(rawData, CREATURE_TYPE_COLUMN_INDEX);
+                                    enemyInfo->creatureType = typeStr.empty() ? 0 : std::stoul(typeStr);
+                                }
+                                catch (...) {
+                                    enemyInfo->creatureType = 0;
                                 }
                             }
                         }
@@ -964,6 +996,14 @@ void MainThread(HMODULE hModule) {
                     DWORD chatOpen = 0;
                     while (g_IsRunning && !needsReboot) {
                         try {
+                            static PlayerFactions lastLoggedFaction = PlayerFactions::Neutral;
+                            if (g_ProfileSettings.playerFaction != lastLoggedFaction) {
+                                lastLoggedFaction = g_ProfileSettings.playerFaction;
+                                const char* factionName =
+                                    (g_ProfileSettings.playerFaction == PlayerFactions::Alliance) ? "Alliance" :
+                                    (g_ProfileSettings.playerFaction == PlayerFactions::Horde)    ? "Horde"    : "Neutral";
+                                g_LogFile << "[Faction] playerFaction updated: " << factionName << std::endl;
+                            }
                             // --- PAUSE LOGIC ---
                             if (g_IsPaused) {
                                 if (!wasPaused) {
